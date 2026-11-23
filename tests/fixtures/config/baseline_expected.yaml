@@ -1,0 +1,13 @@
+# Test copy of config/baseline_expected.yaml.
+project: AIL
+as_of: 2026-11-02
+window_days: 90
+timezone: America/Chicago
+tempo_account_id: "app-tempo"
+expected:
+  total_issues: 1134
+  resolved_in_window: 291
+  with_original_estimate: 0
+  with_story_points: 192
+  with_logged_time: 248
+  straight_todo_to_done: 46

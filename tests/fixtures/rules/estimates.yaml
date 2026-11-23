@@ -1,0 +1,130 @@
+# Estimate rules: R-EST-01 (work started without an estimate) and R-EST-02
+# (estimate first set more than 1 h after work started), on AIL (story points)
+# and HRS (original estimates, in seconds).
+#
+# Format (the derive fixtures' style; the loader in tests/test_rules_labels.py
+# fills in what is obvious): `issue` is an `issues` row; `defaults` are merged
+# under it (a value in the case wins, including null); issue_key on change rows,
+# project_key, issue_id and status_category (from projects.yaml `statuses`)
+# are filled in. All times are UTC in the storage format.
+#
+# AIL's finished cases here date from April 2026, before the 180-day history
+# window that ends at `now` (2026-11-04T12:00Z, so it starts 2026-05-08T12:00Z):
+# their status intervals don't feed W-AGE-01's thresholds, which keeps AIL's
+# history thin on purpose (see tests/labels/findings.yaml).
+
+defaults: {issue_type: Task, assignee_id: acc-team-1}
+
+cases:
+  # --- AIL (points) ----------------------------------------------------------
+  - about: "Done with no story points at all"
+    issue: {issue_key: AIL-101, status: Done, created_at: "2026-04-06T09:00:00.000Z",
+            story_points: null, time_spent_s: 28800}
+    status_changes:
+      - {changelog_id: "11011", changed_at: "2026-04-06T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "11012", changed_at: "2026-04-07T16:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "In progress with 0 story points: zero is no estimate"
+    issue: {issue_key: AIL-102, status: In Progress, created_at: "2026-11-02T09:00:00.000Z",
+            story_points: 0.0, time_spent_s: 7200}
+    status_changes:
+      - {changelog_id: "11021", changed_at: "2026-11-02T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+
+  - about: "Done; 2 points set 1.5 h before work started"
+    issue: {issue_key: AIL-103, status: Done, created_at: "2026-04-08T09:00:00.000Z",
+            story_points: 2.0, time_spent_s: 28800}
+    status_changes:
+      - {changelog_id: "11031", changed_at: "2026-04-08T11:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "11032", changed_at: "2026-04-09T11:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {changelog_id: "11030", field: story_points, changed_at: "2026-04-08T09:30:00.000Z", from_value: null, to_value: "2"}
+
+  - about: "To Do with no estimate: not started, so not yet a problem"
+    issue: {issue_key: AIL-104, status: To Do, created_at: "2026-11-03T09:00:00.000Z",
+            story_points: null, time_spent_s: null}
+
+  - about: "Created directly in Done with no estimate: never entered development"
+    issue: {issue_key: AIL-105, status: Done, created_at: "2026-04-10T09:00:00.000Z",
+            story_points: null, time_spent_s: 3600}
+
+  - about: "Points first set a day after work started"
+    issue: {issue_key: AIL-106, status: Done, created_at: "2026-04-13T09:00:00.000Z",
+            story_points: 3.0, time_spent_s: 36000}
+    status_changes:
+      - {changelog_id: "11061", changed_at: "2026-04-13T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "11063", changed_at: "2026-04-15T10:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {changelog_id: "11062", field: story_points, changed_at: "2026-04-14T10:00:00.000Z", from_value: null, to_value: "3"}
+
+  - about: "In progress; points set 1.5 h after work started (over the 1 h grace)"
+    issue: {issue_key: AIL-107, status: In Progress, created_at: "2026-11-03T08:00:00.000Z",
+            story_points: 2.0, time_spent_s: 3600}
+    status_changes:
+      - {changelog_id: "11071", changed_at: "2026-11-03T09:00:00.000Z", from_status: To Do, to_status: In Progress}
+    field_changes:
+      - {changelog_id: "11072", field: story_points, changed_at: "2026-11-03T10:30:00.000Z", from_value: null, to_value: "2"}
+
+  - about: "Points set exactly 1 h after work started: inside the grace"
+    issue: {issue_key: AIL-108, status: Done, created_at: "2026-04-15T09:00:00.000Z",
+            story_points: 1.0, time_spent_s: 14400}
+    status_changes:
+      - {changelog_id: "11081", changed_at: "2026-04-15T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "11083", changed_at: "2026-04-16T10:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {changelog_id: "11082", field: story_points, changed_at: "2026-04-15T11:00:00.000Z", from_value: null, to_value: "1"}
+
+  - about: "Estimate set at creation, re-estimated from 3 to 5 after work started"
+    issue: {issue_key: AIL-109, status: Done, created_at: "2026-04-20T09:00:00.000Z",
+            story_points: 5.0, time_spent_s: 72000}
+    status_changes:
+      - {changelog_id: "11091", changed_at: "2026-04-20T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "11093", changed_at: "2026-04-22T10:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {changelog_id: "11092", field: story_points, changed_at: "2026-04-21T09:00:00.000Z", from_value: "3", to_value: "5"}
+
+  # --- HRS (hours) -------------------------------------------------------------
+  - about: "Closed with story points but no original estimate: HRS estimates in hours"
+    issue: {issue_key: HRS-101, status: Closed, created_at: "2026-10-05T09:00:00.000Z",
+            story_points: 5.0, original_estimate_s: null, time_spent_s: 28800}
+    status_changes:
+      - {changelog_id: "21011", changed_at: "2026-10-05T10:00:00.000Z", from_status: Open, to_status: In Progress}
+      - {changelog_id: "21012", changed_at: "2026-10-07T10:00:00.000Z", from_status: In Progress, to_status: Closed}
+
+  - about: "In progress with an original estimate of 0"
+    issue: {issue_key: HRS-102, status: In Progress, created_at: "2026-11-03T09:00:00.000Z",
+            original_estimate_s: 0, time_spent_s: 3600}
+    status_changes:
+      - {changelog_id: "21021", changed_at: "2026-11-03T10:00:00.000Z", from_status: Open, to_status: In Progress}
+
+  - about: "Closed with an 8 h original estimate set at creation"
+    issue: {issue_key: HRS-103, status: Closed, created_at: "2026-10-12T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 21600}
+    status_changes:
+      - {changelog_id: "21031", changed_at: "2026-10-12T13:00:00.000Z", from_status: Open, to_status: In Progress}
+      - {changelog_id: "21032", changed_at: "2026-10-13T13:00:00.000Z", from_status: In Progress, to_status: Closed}
+
+  - about: "Original estimate first set two days after work started"
+    issue: {issue_key: HRS-104, status: Closed, created_at: "2026-10-19T09:00:00.000Z",
+            original_estimate_s: 57600, time_spent_s: 43200}
+    status_changes:
+      - {changelog_id: "21041", changed_at: "2026-10-19T10:00:00.000Z", from_status: Open, to_status: In Progress}
+      - {changelog_id: "21043", changed_at: "2026-10-22T10:00:00.000Z", from_status: In Progress, to_status: Closed}
+    field_changes:
+      - {changelog_id: "21042", field: original_estimate, changed_at: "2026-10-21T10:00:00.000Z", from_value: null, to_value: "57600"}
+
+  - about: "Estimate set to 0 before the start, then to 4 h three hours after it"
+    issue: {issue_key: HRS-105, status: In Progress, created_at: "2026-11-02T09:00:00.000Z",
+            original_estimate_s: 14400, time_spent_s: 7200}
+    status_changes:
+      - {changelog_id: "21052", changed_at: "2026-11-02T10:00:00.000Z", from_status: Open, to_status: In Progress}
+    field_changes:
+      - {changelog_id: "21051", field: original_estimate, changed_at: "2026-11-02T09:05:00.000Z", from_value: null, to_value: "0"}
+      - {changelog_id: "21053", field: original_estimate, changed_at: "2026-11-02T13:00:00.000Z", from_value: "0", to_value: "14400"}
+
+  - about: "Original estimate set 30 minutes before work started"
+    issue: {issue_key: HRS-106, status: In Progress, created_at: "2026-11-03T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 3600}
+    status_changes:
+      - {changelog_id: "21062", changed_at: "2026-11-03T10:00:00.000Z", from_status: Open, to_status: In Progress}
+    field_changes:
+      - {changelog_id: "21061", field: original_estimate, changed_at: "2026-11-03T09:30:00.000Z", from_value: null, to_value: "28800"}

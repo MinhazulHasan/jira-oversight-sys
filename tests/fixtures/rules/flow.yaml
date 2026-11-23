@@ -1,0 +1,126 @@
+# Flow rules: R-FLOW-01 (entered testing with no code review recorded before
+# it), R-FLOW-02 (a status change jumped forward over a mapped stage) and
+# R-FLOW-03 (left a done status for one that isn't), on AIL and OPS.
+#
+# Mapped stages, in order: AIL backlog, development, done; OPS backlog,
+# development, code_review (In Review), testing (QA), done. OPS code review
+# evidence = the issue passed through In Review (or was created in it).
+# Format: see estimates.yaml. Every estimate was set at creation and every
+# effort ratio is 0.5 or less, so only flow rules fire here. AIL's finished
+# cases date from March 2026 (before the history window, as in estimates.yaml);
+# OPS's intervals are all in the window and feed its thresholds (warnings.yaml).
+
+defaults: {issue_type: Task, assignee_id: acc-team-1}
+
+cases:
+  # --- AIL ---------------------------------------------------------------------
+  - about: "To Do straight to Done: skipped development"
+    issue: {issue_key: AIL-301, status: Done, created_at: "2026-03-02T09:00:00.000Z",
+            story_points: 1.0, time_spent_s: 7200}
+    status_changes:
+      - {changelog_id: "13011", changed_at: "2026-03-02T15:00:00.000Z", from_status: To Do, to_status: Done}
+
+  - about: "To Do -> Done, reopened to To Do, then To Do -> Done again"
+    issue: {issue_key: AIL-302, status: Done, created_at: "2026-03-09T09:00:00.000Z",
+            story_points: 1.0, time_spent_s: 3600}
+    status_changes:
+      - {changelog_id: "13021", changed_at: "2026-03-09T10:00:00.000Z", from_status: To Do, to_status: Done}
+      - {changelog_id: "13022", changed_at: "2026-03-10T10:00:00.000Z", from_status: Done, to_status: To Do}
+      - {changelog_id: "13023", changed_at: "2026-03-10T12:00:00.000Z", from_status: To Do, to_status: Done}
+
+  - about: "To Do -> In Progress -> Done: the normal flow"
+    issue: {issue_key: AIL-303, status: Done, created_at: "2026-03-16T09:00:00.000Z",
+            story_points: 2.0, time_spent_s: 28800}
+    status_changes:
+      - {changelog_id: "13031", changed_at: "2026-03-16T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "13032", changed_at: "2026-03-17T10:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "Sent back from In Progress to To Do, then done properly"
+    issue: {issue_key: AIL-304, status: Done, created_at: "2026-03-18T09:00:00.000Z",
+            story_points: 2.0, time_spent_s: 28800}
+    status_changes:
+      - {changelog_id: "13041", changed_at: "2026-03-18T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "13042", changed_at: "2026-03-18T12:00:00.000Z", from_status: In Progress, to_status: To Do}
+      - {changelog_id: "13043", changed_at: "2026-03-19T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "13044", changed_at: "2026-03-20T10:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "Reopened twice: Done -> In Progress, later Done -> To Do"
+    issue: {issue_key: AIL-305, status: Done, created_at: "2026-03-23T09:00:00.000Z",
+            story_points: 3.0, time_spent_s: 43200}
+    status_changes:
+      - {changelog_id: "13051", changed_at: "2026-03-23T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "13052", changed_at: "2026-03-24T10:00:00.000Z", from_status: In Progress, to_status: Done}
+      - {changelog_id: "13053", changed_at: "2026-03-25T10:00:00.000Z", from_status: Done, to_status: In Progress}
+      - {changelog_id: "13054", changed_at: "2026-03-25T16:00:00.000Z", from_status: In Progress, to_status: Done}
+      - {changelog_id: "13055", changed_at: "2026-03-26T10:00:00.000Z", from_status: Done, to_status: To Do}
+      - {changelog_id: "13056", changed_at: "2026-03-26T11:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "13057", changed_at: "2026-03-27T11:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "Reopened two days ago and in progress again"
+    issue: {issue_key: AIL-306, status: In Progress, created_at: "2026-10-28T09:00:00.000Z",
+            story_points: 2.0, time_spent_s: 21600}
+    status_changes:
+      - {changelog_id: "13061", changed_at: "2026-10-28T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "13062", changed_at: "2026-10-29T10:00:00.000Z", from_status: In Progress, to_status: Done}
+      - {changelog_id: "13063", changed_at: "2026-11-02T10:00:00.000Z", from_status: Done, to_status: In Progress}
+
+  # The status was renamed or moved: Closed has no `statuses` row and no stage,
+  # but it is the current status and the issue's category (from Jira) is done.
+  - about: "Done, then Closed: still done work, as derive's reopen_count agrees"
+    issue: {issue_key: AIL-307, status: Closed, status_category: done, created_at: "2026-03-30T09:00:00.000Z",
+            story_points: 2.0, time_spent_s: 28800}
+    status_changes:
+      - {changelog_id: "13071", changed_at: "2026-03-30T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "13072", changed_at: "2026-03-31T10:00:00.000Z", from_status: In Progress, to_status: Done}
+      - {changelog_id: "13073", changed_at: "2026-04-01T09:00:00.000Z", from_status: Done, to_status: Closed}
+
+  # --- OPS (8 h estimates, 4 h logged) -------------------------------------------------
+  - about: "In Progress straight to QA: no code review before testing"
+    issue: {issue_key: OPS-301, status: Done, created_at: "2026-10-05T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 14400}
+    status_changes:
+      - {changelog_id: "33011", changed_at: "2026-10-05T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "33012", changed_at: "2026-10-05T16:00:00.000Z", from_status: In Progress, to_status: QA}
+      - {changelog_id: "33013", changed_at: "2026-10-05T20:00:00.000Z", from_status: QA, to_status: Done}
+
+  - about: "In Review straight to Done: skipped testing"
+    issue: {issue_key: OPS-302, status: Done, created_at: "2026-10-06T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 14400}
+    status_changes:
+      - {changelog_id: "33021", changed_at: "2026-10-06T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "33022", changed_at: "2026-10-06T15:00:00.000Z", from_status: In Progress, to_status: In Review}
+      - {changelog_id: "33023", changed_at: "2026-10-06T17:00:00.000Z", from_status: In Review, to_status: Done}
+
+  - about: "To Do straight to QA: one change over development and code review"
+    issue: {issue_key: OPS-303, status: Done, created_at: "2026-10-07T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 14400}
+    status_changes:
+      - {changelog_id: "33031", changed_at: "2026-10-07T11:00:00.000Z", from_status: To Do, to_status: QA}
+      - {changelog_id: "33032", changed_at: "2026-10-07T14:00:00.000Z", from_status: QA, to_status: Done}
+
+  - about: "Reviewed and tested, Done, then reopened into In Review where it still is"
+    issue: {issue_key: OPS-304, status: In Review, created_at: "2026-10-26T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 14400}
+    status_changes:
+      - {changelog_id: "33041", changed_at: "2026-10-26T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "33042", changed_at: "2026-10-26T14:00:00.000Z", from_status: In Progress, to_status: In Review}
+      - {changelog_id: "33043", changed_at: "2026-10-26T16:00:00.000Z", from_status: In Review, to_status: QA}
+      - {changelog_id: "33044", changed_at: "2026-10-26T18:00:00.000Z", from_status: QA, to_status: Done}
+      - {changelog_id: "33045", changed_at: "2026-11-03T16:00:00.000Z", from_status: Done, to_status: In Review}
+
+  - about: "QA first, code review only after testing had started"
+    issue: {issue_key: OPS-305, status: Done, created_at: "2026-10-08T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 14400}
+    status_changes:
+      - {changelog_id: "33051", changed_at: "2026-10-08T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "33052", changed_at: "2026-10-08T13:00:00.000Z", from_status: In Progress, to_status: QA}
+      - {changelog_id: "33053", changed_at: "2026-10-08T15:00:00.000Z", from_status: QA, to_status: In Review}
+      - {changelog_id: "33054", changed_at: "2026-10-08T17:00:00.000Z", from_status: In Review, to_status: QA}
+      - {changelog_id: "33055", changed_at: "2026-10-08T19:00:00.000Z", from_status: QA, to_status: Done}
+
+  - about: "Created in In Review (review on record from creation), then QA and Done"
+    issue: {issue_key: OPS-306, status: Done, created_at: "2026-10-09T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 14400}
+    status_changes:
+      - {changelog_id: "33061", changed_at: "2026-10-09T12:00:00.000Z", from_status: In Review, to_status: QA}
+      - {changelog_id: "33062", changed_at: "2026-10-09T15:00:00.000Z", from_status: QA, to_status: Done}

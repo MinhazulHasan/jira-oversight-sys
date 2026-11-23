@@ -1,0 +1,302 @@
+# Expected rule findings for the fixtures in tests/fixtures/rules/, worked out by
+# hand from config/rules.yaml (never by running the engine). Checked by
+# tests/test_rules_labels.py, which runs derive and the rules at `now` and wants
+# exactly these findings: no extras, no misses.
+#
+# Per project:
+# - not_measurable: rule -> the evidence or stages it lacks there (rule_status
+#   measurable 0, missing_json). Every other rule must be measurable.
+# - notes: rule -> text its rule_status note must contain (null: no note).
+# - findings: every finding, as (rule_id, issue_key, evidence_key, severity);
+#   `evidence` (optional) lists evidence values that must match too.
+# - negatives: rule -> cases it checks and must stay silent on (each rule needs
+#   at least 3 positive and 3 negative cases over all projects).
+#
+# Times below are UTC; "h" means calendar hours, as everywhere in Phase 2.
+
+now: "2026-11-04T12:00:00.000Z"
+
+projects:
+  AIL:
+    # Every evidence name is null in AIL, and no status maps to testing.
+    not_measurable:
+      R-FLOW-01: [code_review, testing]
+      W-REV-01: [code_review]
+    # AIL's history is thin on purpose, so W-AGE-01 has no threshold here and
+    # stays silent, saying why. Closed intervals that left within the window
+    # (2026-05-08T12:00Z to `now`):
+    #   To Do: AIL-102, 107, 204, 206, 207, 306, 401, 402, 603, 604, 606, 609, 610 = 13 < 20
+    #   In Progress: AIL-306, 604, 610 = 3 < 20
+    # (AIL's other finished cases closed in March and April, before the window.)
+    notes:
+      W-AGE-01: "fewer than 20 closed intervals"
+    findings:
+      # --- estimates.yaml ------------------------------------------------------
+      # AIL-101: started 04-06 10:00 (To Do -> In Progress); story_points null.
+      - {rule_id: R-EST-01, issue_key: AIL-101, evidence_key: no-estimate, severity: breach}
+      # AIL-102: started 11-02 10:00; 0 points is no estimate.
+      - {rule_id: R-EST-01, issue_key: AIL-102, evidence_key: no-estimate, severity: breach}
+      # AIL-106: started 04-13 10:00, points first set (null -> 3) 04-14 10:00: 24 h > 1 h.
+      - {rule_id: R-EST-02, issue_key: AIL-106, evidence_key: estimate-after-start, severity: warning}
+      # AIL-107: started 11-03 09:00, points set 10:30: 1.5 h > 1 h (still in progress).
+      - {rule_id: R-EST-02, issue_key: AIL-107, evidence_key: estimate-after-start, severity: warning}
+
+      # --- effort.yaml (estimate = points x 8 h) ---------------------------------------
+      # AIL-201: 86400 s = 24 h on 2 points = 16 h: 24 / 16 = 1.5, and 1.5 >= 1.5.
+      - {rule_id: R-EFF-01, issue_key: AIL-201, evidence_key: ratio-ge-1.5, severity: breach,
+         evidence: {effort_ratio: 1.5, estimate_h: 16.0, time_spent_h: 24.0}}
+      # AIL-202: 144000 s = 40 h on 1 point = 8 h: 5.0.
+      - {rule_id: R-EFF-01, issue_key: AIL-202, evidence_key: ratio-ge-1.5, severity: breach}
+      # AIL-205: started 04-27 10:00 with no points (and so no ratio).
+      - {rule_id: R-EST-01, issue_key: AIL-205, evidence_key: no-estimate, severity: breach}
+      # AIL-204: in progress, 57600 s = 16 h on 1 point = 8 h: 2.0 >= 0.8.
+      - {rule_id: W-EFF-01, issue_key: AIL-204, evidence_key: ratio-ge-0.8, severity: warning}
+      # AIL-206: in progress, 115200 s = 32 h on 5 points = 40 h: 0.8, and 0.8 >= 0.8.
+      - {rule_id: W-EFF-01, issue_key: AIL-206, evidence_key: ratio-ge-0.8, severity: warning,
+         evidence: {effort_ratio: 0.8, estimate_h: 40.0, time_spent_h: 32.0}}
+
+      # --- hygiene.yaml ----------------------------------------------------------------
+      # AIL-401: In Progress (indeterminate), assignee_id null.
+      - {rule_id: R-HYG-01, issue_key: AIL-401, evidence_key: unassigned, severity: breach}
+
+      # --- sprint.yaml -----------------------------------------------------------------
+      # Active AIL sprints: 701, 702 and 704 (703 is closed).
+      # AIL-602 (To Do, no points) is in Sprint 7 (701).
+      - {rule_id: W-EST-01, issue_key: AIL-602, evidence_key: unestimated-sprint-701, severity: warning}
+      # AIL-605 (To Do, no points) and AIL-606 (In Progress, no points) are in Sprint 8 (702).
+      - {rule_id: W-EST-01, issue_key: AIL-605, evidence_key: unestimated-sprint-702, severity: warning}
+      - {rule_id: W-EST-01, issue_key: AIL-606, evidence_key: unestimated-sprint-702, severity: warning}
+      # AIL-606 also started (11-04 09:00) with no points.
+      - {rule_id: R-EST-01, issue_key: AIL-606, evidence_key: no-estimate, severity: breach}
+      # Sprint 7 (701): ends 11-05 12:00, 24 h / 24 = 1.0 day left <= 2. Members
+      # AIL-601..604; not started: AIL-601 and AIL-602 (To Do, no development
+      # interval) -> 2 / 4 = 0.5 > 0.3.
+      - {rule_id: W-SPR-01, issue_key: "sprint:701", evidence_key: sprint-701-at-risk, severity: warning,
+         evidence: {days_left: 1.0, issues: 4, not_started: 2, share: 0.5}}
+      # Support 3 (704): ends 11-06 12:00, 48 h / 24 = 2.0 days left <= 2. Members
+      # AIL-608, 609, 610; the Epic AIL-611 doesn't count. Not started: AIL-608 ->
+      # 1 / 3 = 0.333 > 0.3. (Counting the Done Epic would give 1 / 4 = 0.25: no finding.)
+      - {rule_id: W-SPR-01, issue_key: "sprint:704", evidence_key: sprint-704-at-risk, severity: warning,
+         evidence: {days_left: 2.0, issues: 3, not_started: 1, share: 0.333}}
+
+      # --- flow.yaml (AIL stages: backlog 0, development 1, done 2) -----------------------
+      # AIL-301: change 13011 To Do (0) -> Done (2) skipped development.
+      - {rule_id: R-FLOW-02, issue_key: AIL-301, evidence_key: skip-13011, severity: breach,
+         evidence: {from: To Do, to: Done, skipped: [development]}}
+      # AIL-302: 13021 and 13023 are both To Do -> Done; 13022 Done -> To Do
+      # left a done status (it moves backwards, so it is no skip).
+      - {rule_id: R-FLOW-02, issue_key: AIL-302, evidence_key: skip-13021, severity: breach}
+      - {rule_id: R-FLOW-02, issue_key: AIL-302, evidence_key: skip-13023, severity: breach}
+      - {rule_id: R-FLOW-03, issue_key: AIL-302, evidence_key: reopen-13022, severity: warning}
+      # AIL-305: 13053 Done -> In Progress and 13055 Done -> To Do: two reopens.
+      - {rule_id: R-FLOW-03, issue_key: AIL-305, evidence_key: reopen-13053, severity: warning}
+      - {rule_id: R-FLOW-03, issue_key: AIL-305, evidence_key: reopen-13055, severity: warning}
+      # AIL-306: 13063 Done -> In Progress (still in progress: the rule has no
+      # applies_to, so any category counts).
+      - {rule_id: R-FLOW-03, issue_key: AIL-306, evidence_key: reopen-13063, severity: warning}
+    negatives:
+      # AIL-303 moves one stage at a time; AIL-304's In Progress -> To Do and
+      # AIL-305's reopens move backwards; AIL-105 has no status history.
+      R-FLOW-02: [AIL-303, AIL-304, AIL-305, AIL-105]
+      # AIL-301 never left Done; AIL-303 never reopened; AIL-304's way back
+      # (In Progress -> To Do) starts from a status that isn't done. AIL-307's
+      # 13073 Done -> Closed goes to another done status: Closed has no
+      # `statuses` row or stage, but it is the current status and its category
+      # is done (derive's reopen_count is 0 for the same pattern, AIL-115 in
+      # tests/labels/metrics.yaml). Also no skip: Closed is unmapped. The
+      # engine reports reopen-13073 today: a known engine bug, checked as
+      # xfail(strict=True) (KNOWN_ENGINE_BUGS in tests/test_rules_labels.py).
+      R-FLOW-03: [AIL-301, AIL-303, AIL-304, AIL-307]
+      # AIL-601 is estimated; AIL-607 is unestimated but only in the closed
+      # Sprint 6; AIL-104 is unestimated and in no sprint.
+      W-EST-01: [AIL-601, AIL-607, AIL-104]
+      # Sprint 8 (702): 1 of 2 not started, but 6.0 days left > 2.
+      # Sprint 6 (703): closed, so never evaluated.
+      W-SPR-01: ["sprint:702", "sprint:703"]
+      # To Do since 11-03 09:00 and In Progress since 11-02 10:00, but AIL has
+      # no threshold for either status (see the counts above).
+      W-AGE-01: [AIL-104, AIL-401]
+      # AIL-402 is assigned; AIL-403 is unassigned but To Do (category new).
+      R-HYG-01: [AIL-402, AIL-403]
+      # AIL-203: 82800 s = 23 h on 16 h = 1.4375 < 1.5; AIL-204 is still in
+      # progress (W-EFF-01's case); AIL-205 has no estimate, so no ratio.
+      R-EFF-01: [AIL-203, AIL-204, AIL-205]
+      # AIL-207: 111600 s = 31 h on 40 h = 0.775 < 0.8; AIL-102: 0 points, no ratio.
+      W-EFF-01: [AIL-207, AIL-102]
+      # AIL-103 has 2 points; AIL-104 is To Do (category new is outside
+      # applies_to); AIL-105 was created in Done, so it never entered development.
+      R-EST-01: [AIL-103, AIL-104, AIL-105]
+      # AIL-101 never had an estimate (nothing to time); AIL-103's points came
+      # 1.5 h before the start; AIL-108's exactly 1 h after it (not more than
+      # the grace); AIL-109's first recorded change goes 3 -> 5, so the estimate
+      # existed at creation.
+      R-EST-02: [AIL-101, AIL-103, AIL-108, AIL-109]
+
+  HRS:
+    # Code review is in a field, but no HRS status maps to testing.
+    not_measurable:
+      R-FLOW-01: [testing]
+    # Thin history again: W-AGE-01 and W-REV-01 (measurable here) have no
+    # threshold and stay silent. Closed intervals, all within the window:
+    #   Open: HRS-101..106, 201..204, 401, 403, 603, 605, 606, 607 = 16 < 20
+    #   In Progress (HRS's only development status): HRS-101, 103, 104, 201,
+    #   202, 403, 603, 607 = 8 < 20
+    notes:
+      W-AGE-01: "fewer than 20 closed intervals"
+      W-REV-01: "fewer than 20 closed intervals"
+    findings:
+      # --- estimates.yaml ------------------------------------------------------
+      # HRS-101: started 10-05 10:00; original estimate null (its 5 story points
+      # don't count: HRS estimates in hours).
+      - {rule_id: R-EST-01, issue_key: HRS-101, evidence_key: no-estimate, severity: breach}
+      # HRS-102: started 11-03 10:00; an original estimate of 0 is no estimate.
+      - {rule_id: R-EST-01, issue_key: HRS-102, evidence_key: no-estimate, severity: breach}
+      # HRS-104: started 10-19 10:00, estimate first set 10-21 10:00: 48 h.
+      - {rule_id: R-EST-02, issue_key: HRS-104, evidence_key: estimate-after-start, severity: warning}
+      # HRS-105: null -> 0 at 09:05 is no estimate; the first real value
+      # (0 -> 14400) came 11-02 13:00, 3 h after the 10:00 start.
+      - {rule_id: R-EST-02, issue_key: HRS-105, evidence_key: estimate-after-start, severity: warning}
+
+      # --- effort.yaml (estimate = original estimate) -----------------------------------
+      # HRS-201: 28800 s = 8 h on 14400 s = 4 h: 2.0.
+      - {rule_id: R-EFF-01, issue_key: HRS-201, evidence_key: ratio-ge-1.5, severity: breach,
+         evidence: {effort_ratio: 2.0, estimate_h: 4.0, time_spent_h: 8.0}}
+      # HRS-203: in progress, 32400 s = 9 h on 36000 s = 10 h: 0.9.
+      - {rule_id: W-EFF-01, issue_key: HRS-203, evidence_key: ratio-ge-0.8, severity: warning}
+
+      # --- hygiene.yaml ----------------------------------------------------------------
+      # HRS-401: In Progress, unassigned.
+      - {rule_id: R-HYG-01, issue_key: HRS-401, evidence_key: unassigned, severity: breach}
+      # HRS-402: created in In Progress (its only interval), unassigned. Its
+      # estimate dates from creation, which is also when work started: 0 h, so
+      # no R-EST-02.
+      - {rule_id: R-HYG-01, issue_key: HRS-402, evidence_key: unassigned, severity: breach}
+
+      # --- sprint.yaml -----------------------------------------------------------------
+      # Active HRS sprints: 711 and 712 (713 is future).
+      # HRS-602 (Open) has story points but no original estimate: HRS counts hours.
+      - {rule_id: W-EST-01, issue_key: HRS-602, evidence_key: unestimated-sprint-711, severity: warning}
+      # Sprint 3 (711): ended 11-03 12:00, -24 h / 24 = -1.0 days left <= 2.
+      # Members HRS-601, 602, 603; not started: HRS-601, 602 -> 2 / 3 = 0.667 > 0.3.
+      - {rule_id: W-SPR-01, issue_key: "sprint:711", evidence_key: sprint-711-at-risk, severity: warning,
+         evidence: {days_left: -1.0, issues: 3, not_started: 2, share: 0.667}}
+    negatives:
+      # HRS-601 is estimated; HRS-608 is unestimated but only in the future Sprint 4.
+      W-EST-01: [HRS-601, HRS-608]
+      # Support 1 (712): 0.5 days left, but only HRS-604 of 4 is not started:
+      # 0.25 <= 0.3. Sprint 4 (713): future, so never evaluated.
+      W-SPR-01: ["sprint:712", "sprint:713"]
+      # Open since 10-22 09:00 (315 h): no Open threshold in HRS.
+      W-AGE-01: [HRS-604]
+      # In development since 11-03 10:00 with no code reviewer: no development
+      # threshold in HRS.
+      W-REV-01: [HRS-605]
+      # HRS-403 is unassigned but Closed (category done).
+      R-HYG-01: [HRS-403]
+      # HRS-202: 50400 s = 14 h on 10 h = 1.4; HRS-101 has no original estimate.
+      R-EFF-01: [HRS-202, HRS-101]
+      # HRS-204: nothing logged, 0.0; HRS-202 is closed (R-EFF-01's case).
+      W-EFF-01: [HRS-204, HRS-202]
+      # HRS-103: 8 h set at creation; HRS-106: 8 h set before the start.
+      R-EST-01: [HRS-103, HRS-106]
+      # HRS-103: set at creation (no history); HRS-106: 30 min before the start.
+      R-EST-02: [HRS-103, HRS-106]
+
+  OPS:
+    not_measurable: {}
+    # Every status an in-flight OPS issue is in has enough history: no note.
+    notes:
+      W-AGE-01: null
+      W-REV-01: null
+    findings:
+      # --- flow.yaml (OPS stages: backlog 0, development 1, code_review 2,
+      #     testing 3, done 4; code review evidence = first time in In Review) ---------
+      # OPS-301: intervals To Do (seq 0), In Progress (1), QA (2): first entered
+      # testing at 10-05 16:00, never in In Review.
+      - {rule_id: R-FLOW-01, issue_key: OPS-301, evidence_key: testing-2, severity: breach,
+         evidence: {entered_at: "2026-10-05T16:00:00.000Z", status: QA}}
+      # OPS-303: To Do (0), QA (1) from 10-07 11:00, never reviewed.
+      - {rule_id: R-FLOW-01, issue_key: OPS-303, evidence_key: testing-1, severity: breach}
+      # OPS-305: To Do (0), In Progress (1), QA (2) from 10-08 13:00; In Review
+      # first at 15:00, after that first entry. (The later QA, seq 4, doesn't count.)
+      - {rule_id: R-FLOW-01, issue_key: OPS-305, evidence_key: testing-2, severity: breach,
+         evidence: {entered_at: "2026-10-08T13:00:00.000Z", status: QA}}
+      # OPS-301: 33012 In Progress (1) -> QA (3) skipped code_review.
+      - {rule_id: R-FLOW-02, issue_key: OPS-301, evidence_key: skip-33012, severity: breach}
+      # OPS-302: 33023 In Review (2) -> Done (4) skipped testing.
+      - {rule_id: R-FLOW-02, issue_key: OPS-302, evidence_key: skip-33023, severity: breach,
+         evidence: {from: In Review, to: Done, skipped: [testing]}}
+      # OPS-303: 33031 To Do (0) -> QA (3): one change, two stages skipped.
+      - {rule_id: R-FLOW-02, issue_key: OPS-303, evidence_key: skip-33031, severity: breach,
+         evidence: {from: To Do, to: QA, skipped: [development, code_review]}}
+      # OPS-305: 33052 In Progress (1) -> QA (3); QA -> In Review is backwards,
+      # In Review -> QA and QA -> Done are one stage each.
+      - {rule_id: R-FLOW-02, issue_key: OPS-305, evidence_key: skip-33052, severity: breach}
+      # OPS-304: 33045 Done -> In Review.
+      - {rule_id: R-FLOW-03, issue_key: OPS-304, evidence_key: reopen-33045, severity: warning}
+
+      # --- warnings.yaml ---------------------------------------------------------------
+      # OPS thresholds, from closed intervals that left between 2026-05-08T12:00Z
+      # and `now` (OPS-921 left in April: excluded). Percentiles as numpy's
+      # default: rank = (n - 1) * pct / 100, then linear interpolation between
+      # sorted[floor(rank)] and sorted[ceil(rank)] (0-based).
+      #   Cases' closed intervals (flow.yaml OPS-301..306, warnings.yaml OPS-5xx):
+      #     To Do:       301:1 302:1 303:2 304:1 305:1, 502 503 504 505 507 509 510 511: 1 each
+      #                  -> 13 values, all <= 2
+      #     In Progress: 301:6 302:5 304:4 305:3 503:7 504:8 509:4 -> 7 values, all < 10
+      #     In Review:   302:2 304:2 305:2 306:3 503:4 509:7 -> 6 values, all < 12
+      #     QA:          301:4 303:3 304:2 305:2,2 306:3 -> 6 values, all < 8
+      #   History OPS-901..920 adds, for k = 0..19: To Do 20+4k, In Progress
+      #   10+2k, In Review 12+3k, QA 8+2k (each above every case value, so
+      #   sorted[cases + k] = the history value for k).
+      #   To Do:       n = 13 + 20 = 33; p90 rank 32 * 0.9 = 28.8 -> k 15 = 80, k 16 = 84
+      #                -> 80 + 0.8 * 4 = 83.2 h
+      #   In Progress: n = 7 + 20 = 27; p90 rank 26 * 0.9 = 23.4 -> k 16 = 42, k 17 = 44
+      #                -> 42 + 0.4 * 2 = 42.8 h
+      #   development (In Progress is OPS's only development status, so the same
+      #                27 values): p75 rank 26 * 0.75 = 19.5 -> k 12 = 34, k 13 = 36
+      #                -> 34 + 0.5 * 2 = 35.0 h
+      #   In Review:   n = 6 + 20 = 26; p90 rank 25 * 0.9 = 22.5 -> k 16 = 60, k 17 = 63
+      #                -> 60 + 0.5 * 3 = 61.5 h
+      #   QA:          n = 6 + 20 = 26; p90 rank 22.5 -> k 16 = 40, k 17 = 42 -> 41.0 h
+      # W-AGE-01 (age in the current status > its p90):
+      # OPS-501: To Do since 10-27 04:00 = 200 h > 83.2.
+      - {rule_id: W-AGE-01, issue_key: OPS-501, evidence_key: "stuck-To Do", severity: warning,
+         evidence: {age_h: 200.0, threshold_h: 83.2, history_n: 33}}
+      # OPS-502: In Progress since 10-31 08:00 = 100 h > 42.8.
+      - {rule_id: W-AGE-01, issue_key: OPS-502, evidence_key: "stuck-In Progress", severity: warning,
+         evidence: {age_h: 100.0, threshold_h: 42.8, history_n: 27}}
+      # OPS-503: QA since 10-31 08:00 = 100 h > 41.0.
+      - {rule_id: W-AGE-01, issue_key: OPS-503, evidence_key: stuck-QA, severity: warning,
+         evidence: {age_h: 100.0, threshold_h: 41.0, history_n: 26}}
+      # OPS-510: In Progress since 11-02 17:06 = 42 h 54 min = 42.9 h > 42.8.
+      - {rule_id: W-AGE-01, issue_key: OPS-510, evidence_key: "stuck-In Progress", severity: warning,
+         evidence: {age_h: 42.9, threshold_h: 42.8, history_n: 27}}
+      # W-REV-01 (in development > 35.0 h, never in In Review):
+      # OPS-502: 100 h. OPS-507: since 11-02 20:00 = 40 h. OPS-510: 42.9 h.
+      # OPS-511: since 11-02 17:18 = 42.7 h.
+      - {rule_id: W-REV-01, issue_key: OPS-502, evidence_key: no-code_review-after-p75, severity: warning,
+         evidence: {hours_in_stage: 100.0, threshold_h: 35.0}}
+      - {rule_id: W-REV-01, issue_key: OPS-507, evidence_key: no-code_review-after-p75, severity: warning,
+         evidence: {hours_in_stage: 40.0, threshold_h: 35.0}}
+      - {rule_id: W-REV-01, issue_key: OPS-510, evidence_key: no-code_review-after-p75, severity: warning,
+         evidence: {hours_in_stage: 42.9, threshold_h: 35.0}}
+      - {rule_id: W-REV-01, issue_key: OPS-511, evidence_key: no-code_review-after-p75, severity: warning,
+         evidence: {hours_in_stage: 42.7, threshold_h: 35.0}}
+    negatives:
+      # In Review: OPS-304 for 20 h (since 11-03 16:00), OPS-504 for 3 h, both
+      # <= 61.5. In Progress: OPS-505 2 h, OPS-507 40 h, OPS-508 35 h, OPS-509
+      # 40 h, OPS-511 42.7 h, all <= 42.8. To Do: OPS-506 1 h <= 83.2.
+      W-AGE-01: [OPS-304, OPS-504, OPS-505, OPS-506, OPS-507, OPS-508, OPS-509, OPS-511]
+      # OPS-505: 2 h <= 35.0. OPS-508: 35.0 h is the p75, not above it.
+      # OPS-509: 40 h, but it was In Review (11-02 13:00), so review is on
+      # record. OPS-503 (QA) and OPS-504 (In Review) are not in development.
+      W-REV-01: [OPS-505, OPS-508, OPS-509, OPS-503, OPS-504]
+      # OPS-302 never entered testing; OPS-304 was In Review (10-26 14:00)
+      # before QA (16:00); OPS-306 was created in In Review (evidence from its
+      # creation, 10-09 09:00) before QA (12:00).
+      R-FLOW-01: [OPS-302, OPS-304, OPS-306]
+      # OPS-304 and OPS-306 move one stage at a time (or backwards).
+      R-FLOW-02: [OPS-304, OPS-306]
+      # OPS-305's QA -> In Review goes backwards between statuses that aren't done.
+      R-FLOW-03: [OPS-305]

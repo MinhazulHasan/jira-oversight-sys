@@ -1,0 +1,60 @@
+{
+  "_note": "`response` is GET /rest/api/3/project/AIL/statuses in its documented shape (SHAPES.md): one entry per issue type, so the same three statuses repeat. Issue type and status ids are AIL's (observed); the per-type layout is documented, not observed.",
+  "response": [
+    {
+      "self": "https://example.atlassian.net/rest/api/3/issuetype/10081",
+      "id": "10081",
+      "name": "Task",
+      "subtask": false,
+      "statuses": [
+        {"self": "https://example.atlassian.net/rest/api/3/status/10084", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "To Do", "untranslatedName": "To Do", "id": "10084", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/2", "id": 2, "key": "new", "colorName": "blue-gray", "name": "To Do"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10085", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "In Progress", "untranslatedName": "In Progress", "id": "10085", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/4", "id": 4, "key": "indeterminate", "colorName": "yellow", "name": "In Progress"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10086", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "Done", "untranslatedName": "Done", "id": "10086", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/3", "id": 3, "key": "done", "colorName": "green", "name": "Done"}}
+      ]
+    },
+    {
+      "self": "https://example.atlassian.net/rest/api/3/issuetype/10082",
+      "id": "10082",
+      "name": "Epic",
+      "subtask": false,
+      "statuses": [
+        {"self": "https://example.atlassian.net/rest/api/3/status/10084", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "To Do", "untranslatedName": "To Do", "id": "10084", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/2", "id": 2, "key": "new", "colorName": "blue-gray", "name": "To Do"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10085", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "In Progress", "untranslatedName": "In Progress", "id": "10085", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/4", "id": 4, "key": "indeterminate", "colorName": "yellow", "name": "In Progress"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10086", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "Done", "untranslatedName": "Done", "id": "10086", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/3", "id": 3, "key": "done", "colorName": "green", "name": "Done"}}
+      ]
+    },
+    {
+      "self": "https://example.atlassian.net/rest/api/3/issuetype/10083",
+      "id": "10083",
+      "name": "Subtask",
+      "subtask": true,
+      "statuses": [
+        {"self": "https://example.atlassian.net/rest/api/3/status/10084", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "To Do", "untranslatedName": "To Do", "id": "10084", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/2", "id": 2, "key": "new", "colorName": "blue-gray", "name": "To Do"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10085", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "In Progress", "untranslatedName": "In Progress", "id": "10085", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/4", "id": 4, "key": "indeterminate", "colorName": "yellow", "name": "In Progress"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10086", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "Done", "untranslatedName": "Done", "id": "10086", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/3", "id": 3, "key": "done", "colorName": "green", "name": "Done"}}
+      ]
+    },
+    {
+      "self": "https://example.atlassian.net/rest/api/3/issuetype/10084",
+      "id": "10084",
+      "name": "Bug",
+      "subtask": false,
+      "statuses": [
+        {"self": "https://example.atlassian.net/rest/api/3/status/10084", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "To Do", "untranslatedName": "To Do", "id": "10084", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/2", "id": 2, "key": "new", "colorName": "blue-gray", "name": "To Do"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10085", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "In Progress", "untranslatedName": "In Progress", "id": "10085", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/4", "id": 4, "key": "indeterminate", "colorName": "yellow", "name": "In Progress"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10086", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "Done", "untranslatedName": "Done", "id": "10086", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/3", "id": 3, "key": "done", "colorName": "green", "name": "Done"}}
+      ]
+    },
+    {
+      "self": "https://example.atlassian.net/rest/api/3/issuetype/10085",
+      "id": "10085",
+      "name": "Test",
+      "subtask": false,
+      "statuses": [
+        {"self": "https://example.atlassian.net/rest/api/3/status/10084", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "To Do", "untranslatedName": "To Do", "id": "10084", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/2", "id": 2, "key": "new", "colorName": "blue-gray", "name": "To Do"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10085", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "In Progress", "untranslatedName": "In Progress", "id": "10085", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/4", "id": 4, "key": "indeterminate", "colorName": "yellow", "name": "In Progress"}},
+        {"self": "https://example.atlassian.net/rest/api/3/status/10086", "description": "", "iconUrl": "https://example.atlassian.net/", "name": "Done", "untranslatedName": "Done", "id": "10086", "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/3", "id": 3, "key": "done", "colorName": "green", "name": "Done"}}
+      ]
+    }
+  ]
+}

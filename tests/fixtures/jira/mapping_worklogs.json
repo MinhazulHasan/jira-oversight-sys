@@ -1,0 +1,20 @@
+{
+  "_note": "GET /rest/api/3/issue/AIL-1140/worklog in its documented shape (SHAPES.md); not observed on the site. Worklog 67746 is the one the changelog sample's WorklogId item records, written by the Tempo app account.",
+  "startAt": 0,
+  "maxResults": 5000,
+  "total": 1,
+  "worklogs": [
+    {
+      "self": "https://example.atlassian.net/rest/api/3/issue/52507/worklog/67746",
+      "author": {"accountId": "app-tempo", "accountType": "app", "displayName": "Timesheets by Tempo - Jira Time Tracking", "active": true},
+      "updateAuthor": {"accountId": "app-tempo", "accountType": "app", "displayName": "Timesheets by Tempo - Jira Time Tracking", "active": true},
+      "created": "2026-11-02T23:09:51.525-0600",
+      "updated": "2026-11-02T23:09:51.525-0600",
+      "started": "2026-11-02T09:00:00.000-0600",
+      "timeSpent": "4h",
+      "timeSpentSeconds": 14400,
+      "id": "67746",
+      "issueId": "52507"
+    }
+  ]
+}

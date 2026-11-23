@@ -1,0 +1,143 @@
+# The rule catalogue (Planning.md Phases 3 and 4). Versioned: any change to a
+# rule's logic or threshold in this file bumps `version`, so old and new
+# findings are never mixed (open findings from an older version are resolved
+# as "superseded").
+#
+# kind:     rule    = one of James's "hard and fast rules" ("blatantly bad")
+#           warning = an early warning ("on its way to being bad")
+# severity: breach | warning   (what the finding is reported as)
+#
+# Board settings (JO-15). This file is what every board starts from. An admin
+# changes one board's rules from the dashboard (Governance, Rule settings): a
+# rule on or off, its severity, and its numeric thresholds within safe bounds
+# (grace_hours, threshold, pct, days_left, not_started_share; never stage or
+# evidence). Those settings are kept in the snapshot database with every change
+# made to them, and override this file on that board only. Everything else, and
+# `defaults`, is set here alone; a value edited here moves every board that has
+# not set its own. An admin can also add rules of one board's own there (custom
+# rules, JO-20: one of the system's checks with its limits); they live in the
+# snapshot too, never in this file, and run with this file's `defaults`.
+#
+# Thresholds are placeholders until James agrees them (open questions 3 and 4).
+version: 0.1.0
+
+defaults:
+  # Epics are containers, not work: rules never apply to them unless a rule says so.
+  exclude_types: [Epic]
+  # History used for percentile thresholds (W-AGE-01, W-REV-01).
+  history_days: 180
+  min_history: 20
+  # Finished work leaves scope this many days after it was finished (done_at or
+  # resolved_at, the later): a condition on long-finished work can never clear,
+  # so its open findings resolve as "aged_out" (never "cleared": the digest does
+  # not report them). Open work is always checked. Remove it to check everything.
+  lookback_days: 90
+
+rules:
+  # --- hard and fast rules (Phase 3) ---------------------------------------
+  - id: R-EST-01
+    title: Work started without an estimate
+    description: The issue entered development (or a later stage) and has no estimate on the project's estimate basis.
+    kind: rule
+    severity: breach
+    applies_to: {status_category: [indeterminate, done]}
+    check: missing_estimate
+
+  - id: R-EST-02
+    title: Estimate first set after work started
+    description: The estimate was first recorded after the issue had already entered development; it may describe the work rather than predict it.
+    kind: rule
+    severity: warning
+    applies_to: {status_category: [indeterminate, done]}
+    check: estimate_after_start
+    params: {grace_hours: 1}
+
+  - id: R-EFF-01
+    title: Effort far beyond the estimate
+    description: Logged effort on finished work is at least the threshold times the estimate.
+    kind: rule
+    severity: breach
+    applies_to: {status_category: [done]}
+    check: effort_ratio_at_least
+    params: {threshold: 1.5}
+
+  - id: R-FLOW-01
+    title: Reached testing without code review
+    description: The issue entered the testing stage with no code-review evidence recorded before that moment.
+    kind: rule
+    severity: breach
+    check: entered_stage_without_evidence
+    params: {stage: testing, evidence: code_review}
+    requires_evidence: [code_review]
+    requires_stages: [testing]
+
+  - id: R-FLOW-02
+    title: Skipped a stage
+    description: A status change jumped forward over a stage the project's workflow maps (for example To Do straight to Done).
+    kind: rule
+    severity: breach
+    check: skipped_stage
+
+  - id: R-FLOW-03
+    title: Reopened after Done
+    description: The issue left a Done status for a status that is not Done.
+    kind: rule
+    severity: warning
+    check: reopened
+
+  - id: R-HYG-01
+    title: In progress with no assignee
+    description: The issue is in progress and nobody is assigned.
+    kind: rule
+    severity: breach
+    applies_to: {status_category: [indeterminate]}
+    check: in_progress_unassigned
+
+  # --- early warnings (Phase 4) ----------------------------------------------
+  - id: W-EFF-01
+    title: Effort burning fast
+    description: Work still in progress has already used at least the threshold share of its estimate.
+    kind: warning
+    severity: warning
+    applies_to: {status_category: [indeterminate]}
+    check: effort_ratio_at_least
+    params: {threshold: 0.8}
+    escalates_to: R-EFF-01
+
+  - id: W-AGE-01
+    title: Stuck in a status
+    description: Time in the current status is above the project's own p90 for that status, measured on closed work.
+    kind: warning
+    severity: warning
+    applies_to: {status_category: [new, indeterminate]}
+    check: stuck_in_status
+    params: {pct: 90}
+
+  - id: W-REV-01
+    title: No review evidence yet
+    description: In development longer than the project's p75 with no code-review evidence.
+    kind: warning
+    severity: warning
+    applies_to: {status_category: [indeterminate]}
+    check: no_evidence_after_percentile
+    params: {stage: development, evidence: code_review, pct: 75}
+    requires_evidence: [code_review]
+    escalates_to: R-FLOW-01
+
+  - id: W-SPR-01
+    title: Sprint at risk
+    description: The active sprint has at most the given days left and more than the given share of its issues not yet started, or it is past its end date with work not done.
+    kind: warning
+    severity: warning
+    scope: sprint
+    check: sprint_at_risk
+    params: {days_left: 2, not_started_share: 0.3}
+
+  - id: W-EST-01
+    title: Unestimated work in the active sprint
+    description: An issue in the active sprint has no estimate.
+    kind: warning
+    severity: warning
+    applies_to: {status_category: [new, indeterminate]}
+    check: unestimated_in_active_sprint
+    escalates_to: R-EST-01

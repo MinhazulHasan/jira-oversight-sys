@@ -1,0 +1,83 @@
+# Effort rules: R-EFF-01 (finished work logged at least 1.5x its estimate) and
+# W-EFF-01 (work in progress already at 0.8x or more), on AIL (8 h per story
+# point) and HRS (original estimates). effort ratio = time spent / estimate.
+# Format: see estimates.yaml. Every estimate here was set at creation (no
+# history), so R-EST-02 stays silent; AIL's finished cases date from April 2026
+# (before the history window, as in estimates.yaml).
+
+defaults: {issue_type: Task, assignee_id: acc-team-1}
+
+cases:
+  # --- AIL (points) ------------------------------------------------------------
+  - about: "Done: 24 h logged on 2 points (16 h), exactly 1.5x"
+    issue: {issue_key: AIL-201, status: Done, created_at: "2026-04-06T09:00:00.000Z",
+            story_points: 2.0, time_spent_s: 86400}
+    status_changes:
+      - {changelog_id: "12011", changed_at: "2026-04-06T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "12012", changed_at: "2026-04-08T10:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "Done: 40 h logged on 1 point (8 h), 5x"
+    issue: {issue_key: AIL-202, status: Done, created_at: "2026-04-13T09:00:00.000Z",
+            story_points: 1.0, time_spent_s: 144000}
+    status_changes:
+      - {changelog_id: "12021", changed_at: "2026-04-13T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "12022", changed_at: "2026-04-16T10:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "Done: 23 h logged on 2 points (16 h), 1.44x"
+    issue: {issue_key: AIL-203, status: Done, created_at: "2026-04-20T09:00:00.000Z",
+            story_points: 2.0, time_spent_s: 82800}
+    status_changes:
+      - {changelog_id: "12031", changed_at: "2026-04-20T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "12032", changed_at: "2026-04-22T10:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "In progress: 16 h logged on 1 point (8 h), 2x"
+    issue: {issue_key: AIL-204, status: In Progress, created_at: "2026-11-02T09:00:00.000Z",
+            story_points: 1.0, time_spent_s: 57600}
+    status_changes:
+      - {changelog_id: "12041", changed_at: "2026-11-02T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+
+  - about: "Done with no estimate and 40 h logged: no ratio to judge"
+    issue: {issue_key: AIL-205, status: Done, created_at: "2026-04-27T09:00:00.000Z",
+            story_points: null, time_spent_s: 144000}
+    status_changes:
+      - {changelog_id: "12051", changed_at: "2026-04-27T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {changelog_id: "12052", changed_at: "2026-04-29T10:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "In progress: 32 h logged on 5 points (40 h), exactly 0.8x"
+    issue: {issue_key: AIL-206, status: In Progress, created_at: "2026-11-02T09:00:00.000Z",
+            story_points: 5.0, time_spent_s: 115200}
+    status_changes:
+      - {changelog_id: "12061", changed_at: "2026-11-02T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+
+  - about: "In progress: 31 h logged on 5 points (40 h), 0.775x"
+    issue: {issue_key: AIL-207, status: In Progress, created_at: "2026-11-02T09:00:00.000Z",
+            story_points: 5.0, time_spent_s: 111600}
+    status_changes:
+      - {changelog_id: "12071", changed_at: "2026-11-02T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+
+  # --- HRS (hours) -----------------------------------------------------------------
+  - about: "Closed: 8 h logged on a 4 h estimate, 2x"
+    issue: {issue_key: HRS-201, status: Closed, created_at: "2026-10-05T09:00:00.000Z",
+            original_estimate_s: 14400, time_spent_s: 28800}
+    status_changes:
+      - {changelog_id: "22011", changed_at: "2026-10-05T10:00:00.000Z", from_status: Open, to_status: In Progress}
+      - {changelog_id: "22012", changed_at: "2026-10-06T10:00:00.000Z", from_status: In Progress, to_status: Closed}
+
+  - about: "Closed: 14 h logged on a 10 h estimate, 1.4x"
+    issue: {issue_key: HRS-202, status: Closed, created_at: "2026-10-12T09:00:00.000Z",
+            original_estimate_s: 36000, time_spent_s: 50400}
+    status_changes:
+      - {changelog_id: "22021", changed_at: "2026-10-12T10:00:00.000Z", from_status: Open, to_status: In Progress}
+      - {changelog_id: "22022", changed_at: "2026-10-14T10:00:00.000Z", from_status: In Progress, to_status: Closed}
+
+  - about: "In progress: 9 h logged on a 10 h estimate, 0.9x"
+    issue: {issue_key: HRS-203, status: In Progress, created_at: "2026-11-02T09:00:00.000Z",
+            original_estimate_s: 36000, time_spent_s: 32400}
+    status_changes:
+      - {changelog_id: "22031", changed_at: "2026-11-02T10:00:00.000Z", from_status: Open, to_status: In Progress}
+
+  - about: "In progress with nothing logged yet"
+    issue: {issue_key: HRS-204, status: In Progress, created_at: "2026-11-03T09:00:00.000Z",
+            original_estimate_s: 36000, time_spent_s: null}
+    status_changes:
+      - {changelog_id: "22041", changed_at: "2026-11-03T10:00:00.000Z", from_status: Open, to_status: In Progress}

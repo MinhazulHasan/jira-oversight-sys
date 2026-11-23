@@ -1,0 +1,66 @@
+# The three projects the labelled rule fixtures run under: a process.yaml
+# (`process`, loaded with ProcessConfig.model_validate) and each project's
+# `statuses` rows, as `sync` stores them. The cases are in the family files
+# beside this one; the expected findings are in tests/labels/findings.yaml.
+#
+# - AIL: AIL-shaped. Story points at 8 hours each; To Do / In Progress / Done;
+#   no evidence recorded anywhere (every evidence null), so R-FLOW-01 and
+#   W-REV-01 are not measurable.
+# - HRS: an hours project (original estimates); Open / In Progress / Closed.
+#   Code review is recorded in the Code Reviewers field, so W-REV-01 is
+#   measurable; no status maps to testing, so R-FLOW-01 is not. The other
+#   evidence names are left out, which counts the same as null.
+# - OPS: an hours project whose workflow maps five stages: To Do / In Progress /
+#   In Review (code review) / QA (testing) / Done. Code review evidence is
+#   "passed through In Review", so R-FLOW-01 and W-REV-01 are measurable.
+
+process:
+  process_version: 0.1.0-rules-labels
+  stages: [backlog, estimate, development, code_review, dev_signoff,
+           testing, test_review, test_signoff, done]
+  start_stage: development
+  done_stage: done
+  projects:
+    AIL:
+      status_to_stage:
+        "To Do": backlog
+        "In Progress": development
+        "Done": done
+      estimate: {basis: points, field: story_points, hours_per_point: 8}
+      evidence:
+        code_review: null
+        dev_signoff: null
+        testing: null
+        test_review: null
+        test_signoff: null
+    HRS:
+      status_to_stage:
+        "Open": backlog
+        "In Progress": development
+        "Closed": done
+      estimate: {basis: hours, field: original_estimate}
+      evidence:
+        code_review: {field: code_reviewers}
+    OPS:
+      status_to_stage:
+        "To Do": backlog
+        "In Progress": development
+        "In Review": code_review
+        "QA": testing
+        "Done": done
+      estimate: {basis: hours, field: original_estimate}
+      evidence:
+        code_review: {status: "In Review"}
+
+statuses:
+  - {project_key: AIL, status_id: "10", name: To Do, category: new}
+  - {project_key: AIL, status_id: "11", name: In Progress, category: indeterminate}
+  - {project_key: AIL, status_id: "12", name: Done, category: done}
+  - {project_key: HRS, status_id: "20", name: Open, category: new}
+  - {project_key: HRS, status_id: "21", name: In Progress, category: indeterminate}
+  - {project_key: HRS, status_id: "22", name: Closed, category: done}
+  - {project_key: OPS, status_id: "30", name: To Do, category: new}
+  - {project_key: OPS, status_id: "31", name: In Progress, category: indeterminate}
+  - {project_key: OPS, status_id: "32", name: In Review, category: indeterminate}
+  - {project_key: OPS, status_id: "33", name: QA, category: indeterminate}
+  - {project_key: OPS, status_id: "34", name: Done, category: done}

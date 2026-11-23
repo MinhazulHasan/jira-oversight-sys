@@ -1,0 +1,33 @@
+# Test copy of config/fields.yaml: AIL's field ids on the stellaint site.
+generated_at: '2026-11-04T00:00:00.000Z'
+site: https://fake.atlassian.net
+fields:
+  story_points:
+    id: customfield_10016
+    name: Story point estimate
+    custom_type: com.pyxis.greenhopper.jira:jsw-story-points
+  sprint:
+    id: customfield_10020
+    name: Sprint
+    custom_type: com.pyxis.greenhopper.jira:gh-sprint
+  epic_link: null
+  development:
+    id: customfield_10000
+    name: Development
+    custom_type: com.atlassian.jira.plugins.jira-development-integration-plugin:devsummarycf
+  programmer:
+    id: customfield_10138
+    name: Programmer
+    custom_type: com.atlassian.jira.plugin.system.customfieldtypes:people
+  code_reviewers:
+    id: customfield_10139
+    name: Code Reviewers
+    custom_type: com.atlassian.jira.plugin.system.customfieldtypes:people
+  testers:
+    id: customfield_10140
+    name: Testers
+    custom_type: com.atlassian.jira.plugin.system.customfieldtypes:people
+  test_reviewers:
+    id: customfield_10141
+    name: Test Reviewers
+    custom_type: com.atlassian.jira.plugin.system.customfieldtypes:people

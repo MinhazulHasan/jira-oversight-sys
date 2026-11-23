@@ -1,0 +1,87 @@
+{
+  "expand": "renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations",
+  "id": "52507",
+  "self": "https://example.atlassian.net/rest/api/3/issue/52507",
+  "key": "AIL-1140",
+  "fields": {
+    "project": {
+      "self": "https://example.atlassian.net/rest/api/3/project/10023",
+      "id": "10023",
+      "key": "AIL",
+      "name": "AILED",
+      "projectTypeKey": "software",
+      "simplified": true
+    },
+    "issuetype": {
+      "self": "https://example.atlassian.net/rest/api/3/issuetype/10081",
+      "id": "10081",
+      "description": "Tasks track small, distinct pieces of work.",
+      "name": "Task",
+      "subtask": false,
+      "hierarchyLevel": 0
+    },
+    "summary": "Sample task (sanitised)",
+    "status": {
+      "self": "https://example.atlassian.net/rest/api/3/status/10086",
+      "description": "",
+      "name": "Done",
+      "id": "10086",
+      "statusCategory": {"self": "https://example.atlassian.net/rest/api/3/statuscategory/3", "id": 3, "key": "done", "colorName": "green", "name": "Done"}
+    },
+    "assignee": {
+      "self": "https://example.atlassian.net/rest/api/3/user?accountId=acc-dev-1",
+      "accountId": "acc-dev-1",
+      "displayName": "Developer One",
+      "active": true,
+      "timeZone": "America/Chicago",
+      "accountType": "atlassian"
+    },
+    "parent": {
+      "id": "52505",
+      "key": "AIL-1138",
+      "self": "https://example.atlassian.net/rest/api/3/issue/52505",
+      "fields": {
+        "summary": "Sample epic (sanitised)",
+        "status": {
+          "name": "To Do",
+          "id": "10084",
+          "statusCategory": {"id": 2, "key": "new", "colorName": "blue-gray", "name": "To Do"}
+        },
+        "priority": {"name": "Medium", "id": "3"},
+        "issuetype": {
+          "id": "10082",
+          "description": "Epics track collections of related bugs, stories, and tasks.",
+          "name": "Epic",
+          "subtask": false,
+          "hierarchyLevel": 1
+        }
+      }
+    },
+    "created": "2026-11-02T23:08:12.832-0600",
+    "updated": "2026-11-03T22:54:38.662-0600",
+    "resolutiondate": "2026-11-03T22:54:38.644-0600",
+    "timeoriginalestimate": null,
+    "timeestimate": null,
+    "timespent": 14400,
+    "aggregatetimespent": 14400,
+    "customfield_10016": 0.5,
+    "customfield_10020": [
+      {
+        "id": 4427,
+        "name": "Sample Sprint 10",
+        "state": "active",
+        "boardId": 21,
+        "goal": "",
+        "startDate": "2026-11-02T08:15:10.000Z",
+        "endDate": "2026-11-16T06:00:00.000Z"
+      }
+    ],
+    "customfield_10138": null,
+    "customfield_10139": null,
+    "customfield_10140": null,
+    "customfield_10141": null,
+    "customfield_10000": "{}",
+    "issuelinks": [],
+    "subtasks": []
+  }
+}

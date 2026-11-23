@@ -1,0 +1,28 @@
+# The Docker build context is an allowlist: only what the image needs. Anything not named here stays out, so a new
+# file (a secret, a database copy, a report) never reaches an image by accident.
+*
+!requirements.txt
+!run.py
+!oversight/
+!config/
+
+# Named for the record (the line above already leaves them out): the snapshot and its backups, client reports and
+# logs, the tests, the virtual environment and the deployment's own settings.
+data
+reports
+logs
+tests
+jira_env
+deploy
+
+# Never in the image, even inside an allowed folder: settings and secrets (.env.example is not needed either),
+# database files, bytecode and test output.
+**/.env*
+**/*.env
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.db-journal
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache

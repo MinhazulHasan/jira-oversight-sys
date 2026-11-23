@@ -1,0 +1,42 @@
+__pycache__/
+*.py[cod]
+jira_env/
+.venv/
+
+# Secrets: the real settings stay local. Only the .example templates are committed.
+.env
+.env.*
+!.env.example
+deploy/*.env
+deploy/**/*.env
+*.pem
+*.pfx
+*.key
+
+# Client data: the snapshot database, its backups and copies, and anything made from it.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+# Baseline reports and digests quote issue keys and figures from the client's boards.
+reports/
+logs/
+*.log
+
+.pytest_cache/
+.coverage
+*.egg-info/
+.idea/
+.vscode/
+.claude/
+
+# Docs about this client, the original plan and the sales deck stay local. The deployment and setup guides are committed.
+Planning.md
+docs/DEPLOYMENT_IIS.md
+docs/DEPLOYMENT.md
+docs/DEMO_*.md
+docs/JIRA_TICKETS_*.txt
+docs/REFERENCE.md
+docs/deck/

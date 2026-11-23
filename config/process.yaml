@@ -1,0 +1,163 @@
+# James's agreed process, mapped onto each project's Jira workflow.
+# `python -m oversight doctor` checks that every status maps to a stage.
+process_version: 0.1.0
+
+stages: [backlog, estimate, development, code_review, dev_signoff,
+         testing, test_review, test_signoff, done]
+
+# "Started" is the first entry into start_stage or any later stage before done.
+start_stage: development
+done_stage: done
+
+# A board with a block here is mapped as the block says. Any other board the service
+# serves (JIRA_PROJECTS, and with BOARD_DISCOVERY=on every board the Jira account can
+# browse) is mapped from Jira's status categories, with no evidence sources (JO-17).
+# `name` is what the dashboard's board picker shows; without it, Jira's name, else the key.
+projects:
+  AIL:
+    name: AILED
+    # Team-managed project ("AILED"). Day to day the team uses three statuses. The
+    # workflow also has four more that are rarely used: about 100 changes between
+    # 2024 and Aug 2026, and no issue in any of them on 5 Nov 2026. They sit inside
+    # development here, so work in them counts as in progress and a usual
+    # In Progress -> Done is not a skipped stage. To enforce testing through them,
+    # map them to dev_signoff / testing / test_signoff and add
+    #   stages_since: {dev_signoff: <day>, testing: <day>, test_signoff: <day>}
+    # so that only changes from that day on can skip those stages.
+    status_to_stage:
+      "To Do": backlog
+      "In Progress": development
+      "DISCUSSION REQUIRED": development
+      "READY FOR TESTING": development
+      "IN TESTING": development
+      "READY TO RELEASE": development
+      "Done": done
+    estimate:
+      basis: points            # AIL has no original estimates (0 of 291 resolved in the 90 days to 2 Nov)
+      field: story_points      # "Story point estimate", customfield_10016 (see fields.yaml)
+      hours_per_point: 8       # to agree with James (open question 3)
+    evidence:
+      # null: rules that need this evidence report "not measurable" (Phase 3).
+      # Candidates checked on 4 Nov 2026 (read-only JQL counts over 1,146 issues):
+      #   Code Reviewers (customfield_10139), Testers (customfield_10140) and
+      #   Test Reviewers (customfield_10141) exist but are empty on every issue;
+      #   Programmer (customfield_10138) is set on 10. No pull requests are linked
+      #   (development[pullrequests].all > 0 matches 0 issues). 820 issues have
+      #   issue links; the baseline report breaks them down by link type.
+      code_review: null
+      dev_signoff: null
+      testing: null
+      test_review: null
+      test_signoff: null
+
+  # LEADRS and MJH boards (team-managed), added 5 Nov 2026 for the dashboard's board
+  # picker. Statuses read from each workflow (read-only) on 5 Nov 2026. Unlike AIL, these
+  # teams use review and QA statuses day to day, so those statuses are their stages and
+  # their evidence: skipping Code Review or QA is a finding here. Checked against 180
+  # days of real transitions (LEADRS DRE): "Ready to Deploy" follows Code Review and is
+  # optional (Code Review -> QA directly is as common), so it sits inside code_review
+  # rather than being a stage every issue must pass; "Ready to Deploy -> Done" still
+  # counts as skipping QA. Sign-offs have no status of their own and stay "not
+  # measurable". All four use story points
+  # ("Story point estimate", customfield_10016) on 30-74% of issues.
+  LEADRSC:
+    name: LEADRS CORE
+    status_to_stage:
+      "To Do": backlog
+      "In Progress": development
+      "CODE REVIEW": code_review
+      "QA": testing
+      "QA Review": test_review
+      "Ready to Deploy": code_review
+      "Done": done
+    estimate: {basis: points, field: story_points, hours_per_point: 8}
+    evidence:
+      code_review: {status: "CODE REVIEW"}
+      dev_signoff: null
+      testing: {status: "QA"}
+      test_review: {status: "QA Review"}
+      test_signoff: null
+
+  LEADRSCOMS:
+    name: LEADRS COMS
+    status_to_stage:
+      "To Do": backlog
+      "In Progress": development
+      "Code Review": code_review
+      "QA": testing
+      "QA Review": test_review
+      "Done": done
+    estimate: {basis: points, field: story_points, hours_per_point: 8}
+    evidence:
+      code_review: {status: "Code Review"}
+      dev_signoff: null
+      testing: {status: "QA"}
+      test_review: {status: "QA Review"}
+      test_signoff: null
+
+  LEADRSDRE:
+    name: LEADRS DRE
+    status_to_stage:
+      "To Do": backlog
+      "In Progress": development
+      "Code Review": code_review
+      "QA": testing
+      "QA Review": test_review
+      "Ready To Deploy": code_review
+      "Done": done
+      # Retired statuses, in the history only (last used July 2025).
+      "Bench": backlog
+      "Postponed": backlog
+      "Review": code_review
+    estimate: {basis: points, field: story_points, hours_per_point: 8}
+    evidence:
+      code_review: {status: "Code Review"}
+      dev_signoff: null
+      testing: {status: "QA"}
+      test_review: {status: "QA Review"}
+      test_signoff: null
+
+  MJHDASH:
+    name: MJH DASHBOARD
+    status_to_stage:
+      "To Do": backlog
+      "Dev Queue": backlog
+      "DISCUSSION REQUIRED": backlog
+      "In Progress": development
+      "Code Review": code_review
+      "In Testing": testing
+      "Test Review": test_review
+      "Done": done
+      # Retired statuses, in the history only (last used 2022-2023); as on AIL,
+      # "ready for testing" counts as development.
+      "IN BENCH": backlog
+      "UNRESOLVED ISSUE": development
+      "READY FOR TESTNG": development
+    estimate: {basis: points, field: story_points, hours_per_point: 8}
+    evidence:
+      code_review: {status: "Code Review"}
+      dev_signoff: null
+      testing: {status: "In Testing"}
+      test_review: {status: "Test Review"}
+      test_signoff: null
+
+  DEMO:
+    # Synthetic project written by `python -m oversight demo`: the same
+    # three-status workflow as AIL, so the whole pipeline runs without Jira.
+    # synthetic: its issues don't exist on the Jira site, so nothing links there.
+    synthetic: true
+    name: Demo project
+    status_to_stage:
+      "To Do": backlog
+      "In Progress": development
+      "Done": done
+    estimate:
+      basis: points
+      field: story_points
+      hours_per_point: 8
+    evidence:
+      code_review: null
+      dev_signoff: null
+      testing: null
+      test_review: null
+      test_signoff: null

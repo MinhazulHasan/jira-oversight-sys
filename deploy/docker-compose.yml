@@ -1,0 +1,139 @@
+# The Jira Oversight stack: the API, the dashboard in front of it, the sync service, and the admin commands.
+# docs/DEPLOYMENT.md walks through it. Run every command from the oversight service's folder (jira-oversight-sys):
+#
+#   docker compose -f deploy/docker-compose.yml config      # check this file and the settings it will use
+#   docker compose -f deploy/docker-compose.yml build       # build both images (the base images are the only pull)
+#   docker compose -f deploy/docker-compose.yml up -d       # start the API, the dashboard and the sync service
+#   docker compose -f deploy/docker-compose.yml run --rm tools doctor --production
+#
+# No secret is in this file. Every setting comes from two env files beside it, made from the .env.example files and
+# never committed: deploy/backend.env (the API and the sync service) and deploy/dashboard.env (the dashboard). The
+# few values below are this stack's wiring, set here so no env file can change them. Without its env file a service
+# refuses to start or lets nobody in; it never runs open.
+#
+# Optional variables for this file itself (the shell, or deploy/.env, which holds no secret):
+#   DASHBOARD_DIR      the dashboard's folder, default ../../jira-oversight-ui (the two folders side by side)
+#   DASHBOARD_PORT     the loopback port the reverse proxy forwards to, default 3400
+#   OVERSIGHT_VERSION  the image tag, default local; tag each release to keep the last one for a rollback
+#   OVERSIGHT_UID/GID  the backend's user and group ids, default 10001; see DEPLOYMENT.md, "Config files"
+
+name: jira-oversight
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-backend: &backend
+  image: jira-oversight/api:${OVERSIGHT_VERSION:-local}
+  # Built here (the api service's build), never pulled from a registry.
+  pull_policy: never
+  init: true
+  env_file:
+    - path: ./backend.env
+      required: false
+  environment: &backend-wiring
+    API_HOST: 0.0.0.0
+    API_PORT: "3300"
+    API_RELOAD: "false"
+    DB_PATH: /app/data/oversight.db
+    CONFIG_DIR: /app/config
+    REPORTS_DIR: /app/reports
+  volumes:
+    - oversight-data:/app/data
+    - oversight-reports:/app/reports
+    - ../config:/app/config:ro
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  logging: *logging
+
+services:
+  api:
+    <<: *backend
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        APP_UID: ${OVERSIGHT_UID:-10001}
+        APP_GID: ${OVERSIGHT_GID:-10001}
+    # Reached by the dashboard only, on this stack's network; never published on the host.
+    expose:
+      - "3300"
+    restart: unless-stopped
+    # Health: the image's own check, GET /api/v1/health with the service key (oversight/healthcheck.py).
+
+  sync:
+    <<: *backend
+    # A cycle every SYNC_INTERVAL_MINUTES (default 60), the first of each UTC day in full, and a backup once a day.
+    command: ["python", "-m", "oversight", "cycle", "--loop"]
+    depends_on:
+      api:
+        # The API brings the snapshot to this release's schema when it starts; the sync waits for that.
+        condition: service_healthy
+    restart: unless-stopped
+    # Time for an interrupted step to record its run before it ends.
+    stop_grace_period: 1m
+    # It serves nothing to check. A failed sync shows in GET /health and on the dashboard.
+    healthcheck:
+      disable: true
+
+  dashboard:
+    image: jira-oversight/dashboard:${OVERSIGHT_VERSION:-local}
+    build:
+      context: ${DASHBOARD_DIR:-../../jira-oversight-ui}
+      dockerfile: Dockerfile
+    pull_policy: never
+    init: true
+    env_file:
+      - path: ./dashboard.env
+        required: false
+    environment:
+      # Live figures from the api service above, and sign-in always on: nobody gets in until it is configured.
+      OVERSIGHT_DATA: live
+      OVERSIGHT_API_URL: http://api:3300
+      AUTH_MODE: atlassian
+      # Test stand-ins for Atlassian's servers: never in a deployment.
+      ATLASSIAN_AUTH_URL: ""
+      ATLASSIAN_API_URL: ""
+    ports:
+      # Loopback only: the HTTPS reverse proxy on this host is the one way in.
+      - "127.0.0.1:${DASHBOARD_PORT:-3400}:3400"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+    # Health: the image's own check on /api/oversight/health (the dashboard's Dockerfile says what passes).
+
+  # The admin commands, never started by `up`:
+  #   docker compose -f deploy/docker-compose.yml run --rm tools <command>, for example doctor, backup, sync --full.
+  tools:
+    <<: *backend
+    profiles:
+      - tools
+    entrypoint: ["python", "-m", "oversight"]
+    command: ["--help"]
+    volumes:
+      - oversight-data:/app/data
+      - oversight-reports:/app/reports
+      # Writable here only: `doctor` rewrites config/fields.yaml.
+      - ../config:/app/config
+    restart: "no"
+    healthcheck:
+      disable: true
+
+volumes:
+  # The snapshot (oversight.db) and its backups (backups/). Back this volume up off the host: DEPLOYMENT.md says how.
+  oversight-data:
+  # Baseline reports and file digests.
+  oversight-reports:

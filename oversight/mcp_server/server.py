@@ -1,0 +1,331 @@
+"""Our MCP server (Phase 6): one read-only tool per catalogue entry, for Claude
+Desktop and Claude Code over stdio.
+
+CONTRACT (stub; the ask build implements it). Pinned `mcp<2` (1.30): use
+`from mcp.server.fastmcp import FastMCP` and `from mcp.types import ToolAnnotations`.
+Inspect the installed package for the exact `add_tool` / `tool()` signatures
+before writing; do not write from memory.
+
+build_server(settings, process, rules, *, db_path=None) -> FastMCP
+- Name "jira_oversight_mcp". For every spec in ask.catalog.CATALOG register a
+  tool named spec.name whose single argument `params` is the spec's
+  params_model (FastMCP derives the input schema from the pydantic model), with
+  spec.description and annotations ToolAnnotations(title=..., readOnlyHint=True,
+  destructiveHint=False, idempotentHint=True, openWorldHint=False).
+- Each call opens a read-only connection (open_readonly) to the store's file,
+  runs catalog.run_query with a fresh CatalogContext (project from params or
+  settings.jira_projects[0], now=utcnow(), row_limit from settings), and
+  returns json.dumps({"tool", "params", "columns", "rows", "truncated", "as_of"}).
+  A missing database file or a validation error returns a JSON object with an
+  "error" field (and the tool raises nothing else).
+- One extra tool, oversight_catalog, lists the tools and their parameters
+  (catalog_schema()), so a client can discover the vocabulary.
+main(): build and `run()` over stdio (the `python -m oversight mcp` command).
+Nothing here writes: tests check that every registered tool's annotations say
+read-only and that calling each tool over an in-process client session returns
+the same rows as catalog.run_query.
+
+Implementation notes
+- The `params` argument is declared as Annotated[Any, WithJsonSchema(<the
+  spec's params_model schema>)]: the tool's input schema is the pydantic
+  model's own JSON schema, but the value reaches this module unvalidated, so a
+  bad call comes back as {"error": "..."} in plain words (catalog.validate_params)
+  as the contract asks. Had FastMCP validated the model itself, an invalid
+  call would have been a protocol-level tool error, never a JSON object.
+- `params` is optional: a tool with no required parameter (oversight_rule_status,
+  oversight_hot_spots) can be called with no arguments at all. A client that
+  sends the object as a JSON string (Claude Desktop does) is handled by
+  FastMCP's pre-parsing.
+- structured_output=False: the JSON text is the whole result. The default would
+  wrap the same string again as structuredContent {"result": "..."}.
+- Every call opens its own read-only connection and closes it; the server holds
+  none, so a sync can replace the database while the server runs.
+- A project that process.yaml does not configure is refused with an error that
+  names the configured ones (the check ask() makes too); otherwise a query
+  could fail part-way with a ConfigError. Every board the service serves is
+  configured (JO-17): main() maps each one process.yaml leaves out from Jira's
+  status categories, from the snapshot as it is when the server starts
+  (oversight.boards.board_process).
+- The payload also carries the fact's note (the findings on a timeline, the
+  sprint fallback, the scope of a coverage count): without it a reader cannot
+  tell what the rows cover.
+- oversight_catalog also lists the configured projects, rules.yaml's enabled
+  rules (`rules`: id, title, kind, severity; these need no database) and each
+  board's own rules as its admins set them (`board_rules`, by project: id,
+  title, kind, severity, enabled and custom, the rules they added (JO-20)
+  among them, read from the snapshot through a read-only connection of its
+  own; rules.yaml's when there is no snapshot, or it cannot be read), so a
+  client can choose rule_id and project values that exist on the board.
+- Each query runs with the rules of the board it names (or the default board):
+  rules.yaml with the rule settings its admins saved for that board (JO-15,
+  oversight/rules/settings.py), read through the call's read-only connection,
+  so a rule's status, severity and threshold here are the dashboard's.
+"""
+from __future__ import annotations
+
+import json
+import sqlite3
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Annotated, Any
+
+from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import WithJsonSchema
+
+from oversight.ask.catalog import CATALOG, CatalogContext, QuerySpec, catalog_schema, validate_params
+from oversight.config import ProcessConfig
+from oversight.errors import ConfigError
+from oversight.logs import get_logger
+from oversight.rules.catalog import RulesConfig
+from oversight.rules.settings import effective_rules, load_board_settings
+from oversight.settings import Settings, get_settings
+from oversight.store.db import open_readonly
+from oversight.timeutil import utcnow
+
+SERVER_NAME = "jira_oversight_mcp"
+CATALOG_TOOL = "oversight_catalog"
+EXIT_OK = 0
+
+# FastMCP accepts exactly these level names; anything else in LOG_LEVEL falls back to INFO.
+_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+log = get_logger("mcp")
+
+
+def build_server(settings: Settings, process: ProcessConfig, rules: RulesConfig, *, db_path: Path | None = None) -> FastMCP:
+    """The server with one read-only tool per catalogue entry plus oversight_catalog (see the module docstring)."""
+    if not settings.jira_projects:
+        raise ConfigError("JIRA_PROJECTS is empty: the server needs a default project")
+    runner = _Runner(
+        path=Path(db_path) if db_path is not None else settings.db_file,
+        settings=settings,
+        process=process,
+        rules=rules,
+        default_project=settings.jira_projects[0],
+    )
+    server = FastMCP(SERVER_NAME, instructions=_instructions(runner), log_level=_log_level(settings))
+    for spec in CATALOG.values():
+        title = _title(spec.name)
+        server.add_tool(
+            _tool_function(spec, runner),
+            name=spec.name,
+            title=title,
+            description=spec.description,
+            annotations=_read_only(title),
+            structured_output=False,
+        )
+    server.add_tool(
+        _catalog_function(runner),
+        name=CATALOG_TOOL,
+        title="Catalogue",
+        description=(
+            "The vocabulary of this server: every tool with its parameter schema, the configured projects "
+            "and the rule ids. Call it first."
+        ),
+        annotations=_read_only("Catalogue"),
+        structured_output=False,
+    )
+    return server
+
+
+def main(settings: Settings | None = None) -> int:
+    """`python -m oversight mcp`: serve over stdio until the client disconnects."""
+    settings = settings or get_settings()
+    process = served_process(ProcessConfig.load(settings.process_file), settings)
+    rules = RulesConfig.load(settings.rules_file)
+    server = build_server(settings, process, rules)
+    if not settings.db_file.exists():
+        # Not fatal: every tool answers with an error until a sync or demo creates the file.
+        log.warning("mcp_database_missing", path=str(settings.db_file))
+    log.info(
+        "mcp_server_starting",
+        name=SERVER_NAME,
+        transport="stdio",
+        db=str(settings.db_file),
+        project=settings.jira_projects[0],
+        tools=len(CATALOG) + 1,
+    )
+    # stdout carries the protocol; logs go to stderr (oversight.logs).
+    server.run(transport="stdio")
+    return EXIT_OK
+
+
+def served_process(process: ProcessConfig, settings: Settings) -> ProcessConfig:
+    """process.yaml with every served board mapped (oversight.boards.board_process), from the snapshot read-only; from
+    nothing (JIRA_PROJECTS, each before its first sync) without one, or with one that cannot be read."""
+    from oversight.boards import board_process
+
+    if settings.db_file.exists():
+        try:
+            conn = open_readonly(settings.db_file)
+            try:
+                return board_process(process, conn, settings)
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            log.warning("mcp_boards_unreadable", error_type=type(exc).__name__)
+    return board_process(process, None, settings)
+
+
+# --- one call --------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Runner:
+    """What every tool call needs: where the database is and the configuration the catalogue reads."""
+
+    path: Path
+    settings: Settings
+    process: ProcessConfig
+    rules: RulesConfig
+    default_project: str
+
+    def run(self, spec: QuerySpec, raw_params: Any) -> str:
+        """The spec's facts as JSON text, or {"error": ...}; never raises (the client sees every failure as data)."""
+        try:
+            return self._run(spec, raw_params)
+        except Exception as exc:  # noqa: BLE001 - a tool boundary: the failure is logged with its traceback and reported
+            log.exception("mcp_tool_failed", tool=spec.name)
+            return _error(spec.name, f"the query failed unexpectedly ({type(exc).__name__}: {exc})")
+
+    def _run(self, spec: QuerySpec, raw_params: Any) -> str:
+        try:
+            params = validate_params(spec.name, {} if raw_params is None else raw_params)
+        except ValueError as exc:
+            return _error(spec.name, f"invalid parameters: {exc}")
+        project = getattr(params, "project", None) or self.default_project
+        if hasattr(params, "project") and project not in self.process.projects:
+            configured = ", ".join(sorted(self.process.projects))
+            return _error(spec.name, f"project {project} is not configured in process.yaml (configured: {configured})")
+        if not self.path.exists():
+            return _error(
+                spec.name,
+                f"no database at {self.path}: run `python -m oversight sync --full` "
+                "(or `python -m oversight demo`) first",
+            )
+        try:
+            conn = open_readonly(self.path)
+        except sqlite3.Error as exc:
+            return _error(spec.name, f"the database at {self.path} could not be opened read-only: {exc}")
+        try:
+            ctx = CatalogContext(
+                process=self.process,
+                rules=effective_rules(self.rules, load_board_settings(conn, project)),
+                project=self.default_project,
+                now=utcnow(),
+                row_limit=self.settings.ask_row_limit,
+            )
+            facts = spec.run(conn, params, ctx)
+        except sqlite3.Error as exc:
+            return _error(
+                spec.name,
+                f"the database at {self.path} could not be read ({exc}); it may not be an oversight snapshot yet",
+            )
+        except ConfigError as exc:
+            return _error(spec.name, str(exc))
+        finally:
+            conn.close()
+        payload = facts.to_dict()
+        payload.pop("ref", None)  # F1/F2 numbering belongs to ask(), not to a single tool call
+        log.info("mcp_tool_called", tool=spec.name, project=project, rows=len(facts.rows), truncated=facts.truncated)
+        return json.dumps(payload, ensure_ascii=False)
+
+    def catalog(self) -> str:
+        """The vocabulary: tools, configured projects, rules.yaml's enabled rules and each board's rules (see the module
+        docstring). Never fails for want of a database: without one, every board's rules are rules.yaml's."""
+        return json.dumps(
+            {
+                "server": SERVER_NAME,
+                "default_project": self.default_project,
+                "projects": sorted(self.process.projects),
+                "row_limit": self.settings.ask_row_limit,
+                "rules": [
+                    {"id": rule.id, "title": rule.title, "kind": rule.kind, "severity": rule.severity}
+                    for rule in self.rules.enabled_rules
+                ],
+                "board_rules": {
+                    project: [
+                        {"id": rule.id, "title": rule.title, "kind": rule.kind, "severity": rule.severity,
+                         "enabled": rule.enabled, "custom": rule.custom}
+                        for rule in rules.rules
+                    ]
+                    for project, rules in self.board_rules().items()
+                },
+                "tools": catalog_schema(),
+            },
+            ensure_ascii=False,
+        )
+
+    def board_rules(self) -> dict[str, RulesConfig]:
+        """Each configured board's rules, by project: rules.yaml with the board's settings and custom rules, read through
+        one read-only connection; rules.yaml's for every board when there is no snapshot or it cannot be read."""
+        projects = sorted(self.process.projects)
+        if not self.path.exists():
+            return {project: self.rules for project in projects}
+        try:
+            conn = open_readonly(self.path)
+            try:
+                return {project: effective_rules(self.rules, load_board_settings(conn, project)) for project in projects}
+            finally:
+                conn.close()
+        except (sqlite3.Error, ValueError) as exc:
+            log.warning("mcp_board_rules_unreadable", error_type=type(exc).__name__)
+            return {project: self.rules for project in projects}
+
+
+def _error(tool: str, message: str) -> str:
+    return json.dumps({"tool": tool, "error": message}, ensure_ascii=False)
+
+
+# --- registration helpers ---------------------------------------------------------------------
+
+
+def _tool_function(spec: QuerySpec, runner: _Runner) -> Callable[..., str]:
+    def tool(params: Any = None) -> str:
+        return runner.run(spec, params)
+
+    tool.__name__ = spec.name
+    tool.__qualname__ = spec.name
+    tool.__doc__ = spec.description
+    # Real type objects, not the strings `from __future__ import annotations`
+    # leaves behind: FastMCP evaluates them to build the argument model, and the
+    # schema it publishes for `params` is the spec's own model.
+    tool.__annotations__ = {
+        "params": Annotated[Any, WithJsonSchema(spec.params_model.model_json_schema())],
+        "return": str,
+    }
+    return tool
+
+
+def _catalog_function(runner: _Runner) -> Callable[[], str]:
+    def oversight_catalog() -> str:
+        return runner.catalog()
+
+    oversight_catalog.__annotations__ = {"return": str}
+    return oversight_catalog
+
+
+def _read_only(title: str) -> ToolAnnotations:
+    return ToolAnnotations(title=title, readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+
+
+def _title(name: str) -> str:
+    """'oversight_time_in_status' -> 'Time in status'."""
+    return name.removeprefix("oversight_").replace("_", " ").capitalize()
+
+
+def _instructions(runner: _Runner) -> str:
+    return (
+        "Read-only questions about the Jira oversight snapshot: issues, status timelines, metrics, "
+        f"rule findings and early warnings for the configured projects (default {runner.default_project}). "
+        "Every number comes from the database, never from a model, and nothing here writes. "
+        f"Call {CATALOG_TOOL} first to see the tools, their parameters and the rule ids. "
+        "Answers stay at team and process level: no tool reports on individual people."
+    )
+
+
+def _log_level(settings: Settings) -> Any:
+    level = settings.log_level.strip().upper()
+    return level if level in _LOG_LEVELS else "INFO"

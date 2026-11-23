@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MCP server eval (ticket 15), in the mcp-builder evaluation format: ten read-only,
+  verifiable questions, each answerable with the oversight_* tools of
+  oversight/mcp_server/server.py (call oversight_catalog first, pass project DEMO).
+
+  Ground truth: project DEMO, the default demo seeded with seed 20261104 and
+  1,150 issues at now = 2026-11-04T12:00:00Z, then derived and rules-run at that
+  time with tests/fixtures/config (the demo fixture of tests/test_eval.py).
+  Every answer was computed in code with oversight.ask.catalog.run_query, the
+  query the matching MCP tool runs; tests/test_eval.py (MCP_ANSWERS) recomputes
+  each one the same way. Answers are single values, compared as exact strings.
+  - The epic question takes oversight_hot_spots' first row: the tool lists the
+    "(no epic)" group after the epics, since work outside any epic is not an epic.
+  - The status question counts the closed intervals of every status before the
+    done stage; time in Done (the wait before a reopen) is left out.
+  Recompute the answers whenever the demo seed or the catalogue changes.
+-->
+<evaluation>
+  <qa_pair>
+    <question>How many DEMO issues are in status In Progress right now?</question>
+    <answer>129</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many DEMO bugs have no story-point estimate?</question>
+    <answer>87</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Which DEMO epic has the most open breaches?</question>
+    <answer>DEMO-36</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many of the rules in the catalogue cannot be measured in DEMO today?</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Which rule has the most open findings in DEMO?</question>
+    <answer>R-EST-01</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Which DEMO ticket has the highest ratio of logged effort to its estimate?</question>
+    <answer>DEMO-703</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What share of DEMO issues created in the last 90 days have story points? Answer as a whole percentage.</question>
+    <answer>67%</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In which status have DEMO tickets spent the longest median time, over status intervals that ended in the last 90 days?</question>
+    <answer>In Progress</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many status intervals does the timeline of DEMO-1013 have?</question>
+    <answer>1</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the id of the active DEMO sprint that the 'Sprint at risk' warning (W-SPR-01) is open for?</question>
+    <answer>4414</answer>
+  </qa_pair>
+</evaluation>

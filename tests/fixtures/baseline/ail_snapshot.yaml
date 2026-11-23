@@ -1,0 +1,170 @@
+# Hand-built snapshot for tests/test_baseline.py (tickets 5 and 6), as `sync`
+# stores it: rows of `issues`, `status_changes`, `field_changes`, `worklogs`,
+# `links`, `statuses` and `sync_state`, with UTC timestamps in the storage
+# format. The test runs `derive` over it (now = 2026-11-04T12:00:00.000Z), then
+# the baseline for the ticket 4 window:
+#
+#   as_of 2026-11-02, 90 days, America/Chicago
+#   start 2026-08-04 00:00 CDT (UTC-5) = 2026-08-04T05:00:00.000Z  (included)
+#   end   2026-11-02 00:00 CST (UTC-6) = 2026-11-02T06:00:00.000Z  (excluded)
+#
+# Daylight saving time ended on Sunday 1 Nov 2026, so the two edges have
+# different UTC offsets. AIL-1, AIL-2, AIL-3, AIL-9 and AIL-10 sit on them.
+#
+# Resolved in the window: AIL-1, AIL-3, AIL-4, AIL-5, AIL-6, AIL-7 (six issues).
+# Every figure, worked out by hand, is EXPECTED_FIGURES in tests/test_baseline.py.
+#
+# Account ids and the display name below must never reach a report:
+# acc-dev-1, acc-dev-2, app-tempo (the Tempo app account), "Developer One".
+# Remote link titles and URL paths are ticket text and must not either.
+
+statuses:
+  - {project_key: AIL, status_id: "10084", name: To Do, category: new}
+  - {project_key: AIL, status_id: "10085", name: In Progress, category: indeterminate}
+  - {project_key: AIL, status_id: "10086", name: Done, category: done}
+  - {project_key: AIL, status_id: "10087", name: In Review, category: indeterminate}
+
+sync_state:
+  - {scope: AIL, last_synced_at: "2026-11-04T11:00:00.000Z", run_id: sync-1, account_timezone: America/Chicago}
+  # Another project's cursor: the report must use AIL's.
+  - {scope: OPS, last_synced_at: "2026-11-04T09:00:00.000Z", run_id: sync-0, account_timezone: America/Chicago}
+
+cases:
+  - about: "Resolved one minute before the window end. 2 points, 16 h logged in three Tempo worklogs"
+    issue: {issue_key: AIL-1, issue_id: "91001", project_key: AIL, issue_type: Task, status: Done,
+            status_category: done, assignee_id: acc-dev-1, created_at: "2026-11-01T04:59:00.000Z",
+            resolved_at: "2026-11-02T05:59:00.000Z", original_estimate_s: null, time_spent_s: 57600,
+            aggregate_time_spent_s: 57600, story_points: 2.0,
+            raw_json: {key: AIL-1, fields: {assignee: {accountId: acc-dev-1, displayName: Developer One}}}}
+    status_changes:
+      - {issue_key: AIL-1, changelog_id: "1011", changed_at: "2026-11-01T05:59:00.000Z", author_id: acc-dev-1, from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-1, changelog_id: "1012", changed_at: "2026-11-02T05:59:00.000Z", author_id: acc-dev-1, from_status: In Progress, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-1, changelog_id: "1010", field: story_points, changed_at: "2026-11-01T05:00:00.000Z", from_value: null, to_value: "2"}
+    worklogs:
+      - {worklog_id: "71011", issue_key: AIL-1, started_at: "2026-11-01T14:00:00.000Z", seconds: 19200, author_id: app-tempo, updated_at: "2026-11-01T20:00:00.000Z"}
+      - {worklog_id: "71012", issue_key: AIL-1, started_at: "2026-11-01T15:00:00.000Z", seconds: 19200, author_id: app-tempo, updated_at: "2026-11-01T20:00:00.000Z"}
+      - {worklog_id: "71013", issue_key: AIL-1, started_at: "2026-11-01T16:00:00.000Z", seconds: 19200, author_id: app-tempo, updated_at: "2026-11-01T20:00:00.000Z"}
+    links:
+      - {issue_key: AIL-1, kind: issue_link, target: AIL-2, title: blocks}
+      - {issue_key: AIL-1, kind: remote_link, target: "https://github.com/example/repo/pull/1", title: "PR #1: rotate the leaked secret"}
+
+  - about: "Resolved exactly at the window end, so outside it"
+    issue: {issue_key: AIL-2, issue_id: "91002", project_key: AIL, issue_type: Task, status: Done,
+            status_category: done, created_at: "2026-11-01T06:00:00.000Z",
+            resolved_at: "2026-11-02T06:00:00.000Z", original_estimate_s: null, time_spent_s: 36000,
+            aggregate_time_spent_s: 36000, story_points: 5.0}
+    status_changes:
+      - {issue_key: AIL-2, changelog_id: "1021", changed_at: "2026-11-01T07:00:00.000Z", author_id: acc-dev-2, from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-2, changelog_id: "1022", changed_at: "2026-11-02T06:00:00.000Z", author_id: acc-dev-2, from_status: In Progress, to_status: Done}
+    worklogs:
+      - {worklog_id: "71021", issue_key: AIL-2, started_at: "2026-11-01T14:00:00.000Z", seconds: 36000, author_id: app-tempo, updated_at: "2026-11-01T20:00:00.000Z"}
+    links:
+      - {issue_key: AIL-2, kind: issue_link, target: AIL-1, title: is blocked by}
+
+  - about: "Resolved exactly at the window start; straight from To Do to Done. 1 point, 4 h, no worklog rows"
+    issue: {issue_key: AIL-3, issue_id: "91003", project_key: AIL, issue_type: Bug, status: Done,
+            status_category: done, created_at: "2026-08-03T05:00:00.000Z",
+            resolved_at: "2026-08-04T05:00:00.000Z", original_estimate_s: null, time_spent_s: 14400,
+            aggregate_time_spent_s: 14400, story_points: 1.0}
+    status_changes:
+      - {issue_key: AIL-3, changelog_id: "1031", changed_at: "2026-08-04T05:00:00.000Z", author_id: acc-dev-1, from_status: To Do, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-3, changelog_id: "1030", field: story_points, changed_at: "2026-08-03T06:00:00.000Z", from_value: null, to_value: "1"}
+
+  - about: "Created directly in Done; no estimate (an original estimate of 0 is none), no time of its own, 2 h logged on subtasks"
+    issue: {issue_key: AIL-4, issue_id: "91004", project_key: AIL, issue_type: Task, status: Done,
+            status_category: done, created_at: "2026-09-10T15:00:00.000Z",
+            resolved_at: "2026-09-10T15:00:00.000Z", original_estimate_s: 0, time_spent_s: null,
+            aggregate_time_spent_s: 7200, story_points: null}
+
+  - about: "Reopened once; points set after the work started; 30 h logged by one developer"
+    issue: {issue_key: AIL-5, issue_id: "91005", project_key: AIL, issue_type: Task, status: Done,
+            status_category: done, assignee_id: acc-dev-1, created_at: "2026-10-01T12:00:00.000Z",
+            resolved_at: "2026-10-04T01:00:00.000Z", original_estimate_s: null, time_spent_s: 108000,
+            aggregate_time_spent_s: 108000, story_points: 3.0}
+    status_changes:
+      - {issue_key: AIL-5, changelog_id: "1051", changed_at: "2026-10-01T13:00:00.000Z", author_id: acc-dev-1, from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-5, changelog_id: "1053", changed_at: "2026-10-02T13:00:00.000Z", author_id: acc-dev-1, from_status: In Progress, to_status: Done}
+      - {issue_key: AIL-5, changelog_id: "1054", changed_at: "2026-10-03T13:00:00.000Z", author_id: acc-dev-2, from_status: Done, to_status: In Progress}
+      - {issue_key: AIL-5, changelog_id: "1055", changed_at: "2026-10-04T01:00:00.000Z", author_id: acc-dev-1, from_status: In Progress, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-5, changelog_id: "1052", field: story_points, changed_at: "2026-10-01T18:00:00.000Z", from_value: null, to_value: "3"}
+    worklogs:
+      - {worklog_id: "71051", issue_key: AIL-5, started_at: "2026-10-01T14:00:00.000Z", seconds: 54000, author_id: acc-dev-1, updated_at: "2026-10-02T20:00:00.000Z"}
+      - {worklog_id: "71052", issue_key: AIL-5, started_at: "2026-10-03T14:00:00.000Z", seconds: 54000, author_id: acc-dev-1, updated_at: "2026-10-03T20:00:00.000Z"}
+    links:
+      - {issue_key: AIL-5, kind: issue_link, target: AIL-9, title: relates to}
+      # Two links to AIL-6 share one row (oversight.jira.mapping joins the titles).
+      - {issue_key: AIL-5, kind: issue_link, target: AIL-6, title: blocks; relates to}
+      - {issue_key: AIL-5, kind: remote_link, target: "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=1", title: Page}
+
+  - about: "Original estimate only (points 0 is no estimate); no time spent recorded, yet one worklog row"
+    issue: {issue_key: AIL-6, issue_id: "91006", project_key: AIL, issue_type: Task, status: Done,
+            status_category: done, created_at: "2026-09-01T10:00:00.000Z",
+            resolved_at: "2026-09-03T11:00:00.000Z", original_estimate_s: 7200, time_spent_s: null,
+            aggregate_time_spent_s: null, story_points: 0.0}
+    status_changes:
+      - {issue_key: AIL-6, changelog_id: "1061", changed_at: "2026-09-01T11:00:00.000Z", author_id: acc-dev-2, from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-6, changelog_id: "1062", changed_at: "2026-09-03T11:00:00.000Z", author_id: acc-dev-2, from_status: In Progress, to_status: Done}
+    worklogs:
+      - {worklog_id: "71061", issue_key: AIL-6, started_at: "2026-09-02T14:00:00.000Z", seconds: 1800, author_id: acc-dev-2, updated_at: "2026-09-02T20:00:00.000Z"}
+    links:
+      - {issue_key: AIL-6, kind: remote_link, target: "https://user:hunter2@GitHub.com:8443/example/repo/pull/2?token=abc", title: "PR #2"}
+
+  - about: "Through In Review (unmapped), so never started by James's stages. 0.5 points, 3 h, no worklog rows"
+    issue: {issue_key: AIL-7, issue_id: "91007", project_key: AIL, issue_type: Subtask, status: Done,
+            status_category: done, created_at: "2026-10-20T08:00:00.000Z",
+            resolved_at: "2026-10-21T10:00:00.000Z", original_estimate_s: null, time_spent_s: 10800,
+            aggregate_time_spent_s: 10800, story_points: 0.5}
+    status_changes:
+      - {issue_key: AIL-7, changelog_id: "1072", changed_at: "2026-10-20T10:00:00.000Z", author_id: acc-dev-2, from_status: To Do, to_status: In Review}
+      - {issue_key: AIL-7, changelog_id: "1073", changed_at: "2026-10-21T10:00:00.000Z", author_id: acc-dev-2, from_status: In Review, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-7, changelog_id: "1071", field: story_points, changed_at: "2026-10-20T09:00:00.000Z", from_value: null, to_value: "0.5"}
+    links:
+      - {issue_key: AIL-7, kind: remote_link, target: "not a url", title: notes}
+
+  - about: "Still in progress: not resolved, but its To Do interval ended in the window"
+    issue: {issue_key: AIL-8, issue_id: "91008", project_key: AIL, issue_type: Task, status: In Progress,
+            status_category: indeterminate, assignee_id: acc-dev-2, created_at: "2026-10-25T09:00:00.000Z",
+            resolved_at: null, original_estimate_s: null, time_spent_s: 7200,
+            aggregate_time_spent_s: 7200, story_points: 2.0}
+    status_changes:
+      - {issue_key: AIL-8, changelog_id: "1081", changed_at: "2026-10-25T11:00:00.000Z", author_id: acc-dev-2, from_status: To Do, to_status: In Progress}
+    worklogs:
+      - {worklog_id: "71081", issue_key: AIL-8, started_at: "2026-10-26T14:00:00.000Z", seconds: 7200, author_id: app-tempo, updated_at: "2026-10-26T20:00:00.000Z"}
+
+  - about: "Created exactly at the window end, so not created before it"
+    issue: {issue_key: AIL-9, issue_id: "91009", project_key: AIL, issue_type: Task, status: To Do,
+            status_category: new, created_at: "2026-11-02T06:00:00.000Z", resolved_at: null,
+            original_estimate_s: null, time_spent_s: null, aggregate_time_spent_s: null, story_points: null}
+
+  - about: "Straight from To Do to Done 1 ms before the window start, so outside it"
+    issue: {issue_key: AIL-10, issue_id: "91010", project_key: AIL, issue_type: Epic, status: Done,
+            status_category: done, created_at: "2026-07-01T10:00:00.000Z",
+            resolved_at: "2026-08-04T04:59:59.999Z", original_estimate_s: null, time_spent_s: null,
+            aggregate_time_spent_s: null, story_points: null}
+    status_changes:
+      - {issue_key: AIL-10, changelog_id: "1101", changed_at: "2026-08-04T04:59:59.999Z", author_id: acc-dev-1, from_status: To Do, to_status: Done}
+
+  - about: "Straight to Done in the window, but Jira set no resolution date"
+    issue: {issue_key: AIL-11, issue_id: "91011", project_key: AIL, issue_type: Task, status: Done,
+            status_category: done, created_at: "2026-10-10T10:00:00.000Z", resolved_at: null,
+            original_estimate_s: null, time_spent_s: null, aggregate_time_spent_s: null, story_points: null}
+    status_changes:
+      - {issue_key: AIL-11, changelog_id: "1111", changed_at: "2026-10-10T12:00:00.000Z", author_id: acc-dev-1, from_status: To Do, to_status: Done}
+
+  # Another project, resolved in the window: none of its rows may reach the AIL report.
+  - about: "OPS issue: another project's rows"
+    issue: {issue_key: OPS-1, issue_id: "99001", project_key: OPS, issue_type: Task, status: Done,
+            status_category: done, created_at: "2026-10-01T00:00:00.000Z",
+            resolved_at: "2026-10-02T00:00:00.000Z", original_estimate_s: 3600, time_spent_s: 3600,
+            aggregate_time_spent_s: 3600, story_points: 8.0}
+    status_changes:
+      - {issue_key: OPS-1, changelog_id: "9001", changed_at: "2026-10-02T00:00:00.000Z", author_id: acc-dev-1, from_status: To Do, to_status: Done}
+    worklogs:
+      - {worklog_id: "79001", issue_key: OPS-1, started_at: "2026-10-01T14:00:00.000Z", seconds: 3600, author_id: acc-dev-2, updated_at: "2026-10-01T20:00:00.000Z"}
+    links:
+      - {issue_key: OPS-1, kind: issue_link, target: AIL-1, title: duplicates}
+      - {issue_key: OPS-1, kind: remote_link, target: "https://ops.example.com/runbook", title: Runbook}

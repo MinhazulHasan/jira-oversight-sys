@@ -1,0 +1,46 @@
+# Hand-built issues for OPS, a made-up project whose estimates are in hours
+# (original_estimate) and whose workflow maps five of James's stages. The tests
+# add OPS to the AIL ProcessConfig (OPS_PROJECT in tests/fixtures/derive/__init__.py):
+#   Open -> backlog, In Development -> development, Code Review -> code_review,
+#   Testing -> testing, Closed -> done
+# so OPS's ordered stages are: backlog 0, development 1, code_review 2, testing 3, done 4.
+#
+# There are no `statuses` rows for OPS on purpose: every category comes from
+# run.py's fallbacks (a done-stage status is "done").
+#
+# The expected intervals and metrics, worked out by hand, are in
+# tests/labels/metrics.yaml.
+
+cases:
+  - about: "Skips code review; 10 h original estimate set before the start; 12.5 h logged"
+    issue: {issue_key: OPS-1, issue_id: "80001", project_key: OPS, issue_type: Task,
+            status: Closed, status_category: done, created_at: "2026-10-05T09:00:00.000Z",
+            story_points: null, original_estimate_s: 36000, time_spent_s: 45000}
+    status_changes:
+      - {issue_key: OPS-1, changelog_id: "2011", changed_at: "2026-10-05T10:00:00.000Z", from_status: Open, to_status: In Development}
+      - {issue_key: OPS-1, changelog_id: "2012", changed_at: "2026-10-06T10:00:00.000Z", from_status: In Development, to_status: Testing}
+      - {issue_key: OPS-1, changelog_id: "2013", changed_at: "2026-10-06T16:00:00.000Z", from_status: Testing, to_status: Closed}
+    field_changes:
+      - {issue_key: OPS-1, changelog_id: "2010", field: original_estimate, changed_at: "2026-10-05T09:30:00.000Z", from_value: null, to_value: "36000"}
+
+  - about: "Open straight to Closed; an original estimate of 0, and story points that an hours basis ignores"
+    issue: {issue_key: OPS-2, issue_id: "80002", project_key: OPS, issue_type: Task,
+            status: Closed, status_category: done, created_at: "2026-10-07T09:00:00.000Z",
+            story_points: 3.0, original_estimate_s: 0, time_spent_s: 7200}
+    status_changes:
+      - {issue_key: OPS-2, changelog_id: "2021", changed_at: "2026-10-07T12:00:00.000Z", from_status: Open, to_status: Closed}
+    field_changes:
+      - {issue_key: OPS-2, changelog_id: "2020", field: original_estimate, changed_at: "2026-10-07T09:05:00.000Z", from_value: null, to_value: "0"}
+
+  - about: "Closed without testing, reopened, then taken through every stage; 8 h estimate from creation"
+    issue: {issue_key: OPS-3, issue_id: "80003", project_key: OPS, issue_type: Bug,
+            status: Closed, status_category: done, created_at: "2026-10-08T09:00:00.000Z",
+            story_points: null, original_estimate_s: 28800, time_spent_s: 21600}
+    status_changes:
+      - {issue_key: OPS-3, changelog_id: "2031", changed_at: "2026-10-08T10:00:00.000Z", from_status: Open, to_status: In Development}
+      - {issue_key: OPS-3, changelog_id: "2032", changed_at: "2026-10-08T14:00:00.000Z", from_status: In Development, to_status: Code Review}
+      - {issue_key: OPS-3, changelog_id: "2033", changed_at: "2026-10-08T16:00:00.000Z", from_status: Code Review, to_status: Closed}
+      - {issue_key: OPS-3, changelog_id: "2034", changed_at: "2026-10-09T09:00:00.000Z", from_status: Closed, to_status: In Development}
+      - {issue_key: OPS-3, changelog_id: "2035", changed_at: "2026-10-09T12:00:00.000Z", from_status: In Development, to_status: Code Review}
+      - {issue_key: OPS-3, changelog_id: "2036", changed_at: "2026-10-09T13:00:00.000Z", from_status: Code Review, to_status: Testing}
+      - {issue_key: OPS-3, changelog_id: "2037", changed_at: "2026-10-09T15:00:00.000Z", from_status: Testing, to_status: Closed}

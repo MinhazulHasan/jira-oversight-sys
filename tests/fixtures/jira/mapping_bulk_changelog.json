@@ -1,0 +1,68 @@
+{
+  "_note": "POST /rest/api/3/changelog/bulkfetch in its documented shape (SHAPES.md), built by hand from changelog_sample.json; not observed on the site. It carries AIL-1140's (issue id 52507) histories for the tracked fields: created as epoch milliseconds, items limited to the requested field ids, the issue split over two entries as it can be across pages, and the histories out of order. Issue 52510 is another issue's entry, keyed by id like every entry.",
+  "issueChangeLogs": [
+    {
+      "issueId": "52507",
+      "changeHistories": [
+        {
+          "id": "335082",
+          "author": {"accountId": "acc-dev-1"},
+          "created": 1793768078662,
+          "items": [
+            {"field": "status", "fieldtype": "jira", "fieldId": "status", "from": "10085", "fromString": "In Progress", "to": "10086", "toString": "Done"}
+          ]
+        },
+        {
+          "id": "334353",
+          "author": {"accountId": "acc-dev-1"},
+          "created": 1793682616892,
+          "items": [
+            {"field": "Sprint", "fieldtype": "custom", "fieldId": "customfield_10020", "from": "", "fromString": "", "to": "4427", "toString": "Sample Sprint 10"}
+          ]
+        },
+        {
+          "id": "334342",
+          "author": {"accountId": "acc-dev-1"},
+          "created": 1793682501960,
+          "items": [
+            {"field": "assignee", "fieldtype": "jira", "fieldId": "assignee", "from": null, "fromString": null, "to": "acc-dev-1", "toString": "Developer One", "tmpFromAccountId": null, "tmpToAccountId": "acc-dev-1"}
+          ]
+        }
+      ]
+    },
+    {
+      "issueId": "52510",
+      "changeHistories": [
+        {
+          "id": "334400",
+          "author": {"accountId": "acc-dev-1"},
+          "created": 1793683000000,
+          "items": [
+            {"field": "status", "fieldtype": "jira", "fieldId": "status", "from": "10084", "fromString": "To Do", "to": "10086", "toString": "Done"}
+          ]
+        }
+      ]
+    },
+    {
+      "issueId": "52507",
+      "changeHistories": [
+        {
+          "id": "334350",
+          "author": {"accountId": "acc-dev-1"},
+          "created": 1793682596971,
+          "items": [
+            {"field": "status", "fieldtype": "jira", "fieldId": "status", "from": "10084", "fromString": "To Do", "to": "10085", "toString": "In Progress"}
+          ]
+        },
+        {
+          "id": "334349",
+          "author": {"accountId": "acc-dev-1"},
+          "created": 1793682594208,
+          "items": [
+            {"field": "Story point estimate", "fieldtype": "custom", "fieldId": "customfield_10016", "from": null, "fromString": null, "to": null, "toString": "0.5"}
+          ]
+        }
+      ]
+    }
+  ]
+}

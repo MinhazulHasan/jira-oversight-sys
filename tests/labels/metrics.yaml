@@ -1,0 +1,450 @@
+# Expected status intervals and issue metrics for the hand-built fixtures in
+# tests/fixtures/derive/ (tickets 5 and 6). Every value was worked out by hand
+# from the fixture rows, with the arithmetic in the comments. Never regenerate
+# this file by running the code: a label that disagrees with the code is a
+# finding to explain, not a number to overwrite.
+#
+# Conventions
+# - Calendar hours (Planning.md Phase 2 step 5). Times are UTC; "10-03 16:00"
+#   means 2026-10-03T16:00:00.000Z.
+# - status_age_h runs from the last interval's entered_at to `now`. From day D
+#   of October to 4 November is (35 - D) days, because October has 31 days:
+#   (31 - D) days to 31 Oct, plus 4.
+# - effort_ratio = (time_spent_s / 3600) / estimate hours, where estimate hours
+#   = story_points x 8 for AIL (points basis) and original_estimate_s / 3600
+#   for OPS (hours basis).
+# - started_at is the first entry into a work stage (development up to, not
+#   including, done). done_at is the start of the trailing run of done
+#   intervals, when the last interval is done.
+# - `warnings` (TimelineWarnings) is zero for both counters unless a case says
+#   otherwise. Every metric row also has computed_at == now.
+
+now: "2026-11-04T12:00:00.000Z"
+
+# What run_derive reports over all 21 cases (AIL and OPS).
+run:
+  issues: {AIL: 18, OPS: 3}
+  # AIL: 3+1+2+5+3+3+3+3+3+2+3+4+3+3+4+1+5+3 = 54 (101..117, then 1140);
+  # OPS: 4+2+8 = 14; 54 + 14 = 68.
+  intervals: 68
+  warnings:
+    inconsistent_transitions: 1   # AIL-112, change 1122
+    negative_intervals: 1         # AIL-113, change 1131
+    unmapped_statuses: 2          # AIL: In Review (AIL-111) and Closed (AIL-115); OPS maps all of its own
+    current_status_mismatch: 0    # every history ends in its issue's current status
+    missing_created_at: 0
+
+issues:
+  AIL-101:
+    intervals:
+      # created 10-01 09:00 -> change 1011 at 10-01 10:00 = 1 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-01T09:00:00.000Z", left_at: "2026-10-01T10:00:00.000Z", hours: 1.0}
+      # 10-01 10:00 -> change 1012 at 10-03 16:00 = 2 days (48 h) + 6 h = 54 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-01T10:00:00.000Z", left_at: "2026-10-03T16:00:00.000Z", hours: 54.0}
+      - {status: Done, stage: done, entered_at: "2026-10-03T16:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-01T10:00:00.000Z"        # entry into In Progress (development)
+      done_at: "2026-10-03T16:00:00.000Z"           # entry into the final Done
+      cycle_time_h: 54.0                            # 10-01 10:00 -> 10-03 16:00, as above
+      reopen_count: 0
+      skipped_stages: []                            # backlog -> development -> done, one step at a time
+      estimate_basis: points
+      estimate_set_at: "2026-10-01T09:30:00.000Z"   # change 1010: null -> "2" (from had no estimate)
+      effort_ratio: 1.25                            # 72000 s / 3600 = 20 h; 2 x 8 = 16 h; 20 / 16
+      status_age_h: 764.0                           # 10-03 16:00 -> 11-04 12:00: (35 - 3) x 24 = 768, - 4 h
+
+  AIL-102:
+    intervals:
+      # no changes: one open interval in the current status, from created_at
+      - {status: Done, stage: done, entered_at: "2026-10-05T08:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: null                              # never in a work stage
+      done_at: "2026-10-05T08:00:00.000Z"           # the only interval is Done, entered at created_at
+      cycle_time_h: null                            # no started_at
+      reopen_count: 0
+      skipped_stages: []                            # no changes, so nothing was skipped
+      estimate_basis: points
+      estimate_set_at: "2026-10-05T08:00:00.000Z"   # 1 point now, no history: set at creation
+      effort_ratio: 0.5                             # 14400 s = 4 h; 1 x 8 = 8 h; 4 / 8
+      status_age_h: 724.0                           # 10-05 08:00 -> 11-04 12:00: (35 - 5) x 24 = 720, + 4 h
+
+  AIL-103:
+    intervals:
+      # 09:00 -> change 1031 at 15:30 = 6.5 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-06T09:00:00.000Z", left_at: "2026-10-06T15:30:00.000Z", hours: 6.5}
+      - {status: Done, stage: done, entered_at: "2026-10-06T15:30:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: null                              # went straight from backlog to done
+      done_at: "2026-10-06T15:30:00.000Z"
+      cycle_time_h: null
+      reopen_count: 0
+      # AIL order: backlog 0, development 1, done 2. 1031 goes 0 -> 2; 2 - 0 > 1 skips order[1:2]
+      skipped_stages:
+        - {changelog_id: "1031", from: To Do, to: Done, skipped: [development]}
+      estimate_basis: points
+      estimate_set_at: "2026-10-06T09:00:00.000Z"   # 0.5 points, no history: created_at
+      effort_ratio: 0.375                           # 5400 s = 1.5 h; 0.5 x 8 = 4 h; 1.5 / 4
+      status_age_h: 692.5                           # 10-06 15:30 -> 11-04 12:00: (35 - 6) x 24 = 696, - 3.5 h
+
+  AIL-104:
+    intervals:
+      # 09:00 -> 1041 at 10:00 = 1 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-07T09:00:00.000Z", left_at: "2026-10-07T10:00:00.000Z", hours: 1.0}
+      # 10-07 10:00 -> 1042 at 10-08 10:00 = 24 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-07T10:00:00.000Z", left_at: "2026-10-08T10:00:00.000Z", hours: 24.0}
+      # 10-08 10:00 -> 1043 at 10-09 09:00 = 24 h - 1 h = 23 h
+      - {status: Done, stage: done, entered_at: "2026-10-08T10:00:00.000Z", left_at: "2026-10-09T09:00:00.000Z", hours: 23.0}
+      # 10-09 09:00 -> 1044 at 10-09 17:00 = 8 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-09T09:00:00.000Z", left_at: "2026-10-09T17:00:00.000Z", hours: 8.0}
+      - {status: Done, stage: done, entered_at: "2026-10-09T17:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-07T10:00:00.000Z"        # first entry into development
+      done_at: "2026-10-09T17:00:00.000Z"           # the trailing run is only the last Done; In Progress breaks it
+      cycle_time_h: 55.0                            # 10-07 10:00 -> 10-09 17:00 = 2 days (48 h) + 7 h
+      reopen_count: 1                               # 1043: Done (done) -> In Progress (indeterminate)
+      skipped_stages: []                            # 1043 moves backwards; the rest are single steps
+      estimate_basis: points
+      estimate_set_at: "2026-10-07T09:05:00.000Z"   # change 1040: null -> "3"
+      effort_ratio: 1.0                             # 86400 s = 24 h; 3 x 8 = 24 h; 24 / 24
+      status_age_h: 619.0                           # 10-09 17:00 -> 11-04 12:00: (35 - 9) x 24 = 624, - 5 h
+
+  AIL-105:
+    intervals:
+      # 09:00 -> 1051 at 13:00 = 4 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-12T09:00:00.000Z", left_at: "2026-10-12T13:00:00.000Z", hours: 4.0}
+      # 10-12 13:00 -> 1052 at 10-13 13:00 = 24 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-12T13:00:00.000Z", left_at: "2026-10-13T13:00:00.000Z", hours: 24.0}
+      - {status: Done, stage: done, entered_at: "2026-10-13T13:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-12T13:00:00.000Z"
+      done_at: "2026-10-13T13:00:00.000Z"
+      cycle_time_h: 24.0                            # 10-12 13:00 -> 10-13 13:00
+      reopen_count: 0
+      skipped_stages: []
+      estimate_basis: points
+      estimate_set_at: "2026-10-12T09:00:00.000Z"   # 5 points now and no field history: created_at
+      effort_ratio: 0.25                            # 36000 s = 10 h; 5 x 8 = 40 h; 10 / 40
+      status_age_h: 527.0                           # 10-13 13:00 -> 11-04 12:00: (35 - 13) x 24 = 528, - 1 h
+
+  AIL-106:
+    intervals:
+      # 09:00 -> 1061 at 10:00 = 1 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-14T09:00:00.000Z", left_at: "2026-10-14T10:00:00.000Z", hours: 1.0}
+      # 10-14 10:00 -> 1063 at 10-15 18:00 = 24 h + 8 h = 32 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-14T10:00:00.000Z", left_at: "2026-10-15T18:00:00.000Z", hours: 32.0}
+      - {status: Done, stage: done, entered_at: "2026-10-15T18:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-14T10:00:00.000Z"
+      done_at: "2026-10-15T18:00:00.000Z"
+      cycle_time_h: 32.0                            # as the In Progress interval
+      reopen_count: 0
+      skipped_stages: []
+      estimate_basis: points
+      estimate_set_at: "2026-10-15T09:00:00.000Z"   # change 1062: null -> "2", 23 h after started_at
+      effort_ratio: 1.0                             # 57600 s = 16 h; 2 x 8 = 16 h; 16 / 16
+      status_age_h: 474.0                           # 10-15 18:00 -> 11-04 12:00: (35 - 15) x 24 = 480, - 6 h
+
+  AIL-107:
+    intervals:
+      # 09:00 -> 1071 at 10:00 = 1 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-16T09:00:00.000Z", left_at: "2026-10-16T10:00:00.000Z", hours: 1.0}
+      # 10-16 10:00 -> 1073 at 10-17 15:00 = 24 h + 5 h = 29 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-16T10:00:00.000Z", left_at: "2026-10-17T15:00:00.000Z", hours: 29.0}
+      - {status: Done, stage: done, entered_at: "2026-10-17T15:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-16T10:00:00.000Z"
+      done_at: "2026-10-17T15:00:00.000Z"
+      cycle_time_h: 29.0
+      reopen_count: 0
+      skipped_stages: []
+      estimate_basis: points
+      # change 1072 goes "3" -> "5": the estimate (3) existed before any recorded change, so created_at
+      estimate_set_at: "2026-10-16T09:00:00.000Z"
+      effort_ratio: 0.5                             # 72000 s = 20 h; 5 x 8 = 40 h; 20 / 40
+      status_age_h: 429.0                           # 10-17 15:00 -> 11-04 12:00: (35 - 17) x 24 = 432, - 3 h
+
+  AIL-108:
+    intervals:
+      # 09:00 -> 1082 at 11:00 = 2 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-19T09:00:00.000Z", left_at: "2026-10-19T11:00:00.000Z", hours: 2.0}
+      # 10-19 11:00 -> 1084 at 10-20 11:00 = 24 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-19T11:00:00.000Z", left_at: "2026-10-20T11:00:00.000Z", hours: 24.0}
+      - {status: Done, stage: done, entered_at: "2026-10-20T11:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-19T11:00:00.000Z"
+      done_at: "2026-10-20T11:00:00.000Z"
+      cycle_time_h: 24.0
+      reopen_count: 0
+      skipped_stages: []
+      estimate_basis: points
+      # 1081 sets "0" (no estimate, so skipped); 1083 goes "0" -> "1", and "0" was no estimate,
+      # so the estimate was first set at 1083's changed_at
+      estimate_set_at: "2026-10-19T12:00:00.000Z"
+      effort_ratio: 0.75                            # 21600 s = 6 h; 1 x 8 = 8 h; 6 / 8
+      status_age_h: 361.0                           # 10-20 11:00 -> 11-04 12:00: (35 - 20) x 24 = 360, + 1 h
+
+  AIL-109:
+    intervals:
+      # 09:00 -> 1091 at 09:30 = 0.5 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-21T09:00:00.000Z", left_at: "2026-10-21T09:30:00.000Z", hours: 0.5}
+      # 09:30 -> 1092 at 17:30 = 8 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-21T09:30:00.000Z", left_at: "2026-10-21T17:30:00.000Z", hours: 8.0}
+      - {status: Done, stage: done, entered_at: "2026-10-21T17:30:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-21T09:30:00.000Z"
+      done_at: "2026-10-21T17:30:00.000Z"
+      cycle_time_h: 8.0
+      reopen_count: 0
+      skipped_stages: []
+      estimate_basis: none                          # story_points null
+      estimate_set_at: null                         # no estimate now and none in the history
+      effort_ratio: null                            # 8 h logged, but nothing to compare it with
+      status_age_h: 330.5                           # 10-21 17:30 -> 11-04 12:00: (35 - 21) x 24 = 336, - 5.5 h
+
+  AIL-110:
+    intervals:
+      # 11-02 09:00 -> 1101 at 11-03 08:00 = 24 h - 1 h = 23 h
+      - {status: To Do, stage: backlog, entered_at: "2026-11-02T09:00:00.000Z", left_at: "2026-11-03T08:00:00.000Z", hours: 23.0}
+      - {status: In Progress, stage: development, entered_at: "2026-11-03T08:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-11-03T08:00:00.000Z"
+      done_at: null                                 # the last interval is In Progress
+      cycle_time_h: null
+      reopen_count: 0
+      skipped_stages: []
+      estimate_basis: points
+      estimate_set_at: "2026-11-02T09:00:00.000Z"   # 3 points, no history: created_at
+      effort_ratio: 0.5                             # 43200 s = 12 h; 3 x 8 = 24 h; 12 / 24
+      status_age_h: 28.0                            # 11-03 08:00 -> 11-04 12:00 = 24 h + 4 h
+
+  AIL-111:
+    intervals:
+      # 09:00 -> 1111 at 10:00 = 1 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-22T09:00:00.000Z", left_at: "2026-10-22T10:00:00.000Z", hours: 1.0}
+      # In Review is unmapped: no stage. 10-22 10:00 -> 1112 at 10-23 10:00 = 24 h
+      - {status: In Review, stage: null, entered_at: "2026-10-22T10:00:00.000Z", left_at: "2026-10-23T10:00:00.000Z", hours: 24.0}
+      - {status: Done, stage: done, entered_at: "2026-10-23T10:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: null                              # In Review has no stage, so no work stage was ever entered
+      done_at: "2026-10-23T10:00:00.000Z"
+      cycle_time_h: null
+      reopen_count: 0
+      skipped_stages: []                            # 1111 and 1112 each have an unmapped side: neither is a skip
+      estimate_basis: points
+      estimate_set_at: "2026-10-22T09:00:00.000Z"   # 2 points, no history: created_at
+      effort_ratio: 1.5                             # 86400 s = 24 h; 2 x 8 = 16 h; 24 / 16
+      status_age_h: 290.0                           # 10-23 10:00 -> 11-04 12:00: (35 - 23) x 24 = 288, + 2 h
+
+  AIL-112:
+    warnings: {inconsistent_transitions: 1, negative_intervals: 0}   # 1122 leaves "To Do" while the issue is In Progress
+    intervals:
+      # 09:00 -> 1121 at 10:00 = 1 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-26T09:00:00.000Z", left_at: "2026-10-26T10:00:00.000Z", hours: 1.0}
+      # 10-26 10:00 -> 1122 at 10-27 10:00 = 24 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-26T10:00:00.000Z", left_at: "2026-10-27T10:00:00.000Z", hours: 24.0}
+      # 1122 opens In Progress again (its to_status): 10:00 -> 1123 at 16:00 = 6 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-27T10:00:00.000Z", left_at: "2026-10-27T16:00:00.000Z", hours: 6.0}
+      - {status: Done, stage: done, entered_at: "2026-10-27T16:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-26T10:00:00.000Z"
+      done_at: "2026-10-27T16:00:00.000Z"
+      cycle_time_h: 30.0                            # 10-26 10:00 -> 10-27 16:00 = 24 h + 6 h
+      reopen_count: 0
+      skipped_stages: []                            # 1122 as recorded is To Do -> In Progress: one step
+      estimate_basis: points
+      estimate_set_at: "2026-10-26T09:30:00.000Z"   # change 1120: null -> "1"
+      effort_ratio: 1.25                            # 36000 s = 10 h; 1 x 8 = 8 h; 10 / 8
+      status_age_h: 188.0                           # 10-27 16:00 -> 11-04 12:00: (35 - 27) x 24 = 192, - 4 h
+
+  AIL-113:
+    warnings: {inconsistent_transitions: 0, negative_intervals: 1}
+    intervals:
+      # created 12:00, but 1131 is dated 11:00: 11:00 - 12:00 = -1 h, clamped to 0.
+      # The timestamps stay as recorded.
+      - {status: To Do, stage: backlog, entered_at: "2026-10-28T12:00:00.000Z", left_at: "2026-10-28T11:00:00.000Z", hours: 0.0}
+      # 11:00 -> 1132 at 17:00 = 6 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-28T11:00:00.000Z", left_at: "2026-10-28T17:00:00.000Z", hours: 6.0}
+      - {status: Done, stage: done, entered_at: "2026-10-28T17:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-28T11:00:00.000Z"        # as recorded: an hour before created_at
+      done_at: "2026-10-28T17:00:00.000Z"
+      cycle_time_h: 6.0                             # 11:00 -> 17:00
+      reopen_count: 0
+      skipped_stages: []
+      estimate_basis: none
+      estimate_set_at: null
+      effort_ratio: null                            # 5 h logged, no estimate
+      status_age_h: 163.0                           # 10-28 17:00 -> 11-04 12:00: (35 - 28) x 24 = 168, - 5 h
+
+  AIL-114:
+    # Sorted by id as numbers, 9 (To Do -> In Progress) comes before 10 (In Progress -> Done),
+    # so every from_status matches: no warnings. As text, "10" < "9" would put Done first.
+    intervals:
+      # 09:00 -> 9 at 14:00 = 5 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-29T09:00:00.000Z", left_at: "2026-10-29T14:00:00.000Z", hours: 5.0}
+      # 9 at 14:00 -> 10 at 14:00 = 0 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-29T14:00:00.000Z", left_at: "2026-10-29T14:00:00.000Z", hours: 0.0}
+      - {status: Done, stage: done, entered_at: "2026-10-29T14:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-29T14:00:00.000Z"
+      done_at: "2026-10-29T14:00:00.000Z"
+      cycle_time_h: 0.0                             # started and done in the same millisecond
+      reopen_count: 0
+      skipped_stages: []                            # two single steps, not one jump from To Do to Done
+      estimate_basis: points
+      estimate_set_at: "2026-10-29T09:00:00.000Z"   # 1 point, no history: created_at
+      effort_ratio: 0.125                           # 3600 s = 1 h; 1 x 8 = 8 h; 1 / 8
+      status_age_h: 142.0                           # 10-29 14:00 -> 11-04 12:00: (35 - 29) x 24 = 144, - 2 h
+
+  AIL-115:
+    intervals:
+      # 09:00 -> 1151 at 10:00 = 1 h
+      - {status: To Do, stage: backlog, entered_at: "2026-10-30T09:00:00.000Z", left_at: "2026-10-30T10:00:00.000Z", hours: 1.0}
+      # 10:00 -> 1152 at 18:00 = 8 h
+      - {status: In Progress, stage: development, entered_at: "2026-10-30T10:00:00.000Z", left_at: "2026-10-30T18:00:00.000Z", hours: 8.0}
+      # 10-30 18:00 -> 1153 at 10-31 09:00 = 6 h to midnight + 9 h = 15 h
+      - {status: Done, stage: done, entered_at: "2026-10-30T18:00:00.000Z", left_at: "2026-10-31T09:00:00.000Z", hours: 15.0}
+      - {status: Closed, stage: null, entered_at: "2026-10-31T09:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-30T10:00:00.000Z"
+      # Closed has no stage and no `statuses` row, but it is the current status, whose
+      # category is done; Done before it is done too, so the trailing run starts at Done.
+      done_at: "2026-10-30T18:00:00.000Z"
+      cycle_time_h: 8.0                             # 10:00 -> 18:00
+      reopen_count: 0                               # 1153: Done (done) -> Closed (done, via the current status)
+      skipped_stages: []                            # 1153's to side is unmapped
+      estimate_basis: points
+      estimate_set_at: "2026-10-30T09:15:00.000Z"   # change 1150: null -> "2"
+      effort_ratio: 0.5                             # 28800 s = 8 h; 2 x 8 = 16 h; 8 / 16
+      status_age_h: 99.0                            # 10-31 09:00 -> 11-04 12:00: (35 - 31) x 24 = 96, + 3 h
+
+  AIL-116:
+    intervals:
+      - {status: To Do, stage: backlog, entered_at: "2026-11-04T06:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: null
+      done_at: null
+      cycle_time_h: null
+      reopen_count: 0
+      skipped_stages: []
+      estimate_basis: points
+      estimate_set_at: "2026-11-04T06:00:00.000Z"   # 3 points, no history: created_at
+      effort_ratio: 0.0                             # no time logged counts as 0 h; 0 / (3 x 8)
+      status_age_h: 6.0                             # 06:00 -> 12:00
+
+  AIL-117:
+    intervals:
+      # 09:00 -> 1171 at 10:00 = 1 h
+      - {status: To Do, stage: backlog, entered_at: "2026-11-01T09:00:00.000Z", left_at: "2026-11-01T10:00:00.000Z", hours: 1.0}
+      # 11-01 10:00 -> 1172 at 11-02 10:00 = 24 h
+      - {status: In Progress, stage: development, entered_at: "2026-11-01T10:00:00.000Z", left_at: "2026-11-02T10:00:00.000Z", hours: 24.0}
+      # 11-02 10:00 -> 1173 at 11-03 08:00 = 24 h - 2 h = 22 h
+      - {status: Done, stage: done, entered_at: "2026-11-02T10:00:00.000Z", left_at: "2026-11-03T08:00:00.000Z", hours: 22.0}
+      # 08:00 -> 1174 at 10:00 = 2 h
+      - {status: To Do, stage: backlog, entered_at: "2026-11-03T08:00:00.000Z", left_at: "2026-11-03T10:00:00.000Z", hours: 2.0}
+      - {status: In Progress, stage: development, entered_at: "2026-11-03T10:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-11-01T10:00:00.000Z"
+      done_at: null                                 # the last interval is In Progress
+      cycle_time_h: null
+      reopen_count: 1                               # 1173: Done (done) -> To Do (new)
+      skipped_stages: []                            # 1173 moves backwards; 1174 is a single step
+      estimate_basis: none
+      estimate_set_at: null
+      effort_ratio: null
+      status_age_h: 26.0                            # 11-03 10:00 -> 11-04 12:00 = 24 h + 2 h
+
+  AIL-1140:
+    # The real sample. In Jira's -0600 form: created 11-02 23:08:12.832, 334350 at 23:09:56.971,
+    # 335082 at 11-03 22:54:38.662; plus 6 h gives the UTC times below.
+    intervals:
+      # 05:09:56.971 - 05:08:12.832 = 1 min 44.139 s = 104.139 s; 104.139 / 3600 = 0.0289275
+      - {status: To Do, stage: backlog, entered_at: "2026-11-03T05:08:12.832Z", left_at: "2026-11-03T05:09:56.971Z", hours: 0.0289275}
+      # 11-03 05:09:56.971 -> 11-04 04:54:38.662 = 24 h - 15 min 18.309 s (05:09:56.971 - 04:54:38.662)
+      # = 86400 - 918.309 = 85481.691 s; / 3600 = 23 + 2681.691 / 3600 = 23.744914166...
+      - {status: In Progress, stage: development, entered_at: "2026-11-03T05:09:56.971Z", left_at: "2026-11-04T04:54:38.662Z", hours: 23.744914166667}
+      - {status: Done, stage: done, entered_at: "2026-11-04T04:54:38.662Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-11-03T05:09:56.971Z"        # change 334350
+      done_at: "2026-11-04T04:54:38.662Z"           # change 335082
+      cycle_time_h: 23.744914166667                 # the In Progress interval above
+      reopen_count: 0
+      skipped_stages: []
+      estimate_basis: points
+      estimate_set_at: "2026-11-03T05:09:54.208Z"   # change 334349: null -> "0.5"; assignee and sprint rows ignored
+      effort_ratio: 1.0                             # 14400 s = 4 h; 0.5 x 8 = 4 h; 4 / 4
+      # 04:54:38.662 -> 12:00:00.000 = 7 h 5 min 21.338 s = 25200 + 300 + 21.338 = 25521.338 s;
+      # / 3600 = 7 + 321.338 / 3600 = 7.089260555...
+      status_age_h: 7.089260555556
+
+  OPS-1:
+    intervals:
+      # 09:00 -> 2011 at 10:00 = 1 h
+      - {status: Open, stage: backlog, entered_at: "2026-10-05T09:00:00.000Z", left_at: "2026-10-05T10:00:00.000Z", hours: 1.0}
+      # 10-05 10:00 -> 2012 at 10-06 10:00 = 24 h
+      - {status: In Development, stage: development, entered_at: "2026-10-05T10:00:00.000Z", left_at: "2026-10-06T10:00:00.000Z", hours: 24.0}
+      # 10:00 -> 2013 at 16:00 = 6 h
+      - {status: Testing, stage: testing, entered_at: "2026-10-06T10:00:00.000Z", left_at: "2026-10-06T16:00:00.000Z", hours: 6.0}
+      - {status: Closed, stage: done, entered_at: "2026-10-06T16:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-05T10:00:00.000Z"
+      done_at: "2026-10-06T16:00:00.000Z"
+      cycle_time_h: 30.0                            # 24 h + 6 h
+      reopen_count: 0
+      # 2012: development (1) -> testing (3); 3 - 1 > 1 skips order[2:3]
+      skipped_stages:
+        - {changelog_id: "2012", from: In Development, to: Testing, skipped: [code_review]}
+      estimate_basis: hours
+      estimate_set_at: "2026-10-05T09:30:00.000Z"   # change 2010: null -> "36000"
+      effort_ratio: 1.25                            # 45000 s = 12.5 h; 36000 s = 10 h; 12.5 / 10
+      status_age_h: 692.0                           # 10-06 16:00 -> 11-04 12:00: (35 - 6) x 24 = 696, - 4 h
+
+  OPS-2:
+    intervals:
+      # 09:00 -> 2021 at 12:00 = 3 h
+      - {status: Open, stage: backlog, entered_at: "2026-10-07T09:00:00.000Z", left_at: "2026-10-07T12:00:00.000Z", hours: 3.0}
+      - {status: Closed, stage: done, entered_at: "2026-10-07T12:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: null
+      done_at: "2026-10-07T12:00:00.000Z"
+      cycle_time_h: null
+      reopen_count: 0
+      # 2021: backlog (0) -> done (4); 4 - 0 > 1 skips order[1:4]
+      skipped_stages:
+        - {changelog_id: "2021", from: Open, to: Closed, skipped: [development, code_review, testing]}
+      estimate_basis: none                          # original_estimate_s is 0; story points don't count on an hours basis
+      estimate_set_at: null                         # 2020 sets "0", which is no estimate, and it is 0 now
+      effort_ratio: null                            # original_estimate_s is not > 0
+      status_age_h: 672.0                           # 10-07 12:00 -> 11-04 12:00: (35 - 7) x 24 = 672
+
+  OPS-3:
+    intervals:
+      # 09:00 -> 2031 at 10:00 = 1 h
+      - {status: Open, stage: backlog, entered_at: "2026-10-08T09:00:00.000Z", left_at: "2026-10-08T10:00:00.000Z", hours: 1.0}
+      # 10:00 -> 2032 at 14:00 = 4 h
+      - {status: In Development, stage: development, entered_at: "2026-10-08T10:00:00.000Z", left_at: "2026-10-08T14:00:00.000Z", hours: 4.0}
+      # 14:00 -> 2033 at 16:00 = 2 h
+      - {status: Code Review, stage: code_review, entered_at: "2026-10-08T14:00:00.000Z", left_at: "2026-10-08T16:00:00.000Z", hours: 2.0}
+      # 10-08 16:00 -> 2034 at 10-09 09:00 = 8 h to midnight + 9 h = 17 h
+      - {status: Closed, stage: done, entered_at: "2026-10-08T16:00:00.000Z", left_at: "2026-10-09T09:00:00.000Z", hours: 17.0}
+      # 09:00 -> 2035 at 12:00 = 3 h
+      - {status: In Development, stage: development, entered_at: "2026-10-09T09:00:00.000Z", left_at: "2026-10-09T12:00:00.000Z", hours: 3.0}
+      # 12:00 -> 2036 at 13:00 = 1 h
+      - {status: Code Review, stage: code_review, entered_at: "2026-10-09T12:00:00.000Z", left_at: "2026-10-09T13:00:00.000Z", hours: 1.0}
+      # 13:00 -> 2037 at 15:00 = 2 h
+      - {status: Testing, stage: testing, entered_at: "2026-10-09T13:00:00.000Z", left_at: "2026-10-09T15:00:00.000Z", hours: 2.0}
+      - {status: Closed, stage: done, entered_at: "2026-10-09T15:00:00.000Z", left_at: null, hours: null}
+    metrics:
+      started_at: "2026-10-08T10:00:00.000Z"        # first In Development
+      done_at: "2026-10-09T15:00:00.000Z"           # the last Closed; Testing before it is not done
+      cycle_time_h: 29.0                            # 10-08 10:00 -> 10-09 15:00 = 24 h + 5 h
+      # 2034: Closed -> In Development. With no `statuses` rows, Closed is "done" because it maps to
+      # the done stage; In Development has no category, which is not done.
+      reopen_count: 1
+      # 2033: code_review (2) -> done (4) skips order[3:4]; 2034 moves backwards; the rest are single steps
+      skipped_stages:
+        - {changelog_id: "2033", from: Code Review, to: Closed, skipped: [testing]}
+      estimate_basis: hours
+      estimate_set_at: "2026-10-08T09:00:00.000Z"   # 28800 s now, no history: created_at
+      effort_ratio: 0.75                            # 21600 s = 6 h; 28800 s = 8 h; 6 / 8
+      status_age_h: 621.0                           # 10-09 15:00 -> 11-04 12:00: (35 - 9) x 24 = 624, - 3 h

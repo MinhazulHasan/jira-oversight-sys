@@ -1,0 +1,189 @@
+# Hand-built AIL issues for the derive tests (tickets 5 and 6), as `sync`
+# stores them: rows of `issues`, `status_changes`, `field_changes` and
+# `statuses`, with UTC timestamps in the storage format. Only the columns
+# derive reads are filled in, except for AIL-1140, which is the sanitised real
+# sample in tests/fixtures/jira/ converted by hand.
+#
+# AIL's process (tests/fixtures/config/process.yaml): To Do -> backlog,
+# In Progress -> development, Done -> done; story points at 8 hours each.
+# Deliberately unmapped: "In Review" (a workflow status process.yaml lacks) and
+# "Closed" (not even in `statuses`, as after a rename or a move).
+#
+# Every expected interval and metric, worked out by hand, is in
+# tests/labels/metrics.yaml.
+
+statuses:
+  - {project_key: AIL, status_id: "10084", name: To Do, category: new}
+  - {project_key: AIL, status_id: "10085", name: In Progress, category: indeterminate}
+  - {project_key: AIL, status_id: "10086", name: Done, category: done}
+  - {project_key: AIL, status_id: "10087", name: In Review, category: indeterminate}
+
+cases:
+  - about: "To Do -> In Progress -> Done; 2 points set before the start; 20 h logged"
+    issue: {issue_key: AIL-101, issue_id: "90101", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-01T09:00:00.000Z",
+            story_points: 2.0, original_estimate_s: null, time_spent_s: 72000}
+    status_changes:
+      - {issue_key: AIL-101, changelog_id: "1011", changed_at: "2026-10-01T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-101, changelog_id: "1012", changed_at: "2026-10-03T16:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-101, changelog_id: "1010", field: story_points, changed_at: "2026-10-01T09:30:00.000Z", from_value: null, to_value: "2"}
+
+  - about: "Created directly in Done: no status changes; 1 point with no history"
+    issue: {issue_key: AIL-102, issue_id: "90102", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-05T08:00:00.000Z",
+            story_points: 1.0, original_estimate_s: null, time_spent_s: 14400}
+
+  - about: "Straight from To Do to Done, skipping development"
+    issue: {issue_key: AIL-103, issue_id: "90103", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-06T09:00:00.000Z",
+            story_points: 0.5, original_estimate_s: null, time_spent_s: 5400}
+    status_changes:
+      - {issue_key: AIL-103, changelog_id: "1031", changed_at: "2026-10-06T15:30:00.000Z", from_status: To Do, to_status: Done}
+
+  - about: "Reopened once: Done -> In Progress -> Done"
+    issue: {issue_key: AIL-104, issue_id: "90104", project_key: AIL, issue_type: Bug,
+            status: Done, status_category: done, created_at: "2026-10-07T09:00:00.000Z",
+            story_points: 3.0, original_estimate_s: null, time_spent_s: 86400}
+    status_changes:
+      - {issue_key: AIL-104, changelog_id: "1041", changed_at: "2026-10-07T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-104, changelog_id: "1042", changed_at: "2026-10-08T10:00:00.000Z", from_status: In Progress, to_status: Done}
+      - {issue_key: AIL-104, changelog_id: "1043", changed_at: "2026-10-09T09:00:00.000Z", from_status: Done, to_status: In Progress}
+      - {issue_key: AIL-104, changelog_id: "1044", changed_at: "2026-10-09T17:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-104, changelog_id: "1040", field: story_points, changed_at: "2026-10-07T09:05:00.000Z", from_value: null, to_value: "3"}
+
+  - about: "Estimate set at creation: 5 points now, no field history"
+    issue: {issue_key: AIL-105, issue_id: "90105", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-12T09:00:00.000Z",
+            story_points: 5.0, original_estimate_s: null, time_spent_s: 36000}
+    status_changes:
+      - {issue_key: AIL-105, changelog_id: "1051", changed_at: "2026-10-12T13:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-105, changelog_id: "1052", changed_at: "2026-10-13T13:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "Estimate first set after the work started"
+    issue: {issue_key: AIL-106, issue_id: "90106", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-14T09:00:00.000Z",
+            story_points: 2.0, original_estimate_s: null, time_spent_s: 57600}
+    status_changes:
+      - {issue_key: AIL-106, changelog_id: "1061", changed_at: "2026-10-14T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-106, changelog_id: "1063", changed_at: "2026-10-15T18:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-106, changelog_id: "1062", field: story_points, changed_at: "2026-10-15T09:00:00.000Z", from_value: null, to_value: "2"}
+
+  - about: "Estimate set at creation, then changed: the first recorded change starts from 3"
+    issue: {issue_key: AIL-107, issue_id: "90107", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-16T09:00:00.000Z",
+            story_points: 5.0, original_estimate_s: null, time_spent_s: 72000}
+    status_changes:
+      - {issue_key: AIL-107, changelog_id: "1071", changed_at: "2026-10-16T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-107, changelog_id: "1073", changed_at: "2026-10-17T15:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-107, changelog_id: "1072", field: story_points, changed_at: "2026-10-17T09:00:00.000Z", from_value: "3", to_value: "5"}
+
+  - about: "A story point value of 0 is no estimate, both as a new and as an old value"
+    issue: {issue_key: AIL-108, issue_id: "90108", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-19T09:00:00.000Z",
+            story_points: 1.0, original_estimate_s: null, time_spent_s: 21600}
+    status_changes:
+      - {issue_key: AIL-108, changelog_id: "1082", changed_at: "2026-10-19T11:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-108, changelog_id: "1084", changed_at: "2026-10-20T11:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-108, changelog_id: "1081", field: story_points, changed_at: "2026-10-19T09:10:00.000Z", from_value: null, to_value: "0"}
+      - {issue_key: AIL-108, changelog_id: "1083", field: story_points, changed_at: "2026-10-19T12:00:00.000Z", from_value: "0", to_value: "1"}
+
+  - about: "No estimate at all, but 8 h logged"
+    issue: {issue_key: AIL-109, issue_id: "90109", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-21T09:00:00.000Z",
+            story_points: null, original_estimate_s: null, time_spent_s: 28800}
+    status_changes:
+      - {issue_key: AIL-109, changelog_id: "1091", changed_at: "2026-10-21T09:30:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-109, changelog_id: "1092", changed_at: "2026-10-21T17:30:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "Still in progress at `now`"
+    issue: {issue_key: AIL-110, issue_id: "90110", project_key: AIL, issue_type: Task,
+            status: In Progress, status_category: indeterminate, created_at: "2026-11-02T09:00:00.000Z",
+            story_points: 3.0, original_estimate_s: null, time_spent_s: 43200}
+    status_changes:
+      - {issue_key: AIL-110, changelog_id: "1101", changed_at: "2026-11-03T08:00:00.000Z", from_status: To Do, to_status: In Progress}
+
+  - about: "Passed through In Review, which process.yaml doesn't map, on the way to Done"
+    issue: {issue_key: AIL-111, issue_id: "90111", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-22T09:00:00.000Z",
+            story_points: 2.0, original_estimate_s: null, time_spent_s: 86400}
+    status_changes:
+      - {issue_key: AIL-111, changelog_id: "1111", changed_at: "2026-10-22T10:00:00.000Z", from_status: To Do, to_status: In Review}
+      - {issue_key: AIL-111, changelog_id: "1112", changed_at: "2026-10-23T10:00:00.000Z", from_status: In Review, to_status: Done}
+
+  - about: "Change 1122 says it left To Do, but the issue was In Progress (a history entry is missing)"
+    issue: {issue_key: AIL-112, issue_id: "90112", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-26T09:00:00.000Z",
+            story_points: 1.0, original_estimate_s: null, time_spent_s: 36000}
+    status_changes:
+      - {issue_key: AIL-112, changelog_id: "1121", changed_at: "2026-10-26T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-112, changelog_id: "1122", changed_at: "2026-10-27T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-112, changelog_id: "1123", changed_at: "2026-10-27T16:00:00.000Z", from_status: In Progress, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-112, changelog_id: "1120", field: story_points, changed_at: "2026-10-26T09:30:00.000Z", from_value: null, to_value: "1"}
+
+  - about: "The first change is dated an hour before created_at"
+    issue: {issue_key: AIL-113, issue_id: "90113", project_key: AIL, issue_type: Task,
+            status: Done, status_category: done, created_at: "2026-10-28T12:00:00.000Z",
+            story_points: null, original_estimate_s: null, time_spent_s: 18000}
+    status_changes:
+      - {issue_key: AIL-113, changelog_id: "1131", changed_at: "2026-10-28T11:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-113, changelog_id: "1132", changed_at: "2026-10-28T17:00:00.000Z", from_status: In Progress, to_status: Done}
+
+  - about: "Two changes in the same millisecond: id 9 comes before id 10 (listed in the wrong order on purpose)"
+    issue: {issue_key: AIL-114, issue_id: "90114", project_key: AIL, issue_type: Subtask,
+            status: Done, status_category: done, created_at: "2026-10-29T09:00:00.000Z",
+            story_points: 1.0, original_estimate_s: null, time_spent_s: 3600}
+    status_changes:
+      - {issue_key: AIL-114, changelog_id: "10", changed_at: "2026-10-29T14:00:00.000Z", from_status: In Progress, to_status: Done}
+      - {issue_key: AIL-114, changelog_id: "9", changed_at: "2026-10-29T14:00:00.000Z", from_status: To Do, to_status: In Progress}
+
+  - about: "Done, then Closed: Closed is unmapped and not in `statuses`, but it is the current status (category done)"
+    issue: {issue_key: AIL-115, issue_id: "90115", project_key: AIL, issue_type: Task,
+            status: Closed, status_category: done, created_at: "2026-10-30T09:00:00.000Z",
+            story_points: 2.0, original_estimate_s: null, time_spent_s: 28800}
+    status_changes:
+      - {issue_key: AIL-115, changelog_id: "1151", changed_at: "2026-10-30T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-115, changelog_id: "1152", changed_at: "2026-10-30T18:00:00.000Z", from_status: In Progress, to_status: Done}
+      - {issue_key: AIL-115, changelog_id: "1153", changed_at: "2026-10-31T09:00:00.000Z", from_status: Done, to_status: Closed}
+    field_changes:
+      - {issue_key: AIL-115, changelog_id: "1150", field: story_points, changed_at: "2026-10-30T09:15:00.000Z", from_value: null, to_value: "2"}
+
+  - about: "New and never started: 3 points, no time logged"
+    issue: {issue_key: AIL-116, issue_id: "90116", project_key: AIL, issue_type: Task,
+            status: To Do, status_category: new, created_at: "2026-11-04T06:00:00.000Z",
+            story_points: 3.0, original_estimate_s: null, time_spent_s: null}
+
+  - about: "Reopened back to To Do, and in progress again at `now`"
+    issue: {issue_key: AIL-117, issue_id: "90117", project_key: AIL, issue_type: Task,
+            status: In Progress, status_category: indeterminate, created_at: "2026-11-01T09:00:00.000Z",
+            story_points: null, original_estimate_s: null, time_spent_s: 36000}
+    status_changes:
+      - {issue_key: AIL-117, changelog_id: "1171", changed_at: "2026-11-01T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-117, changelog_id: "1172", changed_at: "2026-11-02T10:00:00.000Z", from_status: In Progress, to_status: Done}
+      - {issue_key: AIL-117, changelog_id: "1173", changed_at: "2026-11-03T08:00:00.000Z", from_status: Done, to_status: To Do}
+      - {issue_key: AIL-117, changelog_id: "1174", changed_at: "2026-11-03T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+
+  # The real sample (tests/fixtures/jira/issue_sample.json and changelog_sample.json),
+  # converted by hand: Jira's -0600 times plus 6 hours give UTC. The changelog's
+  # assignee and sprint items are tracked fields too, so they are here as well;
+  # timespent, description, Rank and the links are not tracked.
+  - about: "Real AIL sample: To Do -> In Progress -> Done within a day; 0.5 points, 4 h logged"
+    issue: {issue_key: AIL-1140, issue_id: "52507", project_key: AIL, issue_type: Task,
+            summary: Sample task (sanitised), status: Done, status_category: done,
+            assignee_id: acc-dev-1, parent_key: AIL-1138, epic_key: AIL-1138,
+            created_at: "2026-11-03T05:08:12.832Z", updated_at: "2026-11-04T04:54:38.662Z",
+            resolved_at: "2026-11-04T04:54:38.644Z", original_estimate_s: null,
+            remaining_estimate_s: null, time_spent_s: 14400, aggregate_time_spent_s: 14400,
+            story_points: 0.5, sprint_ids: [4427]}
+    status_changes:
+      - {issue_key: AIL-1140, changelog_id: "334350", changed_at: "2026-11-03T05:09:56.971Z", author_id: acc-dev-1, from_status: To Do, to_status: In Progress}
+      - {issue_key: AIL-1140, changelog_id: "335082", changed_at: "2026-11-04T04:54:38.662Z", author_id: acc-dev-1, from_status: In Progress, to_status: Done}
+    field_changes:
+      - {issue_key: AIL-1140, changelog_id: "334342", field: assignee, changed_at: "2026-11-03T05:08:21.960Z", from_value: null, to_value: acc-dev-1}
+      - {issue_key: AIL-1140, changelog_id: "334349", field: story_points, changed_at: "2026-11-03T05:09:54.208Z", from_value: null, to_value: "0.5"}
+      - {issue_key: AIL-1140, changelog_id: "334353", field: sprint, changed_at: "2026-11-03T05:10:16.892Z", from_value: null, to_value: "4427"}

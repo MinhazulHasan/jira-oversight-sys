@@ -1,0 +1,92 @@
+{
+  "_note": "Sanitised from a real AIL changelog (4 Nov 2026). Oldest first, as GET /issue/{key}/changelog returns. expand=changelog returns the same histories newest first. People are replaced by acc-dev-1 / app-tempo; the description text is redacted.",
+  "self": "https://example.atlassian.net/rest/api/3/issue/AIL-1140/changelog?maxResults=100&startAt=0",
+  "maxResults": 100,
+  "startAt": 0,
+  "total": 10,
+  "isLast": true,
+  "values": [
+    {
+      "id": "334342",
+      "author": {"accountId": "acc-dev-1", "displayName": "Developer One", "active": true, "timeZone": "America/Chicago", "accountType": "atlassian"},
+      "created": "2026-11-02T23:08:21.960-0600",
+      "items": [
+        {"field": "assignee", "fieldtype": "jira", "fieldId": "assignee", "from": null, "fromString": null, "to": "acc-dev-1", "toString": "Developer One", "tmpFromAccountId": null, "tmpToAccountId": "acc-dev-1"}
+      ]
+    },
+    {
+      "id": "334347",
+      "author": {"accountId": "acc-dev-1", "displayName": "Developer One", "active": true, "timeZone": "America/Chicago", "accountType": "atlassian"},
+      "created": "2026-11-02T23:09:28.309-0600",
+      "items": [
+        {"field": "description", "fieldtype": "jira", "fieldId": "description", "from": null, "fromString": null, "to": null, "toString": "<redacted>"}
+      ]
+    },
+    {
+      "id": "334348",
+      "author": {"accountId": "app-tempo", "displayName": "Timesheets by Tempo - Jira Time Tracking", "active": true, "timeZone": "America/Chicago", "accountType": "app"},
+      "created": "2026-11-02T23:09:51.525-0600",
+      "items": [
+        {"field": "WorklogId", "fieldtype": "jira", "from": null, "fromString": null, "to": "67746", "toString": "67746"},
+        {"field": "timespent", "fieldtype": "jira", "fieldId": "timespent", "from": null, "fromString": null, "to": "14400", "toString": "14400"}
+      ]
+    },
+    {
+      "id": "334349",
+      "author": {"accountId": "acc-dev-1", "displayName": "Developer One", "active": true, "timeZone": "America/Chicago", "accountType": "atlassian"},
+      "created": "2026-11-02T23:09:54.208-0600",
+      "items": [
+        {"field": "Story point estimate", "fieldtype": "custom", "fieldId": "customfield_10016", "from": null, "fromString": null, "to": null, "toString": "0.5"}
+      ]
+    },
+    {
+      "id": "334350",
+      "author": {"accountId": "acc-dev-1", "displayName": "Developer One", "active": true, "timeZone": "America/Chicago", "accountType": "atlassian"},
+      "created": "2026-11-02T23:09:56.971-0600",
+      "items": [
+        {"field": "status", "fieldtype": "jira", "fieldId": "status", "from": "10084", "fromString": "To Do", "to": "10085", "toString": "In Progress"}
+      ]
+    },
+    {
+      "id": "334353",
+      "author": {"accountId": "acc-dev-1", "displayName": "Developer One", "active": true, "timeZone": "America/Chicago", "accountType": "atlassian"},
+      "created": "2026-11-02T23:10:16.892-0600",
+      "items": [
+        {"field": "Sprint", "fieldtype": "custom", "fieldId": "customfield_10020", "from": "", "fromString": "", "to": "4427", "toString": "Sample Sprint 10"}
+      ]
+    },
+    {
+      "id": "334355",
+      "author": {"accountId": "acc-dev-1", "displayName": "Developer One", "active": true, "timeZone": "America/Chicago", "accountType": "atlassian"},
+      "created": "2026-11-02T23:10:17.590-0600",
+      "items": [
+        {"field": "Rank", "fieldtype": "custom", "fieldId": "customfield_10019", "from": "", "fromString": "", "to": "", "toString": "Ranked higher"}
+      ]
+    },
+    {
+      "id": "334361",
+      "author": {"accountId": "acc-dev-1", "displayName": "Developer One", "active": true, "timeZone": "America/Chicago", "accountType": "atlassian"},
+      "created": "2026-11-02T23:11:20.396-0600",
+      "items": [
+        {"field": "RemoteWorkItemLink", "fieldtype": "jira", "from": null, "fromString": null, "to": "79505", "toString": "This work item links to \"Page (Confluence)\""}
+      ]
+    },
+    {
+      "id": "334764",
+      "author": {"accountId": "acc-dev-1", "displayName": "Developer One", "active": true, "timeZone": "America/Chicago", "accountType": "atlassian"},
+      "created": "2026-11-03T04:50:45.137-0600",
+      "items": [
+        {"field": "RemoteWorkItemLink", "fieldtype": "jira", "from": null, "fromString": null, "to": "79589", "toString": "This work item links to \"Page (Confluence)\""}
+      ]
+    },
+    {
+      "id": "335082",
+      "author": {"accountId": "acc-dev-1", "displayName": "Developer One", "active": true, "timeZone": "America/Chicago", "accountType": "atlassian"},
+      "created": "2026-11-03T22:54:38.662-0600",
+      "items": [
+        {"field": "status", "fieldtype": "jira", "fieldId": "status", "from": "10085", "fromString": "In Progress", "to": "10086", "toString": "Done"},
+        {"field": "resolution", "fieldtype": "jira", "fieldId": "resolution", "from": null, "fromString": null, "to": "10000", "toString": "Done"}
+      ]
+    }
+  ]
+}

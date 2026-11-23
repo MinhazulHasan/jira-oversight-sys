@@ -1,0 +1,39 @@
+# Hygiene rule: R-HYG-01 (in progress, nobody assigned), on AIL and HRS.
+# Format: see estimates.yaml. assignee_id is an account id, never a name; a
+# case's `assignee_id: null` overrides the default.
+
+defaults: {issue_type: Task, assignee_id: acc-team-1}
+
+cases:
+  - about: "In progress with nobody assigned"
+    issue: {issue_key: AIL-401, status: In Progress, created_at: "2026-11-02T09:00:00.000Z",
+            story_points: 2.0, time_spent_s: 3600, assignee_id: null}
+    status_changes:
+      - {changelog_id: "14011", changed_at: "2026-11-02T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+
+  - about: "In progress and assigned"
+    issue: {issue_key: AIL-402, status: In Progress, created_at: "2026-11-03T09:00:00.000Z",
+            story_points: 1.0, time_spent_s: 3600, assignee_id: acc-team-2}
+    status_changes:
+      - {changelog_id: "14021", changed_at: "2026-11-03T10:00:00.000Z", from_status: To Do, to_status: In Progress}
+
+  - about: "To Do with nobody assigned: not in progress yet"
+    issue: {issue_key: AIL-403, status: To Do, created_at: "2026-11-03T09:00:00.000Z",
+            story_points: 1.0, time_spent_s: null, assignee_id: null}
+
+  - about: "In progress with nobody assigned"
+    issue: {issue_key: HRS-401, status: In Progress, created_at: "2026-11-03T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 3600, assignee_id: null}
+    status_changes:
+      - {changelog_id: "24011", changed_at: "2026-11-03T10:00:00.000Z", from_status: Open, to_status: In Progress}
+
+  - about: "Created straight into In Progress (no history) with nobody assigned"
+    issue: {issue_key: HRS-402, status: In Progress, created_at: "2026-11-04T08:00:00.000Z",
+            original_estimate_s: 14400, time_spent_s: null, assignee_id: null}
+
+  - about: "Closed with nobody assigned: finished work isn't checked"
+    issue: {issue_key: HRS-403, status: Closed, created_at: "2026-10-26T09:00:00.000Z",
+            original_estimate_s: 28800, time_spent_s: 21600, assignee_id: null}
+    status_changes:
+      - {changelog_id: "24031", changed_at: "2026-10-26T10:00:00.000Z", from_status: Open, to_status: In Progress}
+      - {changelog_id: "24032", changed_at: "2026-10-27T10:00:00.000Z", from_status: In Progress, to_status: Closed}

@@ -1,0 +1,50 @@
+{
+  "_note": "`response` is GET /rest/api/3/issue/AIL-1140/remotelink in its documented shape (SHAPES.md): a plain list. Links 79505 and 79589 are the Confluence pages the changelog sample's RemoteWorkItemLink items record. The GitHub link is invented to show a PR link: it appears twice with different titles (the first wins). The last three have no usable URL and must be skipped.",
+  "response": [
+    {
+      "id": 79505,
+      "self": "https://example.atlassian.net/rest/api/3/issue/AIL-1140/remotelink/79505",
+      "globalId": "appId=00000000-0000-0000-0000-000000000000&pageId=1",
+      "application": {"type": "com.atlassian.confluence", "name": "Confluence"},
+      "relationship": "Wiki Page",
+      "object": {"url": "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=1", "title": "Page", "icon": {}}
+    },
+    {
+      "id": 79589,
+      "self": "https://example.atlassian.net/rest/api/3/issue/AIL-1140/remotelink/79589",
+      "globalId": "appId=00000000-0000-0000-0000-000000000000&pageId=2",
+      "application": {"type": "com.atlassian.confluence", "name": "Confluence"},
+      "relationship": "Wiki Page",
+      "object": {"url": "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=2", "title": "Page", "icon": {}}
+    },
+    {
+      "id": 79600,
+      "self": "https://example.atlassian.net/rest/api/3/issue/AIL-1140/remotelink/79600",
+      "application": {"type": "com.github", "name": "GitHub"},
+      "relationship": "pull request",
+      "object": {"url": "https://github.com/example/repo/pull/42", "title": "PR #42: sample change", "icon": {}}
+    },
+    {
+      "id": 79601,
+      "self": "https://example.atlassian.net/rest/api/3/issue/AIL-1140/remotelink/79601",
+      "application": {"type": "com.github", "name": "GitHub"},
+      "relationship": "pull request",
+      "object": {"url": "https://github.com/example/repo/pull/42", "title": "PR #42 (linked again)", "icon": {}}
+    },
+    {
+      "id": 79602,
+      "self": "https://example.atlassian.net/rest/api/3/issue/AIL-1140/remotelink/79602",
+      "object": {"title": "A link without a URL"}
+    },
+    {
+      "id": 79603,
+      "self": "https://example.atlassian.net/rest/api/3/issue/AIL-1140/remotelink/79603",
+      "object": {"url": "", "title": "A blank URL"}
+    },
+    {
+      "id": 79604,
+      "self": "https://example.atlassian.net/rest/api/3/issue/AIL-1140/remotelink/79604",
+      "object": null
+    }
+  ]
+}
