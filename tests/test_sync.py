@@ -1446,13 +1446,13 @@ def test_a_size_check_that_times_out_spends_its_own_ten_seconds_and_is_logged_so
 
 
 def test_the_docs_quote_the_over_the_scan_warning_as_the_sync_gives_it() -> None:
-    """The reference (docs/REFERENCE.md) and, where this machine has them, the demo's presenter notes quote the
-    warning word for word, so what an operator or the client reads there is what the sync says. The presenter notes
-    are client-specific and kept out of git (.gitignore), so a fresh clone checks the reference alone."""
+    """The reference (docs/REFERENCE.md) and the demo's presenter notes quote the warning word for word, so what an
+    operator or the client reads there is what the sync says. Both are kept out of git (.gitignore): only the ones
+    this machine has are checked."""
     root = Path(__file__).resolve().parent.parent
-    assert (root / "docs" / "REFERENCE.md").exists()
-    for doc in ("docs/REFERENCE.md", "docs/DEMO_SECURITY_AND_PEOPLE.md"):
-        if not (root / doc).exists():
-            continue
+    docs = [doc for doc in ("docs/REFERENCE.md", "docs/DEMO_SECURITY_AND_PEOPLE.md") if (root / doc).exists()]
+    if not docs:
+        pytest.skip("the docs that quote the warning are local only, not on this machine")
+    for doc in docs:
         text = " ".join((root / doc).read_text(encoding="utf-8").split())
         assert OVER_THE_SCAN in text, doc

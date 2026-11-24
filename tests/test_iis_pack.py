@@ -24,6 +24,8 @@ PUBLISH = IIS / "Publish-Dashboard.ps1"
 API_CONFIG = IIS / "api" / "web.config"
 DASHBOARD_CONFIG = IIS / "dashboard" / "web.config"
 DASHBOARD = PROJECT_ROOT.parent / "jira-oversight-ui"
+# The guide is kept out of git (.gitignore): a fresh clone has none, and its text is then not checked.
+GUIDE = PROJECT_ROOT / "docs" / "DEPLOYMENT_IIS.md"
 POWERSHELL = shutil.which("powershell.exe") if sys.platform == "win32" else None
 needs_powershell = pytest.mark.skipif(POWERSHELL is None, reason="needs Windows PowerShell")
 PLACEHOLDER = re.compile(r"__[A-Z][A-Z_]*__")
@@ -180,7 +182,7 @@ def test_the_dashboard_template_says_how_to_make_only_some_people_admins() -> No
 def test_the_pack_is_ascii_and_lf_only() -> None:
     # Windows PowerShell 5.1 reads a script that has no byte-order mark as the machine's code page: ASCII stays safe.
     for path in (INSTALLER, TASK, PUBLISH, API_CONFIG, DASHBOARD_CONFIG, IIS / "backend.env.example",
-                 IIS / "dashboard.env.example", PROJECT_ROOT / "docs" / "DEPLOYMENT_IIS.md"):
+                 IIS / "dashboard.env.example", *([GUIDE] if GUIDE.exists() else [])):
         data = path.read_bytes()
         assert b"\r\n" not in data, path
         if path.suffix != ".md":
@@ -383,8 +385,9 @@ def test_the_dashboard_builds_standalone_when_asked_and_the_publisher_asks() -> 
 # --- the guide ------------------------------------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not GUIDE.exists(), reason="docs/DEPLOYMENT_IIS.md is local only, not on this machine")
 def test_the_guide_covers_the_pack_and_every_section_the_files_cite() -> None:
-    guide = (PROJECT_ROOT / "docs" / "DEPLOYMENT_IIS.md").read_text(encoding="utf-8")
+    guide = GUIDE.read_text(encoding="utf-8")
     headings = {int(number): title for number, title in re.findall(r"^## (\d+)\. (.+)$", guide, re.MULTILINE)}
     assert list(headings) == list(range(1, len(headings) + 1))
     for number, title in {3: "Prerequisites", 4: "Put the code in place", 7: "Settings and secrets", 8: "Install",

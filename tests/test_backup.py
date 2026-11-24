@@ -91,18 +91,22 @@ def test_a_backup_holds_each_boards_rule_settings_and_their_history(settings: Se
 
 
 GUIDE = Path(__file__).resolve().parent.parent / "docs" / "DEPLOYMENT.md"
+# The guide is kept out of git (.gitignore): a fresh clone has none, and its steps are then not checked.
+NO_GUIDE = "docs/DEPLOYMENT.md is local only, not on this machine"
 
 
 def test_the_guides_restore_keeps_the_chosen_backup_and_the_live_snapshot_until_the_swap(settings: Settings) -> None:
     # Regression: the guide's step 2 (a safety backup) pruned the oldest backup, which step 3 then could not copy,
     # after it had already deleted the live snapshot: no snapshot at all. The steps, in the guide's order, here.
-    text = GUIDE.read_text(encoding="utf-8")
-    restore = text[text.index("4. **Restore.**"):text.index("5. Test a restore")]
-    aside = restore.index("cp backups/oversight-20261110-020000.db oversight.db.restore")
-    safety = restore.index("dc run --rm -e BACKUP_KEEP=1000 tools backup")
-    swap = restore.index("test -s oversight.db.restore && rm -f oversight.db-wal oversight.db-shm && mv -f")
-    assert aside < safety < swap
-    assert "rm -f oversight.db oversight.db-wal" not in restore  # never the live snapshot before the copy is in place
+    # Where this machine has the guide, its text is checked too; the steps themselves always run.
+    if GUIDE.exists():
+        text = GUIDE.read_text(encoding="utf-8")
+        restore = text[text.index("4. **Restore.**"):text.index("5. Test a restore")]
+        aside = restore.index("cp backups/oversight-20261110-020000.db oversight.db.restore")
+        safety = restore.index("dc run --rm -e BACKUP_KEEP=1000 tools backup")
+        swap = restore.index("test -s oversight.db.restore && rm -f oversight.db-wal oversight.db-shm && mv -f")
+        assert aside < safety < swap
+        assert "rm -f oversight.db oversight.db-wal" not in restore  # never the live snapshot before the copy
 
     folder = settings.backups_path
     oldest = touch_backup(folder, datetime(2026, 11, 10, 2, 0, tzinfo=UTC))
@@ -119,6 +123,7 @@ def test_the_guides_restore_keeps_the_chosen_backup_and_the_live_snapshot_until_
     assert settings.db_file.read_bytes() == oldest.read_bytes()
 
 
+@pytest.mark.skipif(not GUIDE.exists(), reason=NO_GUIDE)
 def test_the_guides_rollback_puts_back_the_config_the_old_release_reads() -> None:
     # Regression: the rollback changed only the images, while the backend reads config/ from the folder, which the
     # upgrade had replaced with settings the older release refuses.
