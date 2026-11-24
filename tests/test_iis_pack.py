@@ -106,6 +106,11 @@ def test_http_goes_to_https_on_the_one_address() -> None:
     assert action.get("url") == "https://__HOST_NAME__/{R:1}"
     condition = rule.find("conditions/add")
     assert condition is not None and condition.get("input") == "{HTTPS}" and condition.get("pattern") == "^OFF$"
+    # win-acme answers its http challenge itself: never redirected.
+    acme = rule.findall("conditions/add")[1]
+    assert acme.get("input") == "{REQUEST_URI}" and acme.get("negate") == "true"
+    assert re.match(acme.get("pattern") or "", "/.well-known/acme-challenge/token")
+    assert not re.match(acme.get("pattern") or "", "/findings")
     assert ET.parse(API_CONFIG).getroot().find("system.webServer/rewrite") is None
 
 
@@ -319,6 +324,20 @@ def test_the_installer_with_whatif_prints_the_plan_and_changes_nothing(tmp_path:
         assert planned in out, planned
     assert "(WhatIf, nothing was changed)" in out and "would be made" in out
     assert sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")) == before
+
+
+@needs_powershell
+def test_the_installer_without_a_certificate_leaves_https_to_win_acme(tmp_path: Path) -> None:
+    backend = tmp_path / "install" / "backend"
+    (backend / "oversight").mkdir(parents=True)
+    (backend / "oversight" / "__main__.py").write_text("", encoding="utf-8")
+    done = powershell("-File", str(INSTALLER), "-HostName", "oversight.example.com", "-BackendPath", str(backend),
+                      "-WhatIf")
+    assert done.returncode == 0, done.stdout + done.stderr
+    out = done.stdout
+    assert "No -CertificateThumbprint: the site gets http on oversight.example.com only" in out
+    assert "*:80:oversight.example.com" in out
+    assert "add the https binding" not in out and "bind the certificate" not in out
 
 
 @needs_powershell

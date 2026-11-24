@@ -6,7 +6,8 @@
     The address people open, without a scheme, for example oversight.example.com.
 
 .PARAMETER CertificateThumbprint
-    The thumbprint of the HTTPS certificate in Cert:\LocalMachine\My (it must name -HostName).
+    Optional. The HTTPS certificate's thumbprint, in Cert:\LocalMachine\My or WebHosting (it must name -HostName).
+    Leave it out when win-acme issues the certificate after the install: it adds the https binding and renews it.
 
 .PARAMETER InstallRoot
     The folder that holds everything but the backend. Default: the folder above the backend's.
@@ -55,8 +56,7 @@
 param(
     [Parameter(Mandatory)]
     [string] $HostName,
-    [Parameter(Mandatory)]
-    [string] $CertificateThumbprint,
+    [string] $CertificateThumbprint = '',
     [string] $InstallRoot = '',
     [string] $BackendPath = '',
     [string] $DashboardPath = '',
@@ -140,7 +140,7 @@ Write-Step "Sites: $SitesPath; address: https://$HostName; API: http://127.0.0.1
 if ($WhatIfRun) { Write-Step 'WhatIf: nothing below is changed.' }
 
 if ($HostName -notmatch '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$') { throw "-HostName must be a host name such as oversight.example.com, not '$HostName'." }
-if ($thumbprint.Length -ne 40) { throw '-CertificateThumbprint must be the 40-character thumbprint of a certificate in Cert:\LocalMachine\My.' }
+if ($thumbprint -and $thumbprint.Length -ne 40) { throw '-CertificateThumbprint must be the 40-character thumbprint of a certificate in Cert:\LocalMachine\My or WebHosting.' }
 foreach ($time in @($FullSyncAt, $BackupAt)) {
     if ($time -notmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') { throw "A time of day must be HH:mm (24 hours), not '$time'." }
 }
@@ -161,9 +161,18 @@ if (-not (Test-Path -LiteralPath $Node -PathType Leaf)) { Stop-Or-Warn "No node.
 if (-not (Test-Path -LiteralPath (Join-Path $DashboardPath 'server.js') -PathType Leaf)) {
     Stop-Or-Warn "No dashboard at $DashboardPath (no server.js): run Publish-Dashboard.ps1 first (section 4)."
 }
-$certificate = Get-Item -LiteralPath "Cert:\LocalMachine\My\$thumbprint" -ErrorAction SilentlyContinue
-if (-not $certificate) {
-    Stop-Or-Warn "No certificate with thumbprint $thumbprint in Cert:\LocalMachine\My (section 9)."
+$certificateStore = 'My'
+$certificate = $null
+if ($thumbprint) {
+    foreach ($store in @('My', 'WebHosting')) {
+        $certificate = Get-Item -LiteralPath "Cert:\LocalMachine\$store\$thumbprint" -ErrorAction SilentlyContinue
+        if ($certificate) { $certificateStore = $store; break }
+    }
+}
+if (-not $thumbprint) {
+    Write-Step "No -CertificateThumbprint: the site gets http on $HostName only. Issue its certificate with win-acme next; it adds https and renews it."
+} elseif (-not $certificate) {
+    Stop-Or-Warn "No certificate with thumbprint $thumbprint in Cert:\LocalMachine\My or WebHosting (section 9)."
 } else {
     if ($certificate.NotAfter -lt (Get-Date)) { Stop-Or-Warn "The certificate expired on $($certificate.NotAfter.ToString('d MMM yyyy'))." }
     $names = @($certificate.DnsNameList | ForEach-Object { $_.Unicode.ToLowerInvariant() })
@@ -352,22 +361,24 @@ Write-WebConfig (Join-Path $here 'dashboard\web.config') (Join-Path $dashboardSi
 Initialize-Site $ApiSiteName $ApiPoolName $apiSite 'http' "127.0.0.1:${ApiPort}:" '' '127.0.0.1' $ApiPort
 Initialize-Site $DashboardSiteName $DashboardPoolName $dashboardSite 'http' "*:80:$HostName" $HostName '*' 80
 
-# https on the address, with the certificate (SNI, so the host name is part of the binding).
+# https on the address with the given certificate (SNI). Without one, an https binding win-acme added is left alone.
 $httpsInformation = "*:443:$HostName"
-if (-not (Test-Binding $DashboardSiteName 'https' $httpsInformation)) {
-    if ($PSCmdlet.ShouldProcess($DashboardSiteName, "add the https binding $httpsInformation")) {
-        New-WebBinding -Name $DashboardSiteName -Protocol https -IPAddress '*' -Port 443 -HostHeader $HostName -SslFlags 1
+if ($thumbprint) {
+    if (-not (Test-Binding $DashboardSiteName 'https' $httpsInformation)) {
+        if ($PSCmdlet.ShouldProcess($DashboardSiteName, "add the https binding $httpsInformation")) {
+            New-WebBinding -Name $DashboardSiteName -Protocol https -IPAddress '*' -Port 443 -HostHeader $HostName -SslFlags 1
+        }
+        $changes++
     }
-    $changes++
-}
-$binding = if ($iisReady) { Get-WebBinding -Name $DashboardSiteName -Protocol https -HostHeader $HostName -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
-$bound = if ($binding) { [string] $binding.certificateHash } else { '' }
-if ($bound -ne $thumbprint) {
-    if ($PSCmdlet.ShouldProcess($DashboardSiteName, "bind the certificate $thumbprint to $httpsInformation")) {
-        if ($bound) { $binding.RemoveSslCertificate() }
-        $binding.AddSslCertificate($thumbprint, 'My')
+    $binding = if ($iisReady) { Get-WebBinding -Name $DashboardSiteName -Protocol https -HostHeader $HostName -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
+    $bound = if ($binding) { [string] $binding.certificateHash } else { '' }
+    if ($bound -ne $thumbprint) {
+        if ($PSCmdlet.ShouldProcess($DashboardSiteName, "bind the certificate $thumbprint ($certificateStore) to $httpsInformation")) {
+            if ($bound) { $binding.RemoveSslCertificate() }
+            $binding.AddSslCertificate($thumbprint, $certificateStore)
+        }
+        $changes++
     }
-    $changes++
 }
 
 # --- 5. folder permissions -------------------------------------------------------------------------------------------------
