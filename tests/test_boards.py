@@ -1,9 +1,3 @@
-"""Every Jira board (JO-17), oversight/boards.py: discovery (a read-only project search into the boards table), the
-boards the service serves and keeps in sync, and the process mapping of a board process.yaml leaves out; and the
-`discover` command, and sync, derive and rules on a board first synced from the dashboard.
-
-FakeJira answers the project search (tests/fakes/fake_jira.py): nothing here talks to a real Jira site.
-"""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -41,7 +35,7 @@ NOW = datetime(2026, 11, 18, 9, 0, tzinfo=UTC)
 
 
 def site() -> FakeJira:
-    """Five projects: three live (AIL, OPS, SD), one archived (OLD), one the account cannot see (SECRET)."""
+    """Five projects"""
     fake = FakeJira()
     fake.add_project("AIL", "AILED")
     fake.add_project("OPS", "Operations", project_type="business")
@@ -66,9 +60,6 @@ def at(minutes: int) -> Callable[[], datetime]:
 def settings_of(tmp_path: Path, projects: str = "AIL", discovery: str = "on") -> Settings:
     return Settings(_env_file=None, jira_projects=projects, board_discovery=discovery, db_path=tmp_path / "o.db",
                     config_dir=CONFIG_FIXTURES, reports_dir=tmp_path / "reports")
-
-
-# --- discovery -------------------------------------------------------------------------------------------------------
 
 
 def test_discovery_lists_every_live_board_the_account_can_browse_page_by_page_and_only_reads(store: Store) -> None:
@@ -158,9 +149,6 @@ def test_an_entry_without_a_usable_key_is_skipped_and_counted(store: Store) -> N
     assert "skipped: 1 without a usable key" in result.render()
 
 
-# --- served and kept boards ------------------------------------------------------------------------------------------
-
-
 def discovered(store: Store, *boards: tuple[str, str]) -> None:
     for key, name in boards:
         store.upsert("boards", {"project_key": key, "name": name, "project_type": "software",
@@ -179,7 +167,6 @@ def test_the_served_boards_are_jira_projects_first_then_every_discovered_board_b
     assert served[1] == Board("AIL", "AILED", "software", None)
     assert served[0] == Board("DEMO", None, None, None)  # not listed by Jira: no name, no type
     assert served[3].synced and not served[2].synced
-    # BOARD_DISCOVERY=off: JIRA_PROJECTS alone, as before JO-17. No snapshot: the same, none synced.
     assert [board.key for board in served_boards(store.conn, settings_of(tmp_path, "DEMO,AIL", "off"))] == ["DEMO",
                                                                                                            "AIL"]
     assert served_boards(None, settings_of(tmp_path, "DEMO,AIL")) == [Board("DEMO", None, None, None),
@@ -191,7 +178,6 @@ def test_the_cycle_keeps_jira_projects_and_every_board_synced_before(store: Stor
     for key in ("OPS", "GONE"):
         store.set_cursor(key, last_synced_at=to_iso(NOW), run_id="r1", account_timezone=None)
     store.conn.execute("UPDATE boards SET disappeared_at = ? WHERE project_key = 'GONE'", (to_iso(NOW),))
-    # AIL never synced: still kept, it is in JIRA_PROJECTS. SD never synced: not kept. GONE left Jira: not kept.
     assert kept_boards(store.conn, settings_of(tmp_path, "AIL")) == ["AIL", "OPS"]
     assert kept_boards(store.conn, settings_of(tmp_path, "AIL", "off")) == ["AIL"]
 
@@ -202,9 +188,6 @@ def test_an_older_snapshot_without_the_boards_table_serves_jira_projects(tmp_pat
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE sync_state (scope TEXT, last_synced_at TEXT)")
     assert [board.key for board in served_boards(conn, settings_of(tmp_path, "AIL"))] == ["AIL"]
-
-
-# --- the automatic process mapping -----------------------------------------------------------------------------------
 
 
 def statuses(store: Store, project: str, *found: tuple[str, str, str | None]) -> None:
@@ -278,9 +261,6 @@ def test_every_served_board_is_mapped_for_every_command(store: Store, process: P
     assert mapped.project("XYZ").automatic and mapped.ordered_stages("XYZ") == []  # never synced: nothing mapped yet
 
 
-# --- the commands ----------------------------------------------------------------------------------------------------
-
-
 @pytest.fixture
 def cli(settings: Settings, capsys: pytest.CaptureFixture[str]) -> Callable[..., tuple[int, str, str]]:
     fake = FakeJira()
@@ -320,8 +300,6 @@ def test_the_discover_command_does_nothing_with_discovery_off_and_needs_the_jira
 def test_a_board_synced_from_the_dashboard_is_derived_and_checked_then_kept_by_the_cycle(
     cli: Callable[..., tuple[int, str, str]], settings: Settings
 ) -> None:
-    """OPS is not in process.yaml nor JIRA_PROJECTS: discovered, synced once by itself (as "Sync now" runs it), derived
-    and checked with a mapping worked out from its status categories, then synced again by every plain sync."""
     assert cli("discover")[0] == EXIT_OK
     code, out, _ = cli("sync", "--full", "--project", "OPS")
     assert code == EXIT_OK and "OPS full" in out
@@ -343,7 +321,6 @@ def test_a_board_synced_from_the_dashboard_is_derived_and_checked_then_kept_by_t
 def test_a_sync_runs_stats_name_the_boards_it_synced(
     cli: Callable[..., tuple[int, str, str]], settings: Settings
 ) -> None:
-    """So health reads each board's own syncs (JO-18): a failed sync of one board says nothing about another."""
     assert cli("sync", "--full", "--project", "OPS")[0] == EXIT_OK
     with Store.open(settings.db_file) as store:
         run = store.query_one("SELECT stats_json FROM runs WHERE kind = 'sync' ORDER BY started_at DESC")

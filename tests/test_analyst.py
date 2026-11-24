@@ -1,8 +1,3 @@
-"""The Ask analyst: the read-only query tool, and the conversation loop with a scripted model.
-
-Nothing here calls a real model: FakeAnalyst hands back scripted turns with the
-SDK's shapes (tool_use blocks with .id, .name and .input).
-"""
 from __future__ import annotations
 
 import sqlite3
@@ -48,9 +43,6 @@ def epic_count(settings: Settings) -> int:
         return conn.execute("SELECT COUNT(*) FROM issues WHERE project_key = 'DEMO' AND issue_type = 'Epic'").fetchone()[0]
     finally:
         conn.close()
-
-
-# --- the query tool -------------------------------------------------------------------------
 
 
 def test_views_answer_and_count_through_with_and_json(query: SnapshotQuery) -> None:
@@ -139,9 +131,6 @@ def test_tidy_markdown_keeps_markdown_but_not_links_brackets_or_list_numbers() -
     assert tidy_markdown(text) == "**Open epics**\n\n- AIL-1 first\n- AIL-2 second"
 
 
-# --- the conversation -----------------------------------------------------------------------
-
-
 def use(name: str, arguments: dict[str, Any], ident: str = "tu1") -> SimpleNamespace:
     return SimpleNamespace(type="tool_use", id=ident, name=name, input=arguments)
 
@@ -168,7 +157,6 @@ class FakeAnalyst:
             raise item
         return item
 
-    # The catalogue path's calls: never reached when the analyst runs.
     def structured(self, *args: Any, **kwargs: Any) -> Any:
         raise AssertionError("the catalogue planner ran instead of the analyst")
 
@@ -203,7 +191,6 @@ def test_the_analyst_queries_then_answers_with_verified_citations(demo: Settings
         assert response.facts[0].params == {"sql": "SELECT COUNT(*) AS n FROM epics"}
         assert [c.name for c in response.plan] == [QUERY_TOOL] and response.model == "fake-opus"
         assert purposes(store, response.qa_id) == ["analyst", "analyst"]
-        # The model read the result back as a tool_result for its own tool_use id.
         result = provider.calls[1]["messages"][-1]["content"][0]
         assert result["type"] == "tool_result" and result["tool_use_id"] == "tu1" and f"[{n}]" in result["content"]
         assert "AIL" not in provider.calls[0]["system"] or "DEMO" in provider.calls[0]["system"]
@@ -235,7 +222,6 @@ def test_an_unverifiable_answer_gets_one_rewrite_then_is_withheld(demo: Settings
     response, store = run(demo, provider)
     try:
         assert response.outcome == "not_verified" and response.answer is None and response.facts
-        # The rewrite may still query: whatever it computed itself, it can now look up.
         assert provider.calls[2].get("tool_choice") is None
         assert "could not be verified" in provider.calls[2]["messages"][-1]["content"]
         assert "987654" in provider.calls[2]["messages"][-1]["content"]
@@ -285,9 +271,6 @@ def test_the_rewrite_can_fix_the_answer(demo: Settings) -> None:
 
 
 def test_a_count_written_in_words_is_checked_as_strictly_as_one_in_digits(demo: Settings) -> None:
-    """18 Nov 2026: a poem wrote its counts in words ("Seventeen tickets ... nine breaches") and was marked "Numbers
-    verified" with none of them checked. A count in words that no tool result holds is caught, and rewritten or
-    withheld, as one in digits is."""
     provider = FakeAnalyst([
         turn(uses=[use(QUERY_TOOL, {"sql": "SELECT COUNT(*) AS n FROM epics"})]),
         turn(text="There are nine hundred and eighty-seven epics."),
@@ -309,10 +292,6 @@ def test_a_request_for_a_poem_is_declined_before_any_model(demo: Settings) -> No
 
 @pytest.mark.parametrize("level", ["team", "people"])
 def test_the_analyst_is_told_to_answer_short_plain_and_with_facts_only(level: str) -> None:
-    """18 Nov 2026, live: "Where do tickets get stuck most?" took 250 words, a five-column table and 39 figures, wrote
-    "0.0006 h", stated an average as "each" and judged the work ("an abandoned backlog"); a count question added "None
-    of them are sprint-level findings." and the assignee caveat where nobody was ranked. The writing rules say each of
-    these, and the number check stays as it was."""
     system = analyst_system("AIL", "2026-11-18", 6, level)
     for rule in ("About 80 words or fewer", "no sentence about what the answer leaves out",
                  "A table only when the question asks for one", "never opinions", 'is not "each"',

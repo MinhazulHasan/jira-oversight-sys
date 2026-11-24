@@ -1,4 +1,3 @@
-"""stages_since: a stage added to the workflow later is not "skipped" by work done before it existed."""
 from __future__ import annotations
 
 from typing import Any

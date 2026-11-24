@@ -1,18 +1,3 @@
-"""GET /projects (contract 4.11): every board the service serves, for the dashboard's board picker (JO-17).
-
-{default, projects}: default the board served when none is picked (the first of JIRA_PROJECTS), and one entry for each
-board the service serves (JIRA_PROJECTS, then, with BOARD_DISCOVERY on, every board discovery found in Jira): {key,
-name, issues, last_synced_at, synced, type}. name: process.yaml's name, else Jira's, else the key; issues: how many of
-its issues the snapshot holds; last_synced_at: the start of its last successful sync (null: never synced); synced:
-whether it has synced at least once; type: Jira's project type (software, business, service_desk, ...), null when
-discovery has not listed it (BOARD_DISCOVERY off, or a board Jira's search does not list, such as the demo). Ordered:
-the default first, then the boards that have synced by name, then those not synced yet by name (names compared with
-case folded, then keys). Three small queries whatever the number of boards (the boards with their syncs, and the issues
-counted by board in one pass), and the same body whichever board is picked; no `meta`.
-
-When the stored list of boards is older than 30 minutes (or there is none), this starts a discovery in the background
-(oversight/api/boards.py): the answer never waits on Jira, and a discovery that fails leaves the last list.
-"""
 from __future__ import annotations
 
 import sqlite3

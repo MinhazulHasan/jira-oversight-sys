@@ -1,14 +1,3 @@
-"""FakeJira: an in-memory Jira Cloud site for httpx.MockTransport.
-
-A real JiraClient talks to it through `client_kwargs()`. It answers every read
-the oversight CLI makes (doctor, sync) in the shapes of
-tests/fixtures/jira/SHAPES.md: ISO and epoch-ms changelog times, -0500 and
--0600 offsets, token and startAt paging, the worklog feeds' `until` paging.
-It checks Basic auth like Jira, records every request, and dates every change
-by its own clock, never the wall clock.
-
-tests/fakes/builders.py builds realistic AIL and OPS projects on it.
-"""
 from __future__ import annotations
 
 import base64
@@ -30,8 +19,6 @@ BASE_URL = "https://fake.atlassian.net"
 EMAIL = "sync@example.com"
 TOKEN = "tok-sync-5e2b-do-not-leak"
 CHICAGO = "America/Chicago"
-# A new fake's clock: before US clocks went back on 1 Nov, so early
-# timestamps carry -0500 and later ones -0600.
 BUILT_FROM = datetime(2026, 10, 28, 14, 0, tzinfo=UTC)
 
 MYSELF = "/rest/api/3/myself"
@@ -50,21 +37,16 @@ WORKLOG_LIST = "/rest/api/3/worklog/list"
 ASSIGNABLE = "/rest/api/3/user/assignable/search"
 SITE_USERS = "/rest/api/3/users/search"
 
-# Jira's assignable-user search reads the site's users "up to the thousandth user" (Atlassian's documentation): no
-# one at place 1,000 or later is ever sent. The fake's own figure, not the client's, so a client that asks past it
-# finds nothing there.
 ASSIGNABLE_LIMIT = 1000
 
 POINTS_FIELD = "customfield_10016"
 SPRINT_FIELD = "customfield_10020"
 
-# name -> (id, category key, category id, colour); AIL's real ids.
 STATUS_INFO = {
     "To Do": ("10084", "new", 2, "blue-gray"),
     "In Progress": ("10085", "indeterminate", 4, "yellow"),
     "Done": ("10086", "done", 3, "green"),
 }
-# name -> (id, hierarchyLevel); AIL's real ids.
 ISSUE_TYPES = {
     "Task": ("10081", 0),
     "Epic": ("10082", 1),
@@ -72,7 +54,6 @@ ISSUE_TYPES = {
     "Bug": ("10084", 0),
     "Test": ("10085", 0),
 }
-# name -> (id, inward, outward)
 LINK_TYPES = {
     "Blocks": ("10000", "is blocked by", "blocks"),
     "Cloners": ("10001", "is cloned by", "clones"),
@@ -89,7 +70,6 @@ TEMPO = {
 
 _GREENHOPPER = "com.pyxis.greenhopper.jira"
 _PEOPLE_TYPE = "com.atlassian.jira.plugin.system.customfieldtypes:people"
-# GET /field on AIL's site (team-managed: no Epic Link): (id, name, schema type, custom type).
 SITE_FIELDS: list[tuple[str, str, str, str | None]] = [
     ("summary", "Summary", "string", None),
     ("status", "Status", "status", None),
@@ -108,11 +88,7 @@ SITE_FIELDS: list[tuple[str, str, str, str | None]] = [
     ("customfield_10140", "Testers", "array", _PEOPLE_TYPE),
     ("customfield_10141", "Test Reviewers", "array", _PEOPLE_TYPE),
 ]
-# Doctor's one-result probe: is any issue in these projects using the field?
 PROBE_JQL = re.compile(r"project in \((?P<keys>[^)]*)\) AND cf\[(?P<number>[0-9]+)\] is not EMPTY")
-
-
-# --- the fake --------------------------------------------------------------------------
 
 
 @dataclass
@@ -131,7 +107,6 @@ class FakeIssue:
     sprints: list[int] = field(default_factory=list)
     resolved: datetime | None = None
     time_spent: int | None = None
-    # {"id", "author", "created": datetime, "items"}, oldest first
     histories: list[dict[str, Any]] = field(default_factory=list)
     remote_links: list[dict[str, Any]] = field(default_factory=list)
 
@@ -149,59 +124,32 @@ Fault = Callable[[httpx.Request], httpx.Response | None]
 
 
 class FakeJira:
-    """Jira Cloud in memory, for the endpoints doctor and sync read.
-
-    Changes go through methods that behave like Jira: each stamps the issue's
-    `updated` with the clock (which then moves on a second, so no two changes
-    tie) and records a changelog history. Search pages use keyset tokens, so
-    an issue that changes mid-search shows up again later instead of shifting
-    another issue off a page. A request without the Basic credentials of
-    EMAIL and TOKEN gets 401, as on Jira.
-    """
-
     def __init__(self) -> None:
         self.clock = BUILT_FROM
         self.zone = ZoneInfo(CHICAGO)
-        self.reported_zone: str | None = CHICAGO  # what /myself says
+        self.reported_zone: str | None = CHICAGO
         self.authorization = "Basic " + base64.b64encode(f"{EMAIL}:{TOKEN}".encode()).decode("ascii")
         self.fields: list[dict[str, Any]] = [_field(*spec) for spec in SITE_FIELDS]
         self.project_ids: dict[str, str] = {}
         self.project_names: dict[str, str] = {}
-        # Each project's type (projectTypeKey), and those archived (never listed as live by project/search) or out of
-        # the account's sight (never listed at all), for board discovery (JO-17). project_search_cap: the page size
-        # Jira uses when it is below what was asked for.
         self.project_types: dict[str, str] = {}
         self.archived_projects: set[str] = set()
         self.hidden_projects: set[str] = set()
         self.project_search_cap = 50
-        self.issues: dict[str, FakeIssue] = {}  # by issue id
+        self.issues: dict[str, FakeIssue] = {}
         self.worklogs: dict[int, FakeWorklog] = {}
         self.deleted_worklogs: list[tuple[int, datetime]] = []
-        self.issue_links: list[tuple[str, str, str, str]] = []  # (id, type, from issue id, to issue id)
-        # Each project's assignable users (user/assignable/search), as Jira's user objects; none until a test adds
-        # some (add_member), so a sync's member fetch finds an empty list.
+        self.issue_links: list[tuple[str, str, str, str]] = []
         self.members: dict[str, list[dict[str, Any]]] = {}
-        # Jira reads the site's users in [startAt, startAt + maxResults), up to the thousandth (ASSIGNABLE_LIMIT),
-        # and sends those of them who can be assigned, so a page is often short or empty while more follow, and no
-        # one past the 1,000th is ever sent. members_first_place: the place among the site's users of a project's
-        # first assignable user (0: the site's first), which a test may move during a read, as an account joining
-        # or leaving the site ahead of everyone moves the places in Jira. members_spread: the places from one of a
-        # project's assignable users to the next (1: side by side). And a server that ignores startAt and always
-        # sends the first page.
         self.members_first_place = 0
         self.members_spread = 1
         self.members_ignore_start = False
-        # The site's accounts as users/search lists them (made up; Jira lists people, apps and former users alike):
-        # how many there are, far fewer than ASSIGNABLE_LIMIT unless a test says otherwise, and whether the
-        # account may list them (the global permission Browse users and groups; without it Jira answers 403).
         self.site_user_count = 25
         self.browse_users = True
-        # Page sizes Jira uses when they are below what was asked for.
         self.search_page_cap = 100
         self.bulk_page_size = 1000
         self.changelog_page_cap = 100
         self.feed_page_size = 1000
-        # How long each request takes on the fake clock.
         self.request_tick = timedelta(0)
         self.requests: list[httpx.Request] = []
         self.sleeps: list[float] = []
@@ -215,8 +163,6 @@ class FakeJira:
         self._remote_ids = itertools.count(80001)
         self._pr_numbers = itertools.count(1)
         self._tokens: dict[str, Any] = {}
-
-    # --- wiring -------------------------------------------------------------------------
 
     def client_kwargs(self) -> dict[str, Any]:
         return {
@@ -248,7 +194,6 @@ class FakeJira:
     def fail(
         self, route: str, *, status: int = 503, when: Callable[[httpx.Request], bool] = lambda _r: True
     ) -> Callable[[], None]:
-        """Answer `status` on `route` (for requests `when` accepts) until the returned undo is called."""
 
         def fault(request: httpx.Request) -> httpx.Response | None:
             if route_of(request.url.path) == route and when(request):
@@ -270,8 +215,6 @@ class FakeJira:
     def jqls(self) -> list[str]:
         return [json.loads(r.content)["jql"] for r in self.calls(SEARCH)]
 
-    # --- changes, as Jira makes them -------------------------------------------------------
-
     def add_project(self, key: str, name: str | None = None, project_type: str = "software") -> None:
         self.project_ids[key] = str(10023 + len(self.project_ids))
         self.project_names[key] = name or f"{key} (sample)"
@@ -282,8 +225,6 @@ class FakeJira:
         return next(issue for issue in self.issues.values() if issue.key == key)
 
     def add_member(self, project: str, account: str, name: str | None = None, **extra: Any) -> dict[str, Any]:
-        """One of the project's assignable users, as Jira's user object carries one (email address, time zone,
-        locale and all); `extra` overrides any field (accountType, active, avatarUrls, ...)."""
         user: dict[str, Any] = {
             "self": f"{BASE_URL}/rest/api/3/user?accountId={account}",
             "accountId": account,
@@ -343,7 +284,6 @@ class FakeJira:
 
     def set_points(self, key: str, points: float) -> None:
         issue = self.issue(key)
-        # Story points keep the value in the strings; from/to are null (observed).
         item = _item(
             "Story point estimate", "custom", POINTS_FIELD, None, _num(issue.points), None, _num(points)
         )
@@ -400,7 +340,7 @@ class FakeJira:
             _timespent_item(issue.time_spent, total),
             author="app-tempo",
         )
-        issue.time_spent = total  # 0, not null, once the last worklog is gone
+        issue.time_spent = total
         self.deleted_worklogs.append((worklog_id, at))
 
     def add_remote_link(self, key: str) -> None:
@@ -426,7 +366,6 @@ class FakeJira:
         self._change(issue, _item("RemoteWorkItemLink", "jira", None, None, None, str(link_id), note))
 
     def link(self, type_name: str, from_key: str, to_key: str) -> None:
-        """`from_key` <outward> `to_key`, e.g. AIL-4 blocks AIL-5. Both issues change."""
         source, target = self.issue(from_key), self.issue(to_key)
         self.issue_links.append((str(next(self._link_ids)), type_name, source.id, target.id))
         _, inward, outward = LINK_TYPES[type_name]
@@ -452,7 +391,6 @@ class FakeJira:
         del self.issues[issue.id]
 
     def move(self, key: str, project: str) -> str:
-        """Move an issue to another project: same id, new key, and (team-managed) no parent."""
         issue = self.issue(key)
         self._numbers[project] += 1
         new_key = f"{project}-{self._numbers[project]}"
@@ -466,10 +404,7 @@ class FakeJira:
         )
         return new_key
 
-    # --- payloads ---------------------------------------------------------------------------
-
     def ts(self, at: datetime) -> str:
-        """Jira's timestamp form: account zone, milliseconds, offset without a colon."""
         local = at.astimezone(self.zone)
         millis = f"{local.microsecond // 1000:03d}"
         return local.strftime("%Y-%m-%dT%H:%M:%S.") + millis + local.strftime("%z")
@@ -504,7 +439,6 @@ class FakeJira:
         }
 
     def brief(self, issue: FakeIssue) -> dict[str, Any]:
-        """How another issue (a parent, a linked issue) appears inside an issue."""
         return {
             "id": issue.id,
             "key": issue.key,
@@ -533,7 +467,6 @@ class FakeJira:
         return links
 
     def payload(self, issue: FakeIssue, fields: list[str] | None = None) -> dict[str, Any]:
-        """One search result; only the requested fields, as Jira does."""
         values: dict[str, Any] = {
             "project": {
                 "self": f"{BASE_URL}/rest/api/3/project/{self.project_ids[issue.project]}",
@@ -598,7 +531,6 @@ class FakeJira:
         }
 
     def history(self, history: dict[str, Any], *, epoch: bool) -> dict[str, Any]:
-        """A changelog history: bulk fetch dates it in epoch ms (documented), the rest in ISO (observed)."""
         if history["author"] == "app-tempo":
             author = TEMPO
         else:
@@ -642,8 +574,6 @@ class FakeJira:
             }
             for name, (type_id, level) in ISSUE_TYPES.items()
         ]
-
-    # --- endpoints ------------------------------------------------------------------------
 
     def _answer(self, request: httpx.Request) -> httpx.Response:
         handlers: dict[tuple[str, str | None], Callable[[httpx.Request], httpx.Response]] = {
@@ -707,9 +637,6 @@ class FakeJira:
         )
 
     def _project_search(self, request: httpx.Request) -> httpx.Response:
-        """project/search: a PageBean of the projects the account can browse, by key, paged by startAt and maxResults
-        (at most project_search_cap). status=live (asked by the client) leaves the archived ones out; a project out of
-        the account's sight is never listed."""
         start, size = _offset_params(request, self.project_search_cap)
         live = request.url.params.get("status") == "live"
         keys = sorted(key for key in self.project_ids
@@ -744,7 +671,6 @@ class FakeJira:
         return httpx.Response(200, json=self.project_statuses())
 
     def _probe(self, body: dict[str, Any], match: re.Match[str]) -> httpx.Response:
-        """Doctor's `project in (...) AND cf[N] is not EMPTY`, answered from the issues' fields."""
         keys = re.findall(r'"([^"]+)"', match["keys"])
         unknown = [key for key in keys if key not in self.project_ids]
         if not keys or unknown:
@@ -773,7 +699,6 @@ class FakeJira:
             return _error(400, f"The value '{match['project']}' does not exist for the field 'project'.")
         issues = self.project_issues(match["project"])
         if match["since"]:
-            # JQL dates are read in the account's zone, to the minute.
             since = datetime.strptime(match["since"], "%Y-%m-%d %H:%M").replace(tzinfo=self.zone)
             issues = [i for i in issues if i.updated >= since]
         order = sorted(issues, key=lambda i: (i.updated, int(i.id)))
@@ -800,7 +725,7 @@ class FakeJira:
             issue = self._by_ref(ref)
             if issue is None:
                 continue
-            for history in reversed(issue.histories):  # newest first: order isn't guaranteed
+            for history in reversed(issue.histories):
                 items = [item for item in history["items"] if item.get("fieldId") in wanted]
                 if items:
                     flat.append((issue.id, self.history(history, epoch=True) | {"items": items}))
@@ -878,8 +803,6 @@ class FakeJira:
         return httpx.Response(200, json=[self.worklog(self.worklogs[i]) for i in ids if i in self.worklogs])
 
     def _assignable(self, request: httpx.Request) -> httpx.Response:
-        """A plain JSON array of user objects, paged by startAt and maxResults; an unknown project is a 404. Only the
-        site's first ASSIGNABLE_LIMIT places are read, so a page from startAt 1000 on is always empty."""
         project = request.url.params.get("project", "")
         if project not in self.project_ids:
             return _error(404, f"No project could be found with key '{project}'.")
@@ -891,9 +814,6 @@ class FakeJira:
         return httpx.Response(200, json=[user for n, user in enumerate(users) if start <= first + n * spread < end])
 
     def _site_users(self, request: httpx.Request) -> httpx.Response:
-        """users/search: the site's accounts (site_user_count of them, made up), a plain JSON array paged by startAt
-        and maxResults (50 unless asked), so empty from startAt site_user_count on; 403 without Browse users and
-        groups."""
         if not self.browse_users:
             return _error(403, "You do not have the permission to browse users and groups.")
         start = int(request.url.params.get("startAt", 0))
@@ -930,7 +850,6 @@ def _item(
 
 
 def _timespent_item(before: int | None, after: int) -> dict[str, Any]:
-    # Seconds as text in from/to and in the strings (observed).
     return _item("timespent", "jira", "timespent", _num(before), _num(before), str(after), str(after))
 
 
@@ -941,7 +860,6 @@ def _num(value: float | int | None) -> str | None:
 
 
 def _field(field_id: str, name: str, schema_type: str, custom_type: str | None) -> dict[str, Any]:
-    """One field as GET /rest/api/3/field lists it."""
     item: dict[str, Any] = {
         "id": field_id,
         "key": field_id,
@@ -964,7 +882,6 @@ def _field(field_id: str, name: str, schema_type: str, custom_type: str | None) 
 
 
 def _site_user(place: int) -> dict[str, Any]:
-    """The site's user at `place`, as users/search lists one (made up, email address and all)."""
     account = f"acc-site-{place:04d}"
     return {
         "self": f"{BASE_URL}/rest/api/3/user?accountId={account}",
@@ -982,4 +899,3 @@ def _error(status: int, message: str) -> httpx.Response:
 
 def _offset_params(request: httpx.Request, cap: int) -> tuple[int, int]:
     return int(request.url.params.get("startAt", 0)), min(int(request.url.params.get("maxResults", cap)), cap)
-

@@ -1,36 +1,15 @@
 <#
 .SYNOPSIS
-    One oversight cycle: `discover`, `sync --incremental`, then `derive` (and `rules` with `baseline --missing`,
-    `digest` when asked).
-
-.DESCRIPTION
-    Meant for Windows Task Scheduler, every 30 minutes (docs/REFERENCE.md, "Scheduling").
-    Runs from the project root with jira_env's Python and appends everything the
-    commands print (the reports on stdout, the JSON logs on stderr) to
-    logs\cycle_YYYY-MM-DD.log. First it lists every board the Jira account can
-    browse (`discover`, JO-17; nothing with BOARD_DISCOVERY=off): a failed search
-    is noted in the log and the cycle goes on, as the boards stored before stay.
-    Then it stops at the first command that fails and exits with that command's
-    exit code (docs/REFERENCE.md, "Exit codes"); 0 means every step succeeded. sync,
-    derive and rules cover JIRA_PROJECTS and every other board synced before.
-    Only one cycle runs at a time on this machine: a cycle that cannot start
-    within -WaitMinutes is skipped (exit 0, noted in the log).
+    One oversight cycle: `discover`, `sync --incremental`, then `derive` (and `rules` with `baseline --missing`, `digest` when asked).
 
 .PARAMETER Full
-    Read every issue (`sync --full`) instead of only what changed. Worth running
-    once a night: only a full sync notices issues deleted or moved in Jira.
+    Read every issue (`sync --full`) instead of only what changed.
 
 .PARAMETER Rules
-    Run `rules` after `derive`, so findings open and resolve with every cycle,
-    then `baseline --missing`: the baseline report of each synced board that has
-    none yet (a board first synced from the dashboard, say). A baseline that
-    fails is noted in the log and the cycle has still succeeded: the boards'
-    figures are in, and the next cycle tries again.
+    Run `rules` after `derive`, so findings open and resolve with every cycle, then `baseline --missing`: the baseline report of each synced board that has none yet (a board first synced from the dashboard, say).
 
 .PARAMETER Digest
-    Send the daily digest (`digest`) last. It goes out even when an earlier step
-    failed: it says at the top when the data may be stale, so a broken sync never
-    looks like a quiet day. scripts\morning.ps1 runs the cycle this way.
+    Send the daily digest (`digest`) last.
 
 .PARAMETER Channel
     With -Digest: file, email or teams, instead of DIGEST_CHANNEL.
@@ -49,12 +28,6 @@
 
 .EXAMPLE
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\run_cycle.ps1
-
-.EXAMPLE
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\run_cycle.ps1 -Full
-
-.EXAMPLE
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\run_cycle.ps1 -Rules
 #>
 [CmdletBinding()]
 param(
@@ -88,11 +61,6 @@ function Invoke-Oversight([string[]] $Arguments) {
     $text = 'python -m oversight ' + ($Arguments -join ' ')
     Write-Log "start: $text"
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
-    # cmd.exe appends the bytes exactly as Python writes them (UTF-8, below), and
-    # Python's stderr never turns into PowerShell errors (Windows PowerShell 5.1
-    # would stop on the first JSON log line). The command travels in a variable:
-    # cmd expands it before it parses quotes and redirections, so PowerShell never
-    # has to quote it (its native argument quoting differs between versions).
     $env:OVERSIGHT_COMMAND = '"{0}" -m oversight {1} >> "{2}" 2>&1' -f $Python, ($Arguments -join ' '), $log
     & $env:ComSpec /d /c '%OVERSIGHT_COMMAND%' | Out-Null
     $code = $LASTEXITCODE
@@ -139,7 +107,6 @@ try {
         if ($Rules) { $steps += 'rules', 'baseline' }
         if ($Digest) { $steps += 'digest' }
         Write-Log ('cycle started (discover, then sync {0}, then {1})' -f $mode, (($steps | Select-Object -Skip 1) -join ', then '))
-        # Board discovery (JO-17) never fails the cycle: the boards stored before stay.
         $code = Invoke-Oversight -Arguments @('discover')
         if ($code -ne 0) { Write-Log "discover failed (exit $code); the boards stored before stay" }
         $failed = ''

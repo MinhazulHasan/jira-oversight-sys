@@ -1,14 +1,3 @@
-# Sprint rules: W-EST-01 (unestimated work in an active sprint) and W-SPR-01
-# (an active sprint with at most 2 days left and more than 30% of its issues
-# not started), on AIL and HRS.
-#
-# `sprints` are the sprint objects as Jira puts them in an issue's sprint field
-# (customfield_10020, tests/fixtures/config/fields.yaml); a case's `sprints`
-# lists the ones its issue carries, and the loader writes them into raw_json
-# and sprint_ids. A sprint's members are the issues that carry it; Epics are
-# not counted. "Not started" = not done and never entered development.
-# Format otherwise: see estimates.yaml. `now` is 2026-11-04T12:00Z.
-
 sprints:
   # 1.0 day left (ends 11-05 12:00).
   701: {name: AIL Sprint 7, state: active, startDate: "2026-10-22T09:00:00.000Z", endDate: "2026-11-05T12:00:00.000Z"}
@@ -28,7 +17,6 @@ sprints:
 defaults: {issue_type: Task, assignee_id: acc-team-1}
 
 cases:
-  # --- AIL Sprint 7 (701): 4 members, 2 not started ----------------------------------
   - about: "To Do, estimated, not started"
     sprints: [701]
     issue: {issue_key: AIL-601, status: To Do, created_at: "2026-10-22T09:00:00.000Z", story_points: 2.0}
@@ -49,7 +37,6 @@ cases:
       - {changelog_id: "16041", changed_at: "2026-10-23T10:00:00.000Z", from_status: To Do, to_status: In Progress}
       - {changelog_id: "16042", changed_at: "2026-10-24T10:00:00.000Z", from_status: In Progress, to_status: Done}
 
-  # --- AIL Sprint 8 (702): 2 members, 1 not started, but 6 days left -----------------
   - about: "To Do with no estimate"
     sprints: [702]
     issue: {issue_key: AIL-605, status: To Do, created_at: "2026-11-03T09:00:00.000Z", story_points: null}
@@ -60,12 +47,10 @@ cases:
     status_changes:
       - {changelog_id: "16061", changed_at: "2026-11-04T09:00:00.000Z", from_status: To Do, to_status: In Progress}
 
-  # --- AIL Sprint 6 (703, closed) --------------------------------------------------------
   - about: "Unestimated, back in the backlog after the closed Sprint 6"
     sprints: [703]
     issue: {issue_key: AIL-607, status: To Do, created_at: "2026-10-08T09:00:00.000Z", story_points: null}
 
-  # --- AIL Support 3 (704): 3 members and an Epic, 1 not started -----------------------
   - about: "To Do, estimated, not started"
     sprints: [704]
     issue: {issue_key: AIL-608, status: To Do, created_at: "2026-10-23T09:00:00.000Z", story_points: 1.0}
@@ -87,7 +72,6 @@ cases:
     issue: {issue_key: AIL-611, issue_type: Epic, status: Done, created_at: "2026-10-23T09:00:00.000Z",
             story_points: null}
 
-  # --- HRS Sprint 3 (711): 3 members, 2 not started, ended a day ago --------------------
   - about: "Open, estimated, not started"
     sprints: [711]
     issue: {issue_key: HRS-601, status: Open, created_at: "2026-10-20T09:00:00.000Z", original_estimate_s: 28800}
@@ -103,7 +87,6 @@ cases:
       - {changelog_id: "26031", changed_at: "2026-10-21T10:00:00.000Z", from_status: Open, to_status: In Progress}
       - {changelog_id: "26032", changed_at: "2026-10-22T10:00:00.000Z", from_status: In Progress, to_status: Closed}
 
-  # --- HRS Support 1 (712): 4 members, 1 not started --------------------------------------
   - about: "Open, estimated, not started"
     sprints: [712]
     issue: {issue_key: HRS-604, status: Open, created_at: "2026-10-22T09:00:00.000Z", original_estimate_s: 14400}
@@ -127,7 +110,6 @@ cases:
       - {changelog_id: "26071", changed_at: "2026-10-27T10:00:00.000Z", from_status: Open, to_status: In Progress}
       - {changelog_id: "26072", changed_at: "2026-10-28T10:00:00.000Z", from_status: In Progress, to_status: Closed}
 
-  # --- HRS Sprint 4 (713, future) -----------------------------------------------------------
   - about: "Unestimated, planned only for the future Sprint 4"
     sprints: [713]
     issue: {issue_key: HRS-608, status: Open, created_at: "2026-10-30T09:00:00.000Z", original_estimate_s: null}

@@ -12,9 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError,
 
 from oversight.errors import ConfigError
 
-# Logical field name -> names to look for in GET /rest/api/3/field, in order of
-# preference. Team-managed projects (AIL) use "Story point estimate";
-# company-managed ones usually use "Story Points".
 FIELD_CANDIDATES: dict[str, tuple[str, ...]] = {
     "story_points": ("Story point estimate", "Story Points"),
     "sprint": ("Sprint",),
@@ -36,8 +33,6 @@ SYSTEM_TRACKED: dict[str, str] = {
     "assignee": "assignee",
 }
 
-# Custom fields whose changelog history we keep, by logical name. With the four
-# system fields that makes ten, the most one bulk changelog request accepts.
 CUSTOM_TRACKED: tuple[str, ...] = (
     "story_points",
     "sprint",
@@ -73,12 +68,7 @@ FIELDS_HEADER = (
 
 
 def load_yaml(path: Path) -> Any:
-    """A YAML config file's content. Every way it can't be read is a ConfigError.
-
-    That includes a folder or a locked file (OSError) and a file that is not
-    UTF-8, such as Notepad's "Unicode" (UTF-16) save, so the CLI reports a
-    config error (exit 2) instead of a traceback.
-    """
+    """A YAML config file's content."""
     try:
         text = Path(path).read_text(encoding="utf-8")
     except FileNotFoundError as exc:
@@ -126,14 +116,9 @@ class ProjectProcess(BaseModel):
     evidence: dict[str, dict[str, Any] | None] = Field(default_factory=dict)
     # A synthetic project (the demo) has no Jira site behind it: nothing links to Jira.
     synthetic: bool = False
-    # Stage -> the first day (UTC) the workflow had a status for it. A status change
-    # before that day is judged without the stage, so work done before a stage existed
-    # never "skipped" it. Stages that were always there are left out.
     stages_since: dict[str, date] = Field(default_factory=dict)
 
     _folded: dict[str, str] = PrivateAttr(default_factory=dict)
-    # True for a board process.yaml does not map, whose mapping the service worked out from Jira's status categories
-    # (JO-17, oversight/boards.py); never set from process.yaml.
     _automatic: bool = PrivateAttr(default=False)
 
     def model_post_init(self, _context: Any) -> None:
@@ -141,7 +126,7 @@ class ProjectProcess(BaseModel):
 
     @property
     def automatic(self) -> bool:
-        """Whether this mapping was worked out by the service (JO-17) rather than written in process.yaml."""
+        """Whether this mapping was worked out by the service rather than written in process.yaml."""
         return self._automatic
 
     def stage_of(self, status: str | None) -> str | None:
@@ -193,17 +178,12 @@ class ProcessConfig(BaseModel):
             raise ConfigError(f"{Path(path).name} is invalid:\n{exc}") from exc
 
     def with_projects(self, projects: Mapping[str, ProjectProcess]) -> ProcessConfig:
-        """This process with `projects` added to (or replacing) its boards' entries; itself when there are none. How
-        the service maps every board it serves (oversight.boards.mapped_process: an automatic mapping for each board
-        process.yaml leaves out)."""
         if not projects:
             return self
         return self.model_copy(update={"projects": {**self.projects, **projects}})
 
     def project(self, key: str) -> ProjectProcess:
-        """The board's mapping. Every board the service serves has one once its process went through
-        oversight.boards.mapped_process (process.yaml's, else one worked out from Jira's status categories); any other
-        key is a ConfigError."""
+        """The board's mapping."""
         try:
             return self.projects[key]
         except KeyError:
@@ -213,13 +193,7 @@ class ProcessConfig(BaseModel):
         return self.project(project).stage_of(status)
 
     def ordered_stages(self, project: str, at: str | None = None) -> list[str]:
-        """The stages this project's workflow actually maps, in process order.
-
-        Skips are judged against this list; otherwise every In Progress -> Done
-        would "skip" stages the workflow has no status for. With `at` (an ISO
-        timestamp), a stage listed in stages_since counts only from its day on,
-        so a change made before a stage existed is judged without it.
-        """
+        """The stages this project's workflow actually maps, in process order."""
         config = self.project(project)
         mapped = set(config.status_to_stage.values())
         if at:
@@ -240,13 +214,7 @@ class ProcessConfig(BaseModel):
         return self.project(project).evidence.get(name) is not None
 
     def missing_evidence(self, project: str) -> list[str]:
-        """Stages whose evidence this project doesn't record, in process order.
-
-        That is every stage set to null under `evidence`, and every stage after
-        start_stage (before done) that the project neither names under
-        `evidence` nor maps a status to: has_evidence() is False for it too, so
-        leaving it out must not hide it from doctor and the baseline report.
-        """
+        """Stages whose evidence this project doesn't record, in process order."""
         config = self.project(project)
         mapped = set(config.status_to_stage.values())
         implied = {stage for stage in self.work_stages()[1:] if stage not in mapped}
@@ -286,8 +254,6 @@ class FieldsConfig(BaseModel):
             raise ConfigError(f"{Path(path).name} is invalid:\n{exc}") from exc
 
     def dump(self, path: Path) -> None:
-        """Write the file in one step (a temporary file, then a rename), so an
-        interrupted write never leaves sync half a file that still parses."""
         body = yaml.safe_dump(self.model_dump(mode="json"), sort_keys=False, allow_unicode=True)
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)

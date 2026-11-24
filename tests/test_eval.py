@@ -1,13 +1,4 @@
-"""The Q&A eval (Phase 6, ticket 15): the runner scores plans, outcomes,
-numbers and keys and writes the Markdown report; the shipped question set
-passes on the demo project with the scripted provider; the MCP eval XML is
-well formed and its answers hold on the same data.
-
-The runner is exercised on the small AIL snapshot (tests/test_catalog) with a
-fake provider, so every scoring path (misses, not_verified, slow answers) is
-reached deterministically. The shipped sets run on the default demo seeded,
-derived and rules-run at DEMO_NOW, the time questions.yaml's header records.
-"""
+"""The Q&A eval: runner scoring, the questions file, the shipped sets, the MCP eval XML and the CLI."""
 from __future__ import annotations
 
 import time
@@ -54,7 +45,6 @@ from tests.test_catalog import build_snapshot, fixed_now
 EVAL_DIR = PROJECT_ROOT / "tests" / "eval"
 QUESTIONS = EVAL_DIR / "questions.yaml"
 MCP_EVAL = EVAL_DIR / "mcp_eval.xml"
-# questions.yaml's header: the demo these expected values were computed on.
 DEMO_PROJECT = "DEMO"
 DEMO_SEED = 20261104
 DEMO_ISSUES = 1150
@@ -138,9 +128,6 @@ def run(
     )
 
 
-# --- scoring and the report ---------------------------------------------------------------------
-
-
 def test_run_qa_eval_scores_every_case_and_writes_the_report(
     snapshot: tuple[Store, ProcessConfig], rules: RulesConfig, settings: Settings, tmp_path: Path
 ) -> None:
@@ -158,7 +145,6 @@ def test_run_qa_eval_scores_every_case_and_writes_the_report(
     assert stuck.detail["model"] == "fake-model" and len(stuck.detail["qa_id"]) == 32 and stuck.detail["asked_at"] == "2026-11-04T12:00:00.000Z"
     assert stuck.latency_s >= 0 and isinstance(stuck.latency_s, float)
     assert person.detail["message"] == PERSON_REASON and person.detail["answer"] is None and person.detail["planned"] == []
-    # The report: one row per case, then the rates; the file is the rendering.
     assert report.report_path == tmp_path / "reports" / "qa_eval.md" and report.report_path.exists()
     text = report.report_path.read_text(encoding="utf-8")
     assert text == report.render() and text.startswith("# Q&A eval\n")
@@ -168,7 +154,6 @@ def test_run_qa_eval_scores_every_case_and_writes_the_report(
     assert "- Plan right: 4/4 (100.0%); target 90%." in text and "- Outcome right: 4/4 (100.0%)." in text
     assert "- Answered cases with every expected number and key: 1/1." in text and "- Result: PASSED." in text
     assert "## Misses" not in text and "with model fake-model" in text
-    # Every ask went through the audited path as the eval user.
     assert store.count("qa_log", {"asked_by": "eval"}) == 4
 
 
@@ -255,9 +240,6 @@ def test_a_wrong_plan_counts_against_the_plan_rate(
 def test_a_not_verified_answer_is_a_missed_outcome_but_not_a_shipped_number(
     snapshot: tuple[Store, ProcessConfig], rules: RulesConfig, settings: Settings, tmp_path: Path
 ) -> None:
-    """The scripted provider never produces not_verified; a fake one does. The
-    outcome is scored as a miss; passed follows the contract (plan rate and the
-    numbers of answered cases), so an unverified answer is not a shipped answer."""
     provider = four_provider(answers=["The median is 999 hours.", "Still 999 hours."])
     report = run(snapshot, rules, settings, provider, FOUR_CASES, tmp_path)
     stuck = report.results[0]
@@ -290,9 +272,6 @@ def test_an_empty_report_cannot_pass() -> None:
     assert "| 1 | x | x | ? | answered | ok | ok | ok | 0.50 |" in EvalReport([minimal], 1.0, 1.0, 0.5, True).render()
 
 
-# --- the questions file -------------------------------------------------------------------------
-
-
 def test_load_cases_reads_a_list_or_a_mapping_with_cases(tmp_path: Path) -> None:
     as_list = load_cases(write_cases(tmp_path / "list.yaml", FOUR_CASES))
     assert [case.id for case in as_list] == ["stuck", "person", "review", "unassigned"]
@@ -307,7 +286,6 @@ def test_load_cases_reads_a_list_or_a_mapping_with_cases(tmp_path: Path) -> None
     assert as_list[1].expected_numbers == [] and as_list[1].expected_keys == []
     as_mapping = load_cases(write_cases(tmp_path / "mapping.yaml", {"project": DEMO_PROJECT, "cases": FOUR_CASES}))
     assert as_mapping == as_list
-    # Numbers may be written as YAML numbers; an id may be a number; whitespace is trimmed.
     loose = [{"id": 7, "question": "  How many?  ", "expected_calls": [], "expected_outcome": "no_data", "expected_numbers": [736, 1.5, " 16% "]}]
     (case,) = load_cases(write_cases(tmp_path / "loose.yaml", loose))
     assert (case.id, case.question, case.expected_numbers) == ("7", "How many?", ["736", "1.5", "16%"])
@@ -349,9 +327,6 @@ def test_load_cases_needs_the_file(tmp_path: Path) -> None:
         load_cases(tmp_path / "missing.yaml")
 
 
-# --- the shipped sets on the demo ------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def demo(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Store, Settings, ProcessConfig, RulesConfig]]:
     """The default demo seeded, derived and rules-run at DEMO_NOW: the data questions.yaml was computed on."""
@@ -381,12 +356,12 @@ def test_the_shipped_eval_set_is_well_formed() -> None:
     cases = load_cases(QUESTIONS)
     assert len(cases) == 30
     assert [case.id for case in cases] == [f"q{n:02d}" for n in range(1, 31)]
-    assert {name for case in cases for name in case.expected_calls} == set(CATALOG)  # every tool
+    assert {name for case in cases for name in case.expected_calls} == set(CATALOG)
     outcomes = {case.expected_outcome for case in cases}
     assert {"answered", "not_understood", "not_measurable", "no_data"} <= outcomes <= set(OUTCOMES)
     answered = [case for case in cases if case.expected_outcome == "answered"]
     with_ground_truth = [case for case in answered if case.expected_numbers or case.expected_keys]
-    assert len(answered) >= 22 and len(with_ground_truth) >= len(answered) - 2  # only weekly trends go unchecked
+    assert len(answered) >= 22 and len(with_ground_truth) >= len(answered) - 2
     header = QUESTIONS.read_text(encoding="utf-8").split("\n- id:")[0]
     for recorded in (str(DEMO_SEED), DEMO_NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), DEMO_PROJECT, f"{DEMO_ISSUES:,}"):
         assert recorded in header, recorded
@@ -422,8 +397,8 @@ def test_the_shipped_eval_set_passes_on_the_demo(
     assert {r.outcome for r in report.results} == {"answered", "not_understood", "not_measurable", "no_data"}
     text = out_path.read_text(encoding="utf-8")
     assert "30 cases, 30/30 plans right (100%), 30/30 outcomes right (100%)" in text and "**PASSED**" in text
-    assert text.count("\n| ") == 31  # the header row and one row per case
-    assert "acc-" not in text and "app-tempo" not in text  # team and process level, no account ids
+    assert text.count("\n| ") == 31
+    assert "acc-" not in text and "app-tempo" not in text
 
 
 def test_the_shipped_eval_set_records_every_question_in_the_audit_trail(
@@ -436,9 +411,6 @@ def test_the_shipped_eval_set_records_every_question_in_the_audit_trail(
     asked = [row["question"] for row in rows]
     assert len(asked) >= 30 and {case.question for case in load_cases(QUESTIONS)} <= set(asked)
     assert all(row["model"] in (None, "scripted") for row in rows)
-
-
-# --- the MCP eval XML --------------------------------------------------------------------------------
 
 
 def _facts(demo: tuple[Store, Settings, ProcessConfig, RulesConfig], name: str, params: dict[str, Any]) -> Facts:
@@ -455,7 +427,6 @@ def _percent(share: float) -> str:
     return f"{round(share * 100)}%"
 
 
-# Each shipped question, with the catalogue calls that compute its answer (the same way the file was built).
 MCP_ANSWERS: dict[str, Callable[[tuple[Store, Settings, ProcessConfig, RulesConfig]], str]] = {
     "How many DEMO issues are in status In Progress right now?": lambda demo: str(
         _facts(demo, "oversight_count_issues", {"status": "In Progress"}).rows[0]["count"]
@@ -501,7 +472,7 @@ def test_the_mcp_eval_xml_is_well_formed() -> None:
     assert all(set(pair.attrib) == set() and [child.tag for child in pair] == ["question", "answer"] for pair in pairs)
     assert [q.strip() for q in questions] == list(MCP_ANSWERS)
     for question in questions:
-        assert "DEMO" in question  # every question names the project an MCP client must pass
+        assert "DEMO" in question
 
 
 def test_the_mcp_eval_answers_hold_on_the_demo(demo: tuple[Store, Settings, ProcessConfig, RulesConfig]) -> None:
@@ -511,15 +482,11 @@ def test_the_mcp_eval_answers_hold_on_the_demo(demo: tuple[Store, Settings, Proc
         assert MCP_ANSWERS[question](demo) == answer, question
 
 
-# --- the CLI ----------------------------------------------------------------------------------------------
-
-
 def test_the_cli_eval_command_runs_the_scripted_provider(
     process: ProcessConfig, settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with Store.open(settings.db_file) as store:
         build_snapshot(store, process)
-        # In progress as the Overview and the Portfolio count it: the board's work (Epics left out) by status category.
         in_progress = store.conn.execute(
             "SELECT COUNT(*) FROM issues WHERE project_key = 'AIL' AND status_category = 'indeterminate'"
             " AND lower(issue_type) != 'epic'").fetchone()[0]
@@ -557,16 +524,12 @@ def test_the_cli_eval_command_runs_the_scripted_provider(
     assert "config error" in capsys.readouterr().err
 
 
-# --- the dataset header and the self-contained CLI run -------------------------------------------------
-
-
 def test_the_shipped_set_names_its_dataset() -> None:
     assert load_dataset(QUESTIONS) == EvalDataset(project=DEMO_PROJECT, seed=DEMO_SEED, issues=DEMO_ISSUES, now=DEMO_NOW)
 
 
 def test_a_plain_list_of_cases_has_no_dataset(tmp_path: Path) -> None:
     assert load_dataset(write_cases(tmp_path / "plain.yaml", FOUR_CASES)) is None
-    # The mapping form without a header is still read for its cases.
     assert len(load_cases(write_cases(tmp_path / "mapped.yaml", {"cases": FOUR_CASES}))) == 4
 
 
@@ -591,8 +554,6 @@ def test_a_bad_dataset_header_is_a_config_error(tmp_path: Path, header: Any, mat
 def test_the_cli_eval_rebuilds_the_dataset_and_never_touches_the_snapshot(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # No --questions: the shipped set. Its header says which demo to build; the configured
-    # database is neither read nor created, and the real clock plays no part.
     assert cli_main(["eval"], settings=settings) == EXIT_OK
     out = capsys.readouterr().out
     assert "30 cases, 30/30 plans right (100%), 30/30 outcomes right (100%)" in out and "**PASSED**" in out

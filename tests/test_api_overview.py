@@ -1,13 +1,3 @@
-"""GET /overview (contract 4.2) and GET /trends (4.8) against a seeded DEMO store.
-
-Shapes are checked field by field against the zod schemas in the interface's
-src/lib/api/schemas.ts; values against the database. The DEMO store has a
-findings history: a first rules run 35 days back (exactly on a rolling-window
-edge, with looser effort thresholds), a second 10 days back that clears the
-looser findings and opens the real ones, and a third now. A tiny hand-built
-store pins the edges: Monday 00:00 UTC weeks, the effort-ratio rule of contract
-8.2, null weeks, the no-epic hot spot and a missing briefing.
-"""
 from __future__ import annotations
 
 import json
@@ -38,11 +28,10 @@ from oversight.timeutil import UTC, parse_ts, to_iso
 from tests.conftest import CONFIG_FIXTURES, VIEWER_HEADERS
 
 KEY = "test-key"
-NOW = datetime(2026, 11, 4, 14, 30, tzinfo=UTC)  # a Wednesday; its week starts Monday 2 November
+NOW = datetime(2026, 11, 4, 14, 30, tzinfo=UTC)
 FIRST_RUN = NOW - timedelta(days=35)  # a window edge: findings first seen here sit on both sides of it
 SECOND_RUN = NOW - timedelta(days=10, hours=3)
 
-# The contract's patterns and enums (schemas.ts).
 ISO_Z = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ISSUE_KEY = re.compile(r"^[A-Z][A-Z0-9_]{1,19}-[1-9]\d{0,8}$")
@@ -56,10 +45,7 @@ METRICS = ("median_cycle_time_h", "median_effort_ratio", "skipped_stage_share", 
 DONE_METRICS = METRICS[:4]
 TOTALS = ("open_breaches", "open_warnings", "new_7d", "resolved_7d", "issues_in_scope", "rules_not_measurable")
 COVERAGE = ("estimate", "story_points", "time_logged", "code_review", "test_evidence")
-TOLERANCE = 1e-4  # figures travel rounded to 4 decimals
-
-
-# --- the zod schema, as assertions ---------------------------------------------------------
+TOLERANCE = 1e-4
 
 
 def is_count(value: Any) -> bool:
@@ -173,9 +159,6 @@ def assert_overview_shape(body: dict[str, Any], now: datetime = NOW) -> None:
             assert all(FINDING_ID.fullmatch(f) for f in sentence["finding_ids"])
 
 
-# --- fixtures ------------------------------------------------------------------------------
-
-
 def make_settings(root: Path) -> Settings:
     return Settings(
         _env_file=None,
@@ -237,9 +220,7 @@ def overview(client: TestClient) -> dict[str, Any]:
     return response.json()
 
 
-# A tiny store whose every figure is worked out by hand in the tests below.
 TINY_ISSUES = [
-    # key, type, status, category, created_at, time_spent_s, story_points, epic_key, parent_key
     ("DEMO-1", "Task", "Done", "done", "2026-10-01T09:00:00.000Z", 3600, 3.0, None, None),
     ("DEMO-2", "Task", "Done", "done", "2026-10-01T09:00:00.000Z", 0, 2.0, None, None),
     ("DEMO-3", "Bug", "Done", "done", "2026-10-01T09:00:00.000Z", 7200, None, None, None),
@@ -248,13 +229,11 @@ TINY_ISSUES = [
     ("DEMO-6", "Subtask", "In Progress", "indeterminate", to_iso(NOW - timedelta(days=1)), None, None, None, "DEMO-4"),
 ]
 TINY_METRICS = [
-    # key, done_at, cycle_time_h, effort_ratio, skipped_stages, reopen_count
     ("DEMO-1", "2026-11-02T00:00:00.000Z", 10.0, 2.0, "[]", 0),  # the current week's first instant
     ("DEMO-2", "2026-11-01T23:59:59.999Z", 30.0, 0.0, '["development"]', 1),  # the week before's last; no time
     ("DEMO-3", "2026-10-27T12:00:00.000Z", 50.0, 1.0, "[]", 0),
 ]
 TINY_FINDINGS = [
-    # rule_id, kind, severity, issue_key, first_seen_at, resolved_at
     ("R-EST-01", "rule", "breach", "DEMO-4", NOW - timedelta(days=20), None),
     ("W-AGE-01", "warning", "warning", "DEMO-6", NOW - timedelta(days=3), None),  # a subtask: its parent's epic
     ("W-SPR-01", "warning", "warning", "sprint:77", NOW - timedelta(days=1), None),  # a sprint: no epic
@@ -322,48 +301,33 @@ def week_bounds(point: dict[str, Any]) -> tuple[str, str]:
     return to_iso(start) or "", to_iso(start + timedelta(days=7)) or ""
 
 
-# --- the tiny store: every figure by hand --------------------------------------------------
-
-
 def test_tiny_overview_has_the_contract_shape(tiny_overview: dict[str, Any]) -> None:
     assert_overview_shape(tiny_overview)
 
 
 def test_tiny_totals_count_rolling_windows_with_both_edges(tiny_overview: dict[str, Any]) -> None:
     totals = tiny_overview["totals"]
-    # Windows end at now - 77 days, ..., now - 7 days, now. R-FLOW-02 opened 30 days back and
-    # cleared 2 days back; R-HYG-01 was first seen exactly 7 days back, so it is new in both
-    # of the last two windows and open at the end of the one before now.
     assert values(totals["open_breaches"]["series"]) == [0] * 7 + [1, 1, 2, 4, 3]
     assert values(totals["open_warnings"]["series"]) == [0] * 11 + [2]
     assert values(totals["new_7d"]["series"]) == [0] * 7 + [1, 0, 1, 2, 3]
     assert values(totals["resolved_7d"]["series"]) == [0] * 11 + [1]
-    # DEMO-6 was created yesterday; the Epic is never counted.
     assert values(totals["issues_in_scope"]["series"]) == [0] * 7 + [4, 4, 4, 4, 5]
-    # R-FLOW-01 and W-REV-01: DEMO records no code review or testing.
     assert values(totals["rules_not_measurable"]["series"]) == [2] * 12
     assert totals["open_breaches"]["series"][-2]["end_at"] == "2026-10-28T14:30:00.000Z"
 
 
 def test_tiny_hot_spots_put_the_no_epic_group_after_the_epics(tiny_overview: dict[str, Any]) -> None:
     spots = tiny_overview["hot_spots"]
-    # The no-epic group has more breaches, but a hot spot is an epic: the group comes after.
-    # It holds the sprint finding (W-SPR-01), which is a finding but not an issue.
     assert [(s["epic_key"], s["epic_title"], s["open_breaches"], s["open_warnings"], s["issues"]) for s in spots] == [
         ("DEMO-5", "Payments", 1, 1, 2),
         (None, "(no epic)", 2, 1, 2),
     ]
-    # Open at each week's end (the next Monday 00:00 UTC); the current week's point is open now.
     assert values(spots[0]["series"]) == [0] * 8 + [1, 1, 2, 2]
-    # R-FLOW-02 was resolved on Monday 2 November at 14:30: still open at the end of the week before.
     assert values(spots[1]["series"]) == [0] * 7 + [1, 1, 1, 3, 3]
 
 
 def test_tiny_trend_cards_use_monday_weeks_and_skip_unlogged_effort(tiny_overview: dict[str, Any]) -> None:
     cards = tiny_overview["trend_cards"]
-    # DEMO-1 was done at Monday 00:00:00.000 UTC: this week. DEMO-2 a millisecond before: last week.
-    # DEMO-2 has an estimate and nothing logged (ratio 0): left out of the effort median (contract 8.2),
-    # which would otherwise be 0.5. It still counts in last week's shares.
     assert {metric: (card["current"], card["previous"]) for metric, card in cards.items()} == {
         "median_cycle_time_h": (10.0, 40.0),
         "median_effort_ratio": (2.0, 1.0),
@@ -371,7 +335,6 @@ def test_tiny_trend_cards_use_monday_weeks_and_skip_unlogged_effort(tiny_overvie
         "reopen_rate": (0.0, 0.5),
     }
     for card in cards.values():
-        # Nothing finished in the ten weeks before: null, never 0.
         assert values(card["points"])[:10] == [None] * 10
     assert [(c["label"], c["unit"], c["direction_good"]) for c in cards.values()] == [
         ("Median cycle time", "hours", "down"),
@@ -415,8 +378,6 @@ def test_tiny_coverage_status_mix_rules_and_teaser(tiny_overview: dict[str, Any]
 
 
 def test_a_condition_raised_again_under_a_new_id_was_first_seen_with_its_first_finding() -> None:
-    """New counts conditions (a rule on a ticket, by evidence key), so a severity changed on the board, which raises
-    each of the rule's hits again under a new id, adds nothing new (JO-15; the weekly insights count them so too)."""
     warned = Finding("warning", "2026-10-01T09:00:00.000Z", "2026-11-03T09:00:00.000Z", "DEMO-1", None, None,
                      "R-FLOW-03", "reopen-7", "superseded")
     as_breach = warned._replace(severity="breach", first_seen_at="2026-11-03T09:00:00.000Z", resolved_at=None,
@@ -436,16 +397,10 @@ def test_weeks_start_on_monday_at_midnight_utc() -> None:
         ("2026-11-09", "2026-11-09T00:00:00.000Z", "2026-11-16T00:00:00.000Z"),
     ]
     assert weeks(monday - timedelta(milliseconds=1), 1)[0][0] == "2026-11-02"
-    # Monday 02:00 at +05:00 is still Sunday in UTC.
     assert weeks(datetime(2026, 11, 9, 2, 0, tzinfo=timezone(timedelta(hours=5))), 1)[0][0] == "2026-11-02"
     assert [t for t, _start, _end in weeks(NOW)][0] == "2026-08-17"
 
 
-# --- the DEMO store: values against the database -------------------------------------------
-
-# Each window total, as the contract words it (4.2), independently of the implementation. New counts conditions (a
-# rule on a ticket, by evidence key) by their first sighting under any id; resolved counts the findings the rules
-# stopped finding (cleared), never those a change of rules closed.
 WINDOW_SQL = {
     "open_breaches": "SELECT COUNT(*) FROM findings WHERE project_key = 'DEMO' AND severity = 'breach'"
     " AND first_seen_at <= :end AND (resolved_at IS NULL OR resolved_at > :end)",
@@ -481,7 +436,6 @@ def test_overview_has_the_contract_shape(overview: dict[str, Any]) -> None:
 
 
 def test_meta_names_the_report_zone_setting_never_the_sync_accounts(demo: Settings) -> None:
-    # The demo's sync recorded its account's zone, Europe/London: it stays in the service.
     chicago = make_client(demo.model_copy(update={"report_timezone": "America/Chicago"}), NOW)
     for path in ("/api/v1/overview", "/api/v1/findings", "/api/v1/health"):
         response = chicago.get(path)
@@ -493,7 +447,6 @@ def test_meta_names_the_report_zone_setting_never_the_sync_accounts(demo: Settin
 
 def test_totals_equal_the_counts_in_findings(overview: dict[str, Any], db: sqlite3.Connection) -> None:
     totals = overview["totals"]
-    # The current windows are what the Findings page lists for the same filters.
     open_sql = "SELECT COUNT(*) FROM findings WHERE project_key = 'DEMO' AND severity = :s AND resolved_at IS NULL"
     assert totals["open_breaches"]["current"] == count(db, open_sql, s="breach") > 0
     assert totals["open_warnings"]["current"] == count(db, open_sql, s="warning") > 0
@@ -513,13 +466,11 @@ def test_totals_equal_the_counts_in_findings(overview: dict[str, Any], db: sqlit
 
 def test_totals_follow_the_findings_history(overview: dict[str, Any], db: sqlite3.Connection) -> None:
     totals = overview["totals"]
-    # The looser thresholds' findings the second run no longer found: cleared, every one.
     resolved = count(db, "SELECT COUNT(*) FROM findings WHERE resolved_at = :at", at=to_iso(SECOND_RUN))
     cleared = count(db, "SELECT COUNT(*) FROM findings WHERE resolved_at = :at AND resolved_why = 'cleared'",
                     at=to_iso(SECOND_RUN))
     assert (totals["resolved_7d"]["previous"], totals["resolved_7d"]["current"]) == (cleared, 0)
     assert cleared == resolved > 0
-    # The first run sits on the edge between two windows; both edges count, so both windows have it.
     first = count(db, "SELECT COUNT(*) FROM findings WHERE first_seen_at = :at", at=to_iso(FIRST_RUN))
     new = totals["new_7d"]["series"]
     assert new[6]["end_at"] == to_iso(FIRST_RUN)
@@ -563,7 +514,6 @@ def test_the_no_epic_group_holds_sprint_findings(db: sqlite3.Connection) -> None
     no_epic_open = sum(1 for epic, *_rest, resolved in db.execute(OPEN_BY_EPIC_SQL) if epic is None and not resolved)
     assert sprint_open >= 1
     assert every[-1]["open_breaches"] + every[-1]["open_warnings"] == no_epic_open
-    # Every open finding is in exactly one group, as /findings?state=open&epic=... partitions them.
     assert sum(spot["open_breaches"] + spot["open_warnings"] for spot in every) == count(
         db, "SELECT COUNT(*) FROM findings WHERE project_key = 'DEMO' AND resolved_at IS NULL"
     )
@@ -581,7 +531,6 @@ def test_by_rule_follows_the_catalogue(overview: dict[str, Any], db: sqlite3.Con
         assert (summary["title"], summary["severity"], summary["kind"]) == (rule.title, rule.severity, rule.kind)
         assert summary["open"] == open_counts.get(rule.id, 0)
     missing = {r["rule_id"]: r["missing_evidence"] for r in overview["by_rule"] if not r["measurable"]}
-    # Process order: code review comes before testing.
     assert missing == {"R-FLOW-01": ["code_review", "testing"], "W-REV-01": ["code_review"]}
 
 
@@ -639,8 +588,6 @@ def test_the_overview_names_no_one(overview: dict[str, Any], db: sqlite3.Connect
     assert accounts and not [account for account in accounts if account in text]
 
 
-# --- GET /trends ---------------------------------------------------------------------------
-
 DONE_SQL = """
     SELECT m.cycle_time_h, m.effort_ratio, m.skipped_stages, m.reopen_count, i.time_spent_s
     FROM issue_metrics AS m JOIN issues AS i ON i.issue_key = m.issue_key
@@ -653,14 +600,13 @@ def done_in(db: sqlite3.Connection, point: dict[str, Any]) -> list[sqlite3.Row]:
 
 
 def expected_value(metric: str, rows: list[sqlite3.Row]) -> float | None:
-    """A week's value as contract 4.8 words it, computed without the implementation."""
     if metric == "skipped_stage_share":
         return sum(1 for r in rows if json.loads(r["skipped_stages"] or "[]")) / len(rows) if rows else None
     if metric == "reopen_rate":
         return sum(1 for r in rows if (r["reopen_count"] or 0) > 0) / len(rows) if rows else None
     if metric == "median_cycle_time_h":
         sample = [r["cycle_time_h"] for r in rows if r["cycle_time_h"] is not None]
-    else:  # both an estimate and logged time (contract 8.2)
+    else:
         sample = [r["effort_ratio"] for r in rows if r["effort_ratio"] is not None and (r["time_spent_s"] or 0) > 0]
     return statistics.median(sample) if sample else None
 
@@ -780,12 +726,10 @@ def test_a_week_with_nothing_finished_is_null_never_zero(demo: Settings, db: sql
         for point in series:
             assert (point["value"] is None) == (expected_value(metric, done_in(db, point)) is None), (metric, point)
         assert (body["trend_cards"][metric]["current"], body["trend_cards"][metric]["previous"]) == (None, None)
-    # Counts stay counts: the findings still open are open at every later week's end.
     assert trend(client, "open_breaches")["series"][-1]["value"] == body["totals"]["open_breaches"]["current"] > 0
 
 
 def test_tracking_since_is_the_first_time_the_rules_saw_the_project(overview: dict[str, Any], db: sqlite3.Connection) -> None:
     first = db.execute("SELECT MIN(first_seen_at) FROM findings WHERE project_key = 'DEMO'").fetchone()[0]
     assert overview["tracking_since"] == first
-    # The DEMO store's first rules run was 35 days back, so its weeks compare like for like.
     assert parse_ts(overview["tracking_since"]) <= FIRST_RUN + timedelta(seconds=1)

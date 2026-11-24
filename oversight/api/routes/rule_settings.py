@@ -1,35 +1,3 @@
-"""GET /rules/settings, POST /rules/settings/preview and POST /rules/settings (contract 4.20 to 4.22): an admin's rule
-settings for one board (JO-15), custom rules among them (JO-20); and POST /rules/settings/draft (contract 4.23), a
-custom rule drafted from the admin's words. The bodies, the apply state and the reading of a body are
-oversight/api/rule_settings.py's (the draft's, oversight/api/rule_draft.py's); what may change and how it is stored,
-oversight/rules/settings.py's.
-
-All four are people level only: the dashboard's server sends ?level=people for an admin; team (or no level) is 403
-{"detail", "code": "people_level_only"}, as the Governance routes answer, and a level that is neither team nor people
-is a 422, as a parameter that is not one. They are board-scoped (?project=KEY, the
-default board without it; one the service does not serve is 404 unknown_board, checked with the service key, as
-everywhere), take no other parameter (any other, or one given twice, is a 422) and must name their viewer
-(X-Oversight-Viewer and its -Name, read exactly as the access log reads them: none, or a hash that is not one, is a
-422). After the key and the board, the parameters, the level and the viewer are checked in that order (admin), all
-before a body is read. A body larger than 16 KB is refused (422 rule_settings_invalid) before it is read whole.
-No-store, as every JSON route.
-
-POST /rules/settings writes, never to Jira: the board's rows and the change, in one write transaction, then it starts
-the board's re-check (oversight/api/refresh.py: `rules --project KEY`, queued behind a sync that is running) and
-answers 200 with the board's settings, as GET answers, apply running. A save made from another revision is 409
-{"detail", "code": "rule_settings_conflict"}; a bad body or change set is 422 rule_settings_invalid; a write lock a
-rules run holds past rule_settings.WRITE_WAIT_MS is 503 {"detail", "code": "rule_settings_busy"}: nothing is written
-in any of them. The app log has one line for each save (rule_settings_saved: the board, the revision, the rule ids and
-the fields changed; no name, no value).
-
-POST /rules/settings/draft writes no setting, only its model calls' audit rows. While ASK_RATE_LIMIT is set, the
-viewer's draft counts against the same limit as their questions (one bucket per viewer, oversight/api/ratelimit.py):
-over it, 429 {"detail", "code": "ask_rate_limited"} with Retry-After, before anything is asked of the model; a body it
-refuses (422) is not counted. The app log has one line for each draft, whatever its outcome (rule_draft: the board,
-the viewer's hash, the outcome, how many problems and the llm_calls ids of its model calls; never the words: written
-by oversight/api/rule_draft.draft_body), and one for each draft the limit stops (rule_draft_rate_limited, with the
-viewer's hash).
-"""
 from __future__ import annotations
 
 import sqlite3
@@ -69,8 +37,7 @@ _PARAMETERS = frozenset({PROJECT_PARAM, LEVEL_PARAM})
 
 
 def admin(request: Request) -> Viewer:
-    """What these routes check before anything is read: no parameter but project and level, each at most once, and a
-    level that is one (422 otherwise); people level (403); then the viewer (422 when none is named)."""
+    """What these routes check before anything is read"""
     counts: dict[str, int] = {}
     for name, _value in request.query_params.multi_items():
         counts[name] = counts.get(name, 0) + 1

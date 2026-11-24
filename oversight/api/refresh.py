@@ -1,47 +1,4 @@
-"""Sync now: the dashboard's Sync button syncs the board it is on (JO-18); and the re-check of one board after an admin
-saves its rule settings (JO-15).
-
-One board's refresh runs, in order: `discover` (with BOARD_DISCOVERY on: every board the Jira account can browse,
-JO-17), then `sync --incremental --project KEY` (`sync --full --project KEY` when the board has never synced: its first
-sync reads every issue), `derive --project KEY`, `rules --project KEY` and `baseline --missing --project KEY` (the
-board's baseline report when it has none yet, so a board's first sync fills its Baseline page too: 18 Nov 2026). Jira
-is only read. Each step runs as its own `python -m oversight` process (the CLI the scheduled cycle uses), one after
-another, on a background thread, so the request that starts it answers at once and the API keeps serving while it
-runs. A discovery that fails is logged (api_refresh_discovery_failed) and the sync goes on: the board was served when
-it was asked for; a baseline that fails is logged (api_refresh_baseline_failed) and the sync has still succeeded: the
-next cycle writes it. Whether a board has synced is read from the snapshot when its job starts, so a board the
-scheduled cycle synced meanwhile is synced incrementally.
-
-One job runs at a time in this API process, on one worker thread, in the order asked for: a board's refresh asked for
-while another job runs (another board's refresh, or a re-check) is queued behind it, in its own state "queued", never
-refused and never run beside it. A board's own repeat press while its refresh is queued or running reports that state,
-and a new one starts no sooner than COOLDOWN_S after that board's last one finished; the cooldown is the board's own,
-so another board can be synced at once. The state is kept in memory, a board at a time; it is about this API process
-only, and the snapshot (sync_state) stays the record of what synced. Its body (GET and POST /refresh): {project,
-state, started_at, finished_at, message}: project the board it is about, state idle | queued | running | succeeded |
-failed, started_at when it started (null while queued, or before any), finished_at when it ended, and message, for a
-failed one, what to do in one short line (null otherwise). The dashboard leads with its own words ("The last sync
-didn't finish.", "<Board> didn't sync."), so the message never says the sync failed again (18 Nov 2026): "Try again in
-a few minutes." for a first sync, "The figures on screen are from the last sync that worked." after one; and where
-trying again cannot help, because a step stopped on the service's settings (exit 2, or 5: the read-only guard) or on
-Jira refusing its account (exit 3), it says to ask an administrator instead (sync_message). Which step failed, and how,
-goes to the log.
-
-A re-check (recheck) is the rules step for one board alone, `rules --project KEY`, with no Jira call, run the same way,
-in the same queue: a re-check asked for while a sync (or another re-check) runs waits for it (the sync's own rules step
-may have applied the new settings already: running them again changes nothing), and a sync asked for during a re-check
-waits for it the same way, so a re-check never overlaps a sync in this process. A board asked for again while its
-re-check is still queued keeps the one queued, which reads the settings when it runs. Each board's latest re-check is
-kept apart (recheck_of), for GET /rules/settings' apply (oversight/api/rule_settings.py). A re-check that fails or runs
-out of time is said so in plain words, naming the board as the dashboard does (its name, AILED, never its key AIL);
-the next sync's rules step applies the settings anyway, and so does the scheduled cycle, another process, which reads
-them from the snapshot.
-
-Each step's own log (its JSON lines on stderr, in the format the settings give both processes) goes on into this
-process's log as it was written, whether the step succeeds, fails or runs out of time: a picture the sync could not
-fetch, say, is a warning there with the person id and the reason, as it is in the scheduled cycle's log (run_cycle.ps1
-keeps the same lines).
-"""
+"""Sync now"""
 from __future__ import annotations
 
 import os
@@ -97,10 +54,7 @@ def board_steps(project: str, *, first: bool, discover: bool) -> list[tuple[str,
 
 
 def run_step(argv: Sequence[str], *, db_path: Path | None = None) -> int:
-    """One `python -m oversight ...` step in the project folder, with this interpreter. With db_path (the API's own
-    snapshot), the step is told to use it (DB_PATH), so it changes the snapshot the API serves and no other. Its log
-    goes on into this process's log (relay), never to the browser. A full sync gets FULL_STEP_TIMEOUT_S, any other
-    step STEP_TIMEOUT_S."""
+    """One `python -m oversight ...` step in the project folder, with this interpreter."""
     env = None if db_path is None else {**os.environ, "DB_PATH": str(Path(db_path).resolve())}
     try:
         completed = subprocess.run(  # noqa: S603 - a fixed argv from board_steps or recheck, never user input
@@ -122,8 +76,6 @@ def run_step(argv: Sequence[str], *, db_path: Path | None = None) -> int:
 
 
 def relay(output: bytes | str | None) -> None:
-    """A step's log lines, as it wrote them, into this process's log (its stderr), line by line, empty lines left
-    out. Nothing when this process has no stderr to write to."""
     stream = sys.stderr
     if not output or stream is None:
         return
@@ -135,8 +87,6 @@ def relay(output: bytes | str | None) -> None:
 
 
 def board_synced(db_path: Path, project: str) -> bool:
-    """Whether the board has synced successfully at least once (sync_state), read from the snapshot read-only. False
-    without a snapshot, or one that cannot be read: its first sync then reads every issue, which is always safe."""
     if not Path(db_path).exists():
         return False
     try:
@@ -153,8 +103,7 @@ def board_synced(db_path: Path, project: str) -> bool:
 
 @dataclass
 class BoardSync:
-    """One board's "Sync now" in this process: queued, running, or how its latest ended. Times are this process's
-    clock."""
+    """One board's 'Sync now' in this process"""
 
     project: str
     state: State = "idle"
@@ -174,9 +123,6 @@ class BoardSync:
 
 @dataclass
 class Recheck:
-    """One board's re-check after its rule settings were saved (JO-15): the rules step for that board alone, at the
-    settings revision it was asked for (or a later one: it reads them when it runs). Times are this process's clock.
-    name: the board's name, as its message says it (the key when none is given)."""
 
     project: str
     revision: int
@@ -197,9 +143,6 @@ Job = BoardSync | Recheck
 
 @dataclass
 class Refresher:
-    """Each board's refresh in this API process (queued, running or how its latest ended), and each board's latest
-    re-check. One worker thread runs the jobs, one at a time, in the order asked for. `synced` says whether a board has
-    synced before (its first sync is a full one); `discover` runs discovery first in each refresh."""
 
     runner: StepRunner = run_step
     now: Callable[[], datetime] = utcnow
@@ -219,8 +162,6 @@ class Refresher:
             return (self._syncs.get(project) or BoardSync(project)).body()
 
     def start(self, project: str, *, background: bool = True) -> dict[str, Any]:
-        """Refresh the board unless its refresh is queued or running, or its last one finished within the cooldown;
-        answer its state either way. Running at once when no other job is; else queued behind them."""
         with self._lock:
             board = self._syncs.get(project)
             if board is not None and board.state in ("queued", "running"):
@@ -240,9 +181,7 @@ class Refresher:
         return body
 
     def recheck(self, project: str, revision: int, *, name: str | None = None, background: bool = True) -> Recheck:
-        """Re-check one board's findings with its rule settings: at once, or queued behind the sync or re-check that
-        is running. A board already queued keeps its place. Returns a copy of the board's re-check as it stands.
-        name: the board's name, for its message."""
+        """Re-check one board's findings with its rule settings"""
         with self._lock:
             job = next((job for job in self._jobs if isinstance(job, Recheck) and job.project == project), None)
             if job is None:
@@ -286,8 +225,7 @@ class Refresher:
             self._drain()
 
     def _drain(self) -> None:
-        """Run the jobs one at a time until none is left. A job that fails in a way no step reports (a bug) is logged
-        and ended as failed; the next one runs all the same."""
+        """Run the jobs one at a time until none is left."""
         while True:
             with self._lock:
                 if not self._jobs:
@@ -327,8 +265,6 @@ class Refresher:
                 log.warning("api_refresh_step_error", step=argv[0], error_type=type(exc).__name__)
                 problem = sync_message(first=first)
             if problem and argv[0] in OPTIONAL_STEPS:
-                # Discovery: the board was served when it was asked for, and its sync never depends on this one search.
-                # The baseline: the board's figures are in; the next cycle writes its report.
                 log.warning(OPTIONAL_STEPS[argv[0]], project=job.project)
                 continue
             if problem:
@@ -359,9 +295,7 @@ class Refresher:
 
 
 def sync_message(*, first: bool, code: int | None = None, timed_out: bool = False) -> str:
-    """A failed sync's message, one short line (see the module docstring): ask an administrator where a step stopped
-    on the service's settings or on Jira refusing its account (`code`, the step's exit code); otherwise try again (a
-    first sync) or the figures on screen are the last good ones, after "It took too long." for a step out of time."""
+    """A failed sync's message, one short line (see the module docstring)"""
     if code in ASK_ADMIN:
         return ASK_ADMIN[code] if first else f"{ASK_ADMIN[code]} {LAST_GOOD}"
     advice = TRY_AGAIN if first else LAST_GOOD

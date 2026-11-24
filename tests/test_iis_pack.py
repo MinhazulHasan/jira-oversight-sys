@@ -1,7 +1,4 @@
-"""The IIS pack (deploy/iis: two web.config files, the installer, the scheduled-job script, the dashboard publisher and
-the settings templates): that the files are well formed and agree with each other and with the code, and that the
-scripts run. Nothing here needs IIS or changes this machine: the installer only runs with -WhatIf, and a stub stands in
-for jira_env's Python. Windows PowerShell 5.1 runs the scripts, as Task Scheduler and an administrator would."""
+"""The IIS pack (deploy/iis): well-formed files that agree with each other and the code, and scripts that run."""
 from __future__ import annotations
 
 import os
@@ -24,7 +21,7 @@ PUBLISH = IIS / "Publish-Dashboard.ps1"
 API_CONFIG = IIS / "api" / "web.config"
 DASHBOARD_CONFIG = IIS / "dashboard" / "web.config"
 DASHBOARD = PROJECT_ROOT.parent / "jira-oversight-ui"
-# The guide is kept out of git (.gitignore): a fresh clone has none, and its text is then not checked.
+# The guide is git-ignored: a fresh clone has none, so its text is not checked.
 GUIDE = PROJECT_ROOT / "docs" / "DEPLOYMENT_IIS.md"
 POWERSHELL = shutil.which("powershell.exe") if sys.platform == "win32" else None
 needs_powershell = pytest.mark.skipif(POWERSHELL is None, reason="needs Windows PowerShell")
@@ -42,16 +39,11 @@ def environment(element: ET.Element) -> dict[str, str]:
     return {item.get("name", ""): item.get("value", "") for item in element.iter("environmentVariable")}
 
 
-# --- the web.config files ---------------------------------------------------------------------------------------------
-
-
 def test_the_api_site_runs_uvicorn_on_the_port_iis_hands_it() -> None:
     element = http_platform(API_CONFIG)
     assert element.get("processPath") == "__PYTHON__"
-    # The port is HttpPlatformHandler's, on this machine's loopback only; the same command `python -m oversight api` is.
     assert element.get("arguments") == "-m oversight api --host 127.0.0.1 --port %HTTP_PLATFORM_PORT%"
     assert element.get("stdoutLogEnabled") == "true" and element.get("stdoutLogFile") == r"__API_LOGS__\stdout"
-    # One process: it shares the snapshot with the jobs and keeps the Ask rate limit's count in memory.
     assert element.get("processesPerApplication") == "1"
     assert environment(element)["PYTHONPATH"] == "__BACKEND__"
     assert environment(element)["PYTHONUNBUFFERED"] == "1"
@@ -65,21 +57,19 @@ def test_the_dashboard_site_runs_the_standalone_server_on_the_port_iis_hands_it(
     assert element.get("processesPerApplication") == "1"
     variables = environment(element)
     assert variables["PORT"] == "%HTTP_PLATFORM_PORT%" and variables["HOSTNAME"] == "127.0.0.1"
-    # The wiring the settings file cannot change (an environment variable wins over node's env file).
     assert variables["OVERSIGHT_DATA"] == "live" and variables["AUTH_MODE"] == "atlassian"
     assert variables["OVERSIGHT_API_URL"] == "http://127.0.0.1:__API_PORT__"
 
 
 def test_the_timeouts_let_ask_finish_and_the_api_end_first() -> None:
     api, dashboard = http_platform(API_CONFIG), http_platform(DASHBOARD_CONFIG)
-    assert int(api.get("startupTimeLimit", "0")) >= 120  # the API migrates an older snapshot before it listens
+    assert int(api.get("startupTimeLimit", "0")) >= 120
     assert int(dashboard.get("startupTimeLimit", "0")) >= 60
 
     def seconds(value: str | None) -> int:
         hours, minutes, secs = (int(part) for part in (value or "0:0:0").split(":"))
         return hours * 3600 + minutes * 60 + secs
 
-    # Ask takes up to a minute with a live model; the dashboard waits longer than the API, so the API's answer is seen.
     assert seconds(api.get("requestTimeout")) >= 120
     assert seconds(dashboard.get("requestTimeout")) > seconds(api.get("requestTimeout"))
 
@@ -89,8 +79,7 @@ def test_the_sites_add_no_security_header_of_their_own_and_hide_the_banners(path
     root = ET.parse(path).getroot()
     headers = root.find("system.webServer/httpProtocol/customHeaders")
     assert headers is not None
-    # The dashboard sends its own (next.config.ts, src/proxy.ts) and the API sends nosniff and no-store: a second copy
-    # at IIS would fight them. The only entry is the removal of IIS's banner.
+    # A second copy of the security headers at IIS would fight the dashboard's and the API's.
     assert [item.tag for item in headers] == ["remove"] and headers[0].get("name") == "X-Powered-By"
     request_filtering = root.find("system.webServer/security/requestFiltering")
     assert request_filtering is not None and request_filtering.get("removeServerHeader") == "true"
@@ -113,11 +102,11 @@ def test_http_goes_to_https_on_the_one_address() -> None:
     assert rule is not None
     action = rule.find("action")
     assert action is not None and action.get("type") == "Redirect" and action.get("redirectType") == "Permanent"
-    # A fixed host, never the one the request carried: no open redirect through the Host header.
+    # A fixed host, never the request's: no open redirect through the Host header.
     assert action.get("url") == "https://__HOST_NAME__/{R:1}"
     condition = rule.find("conditions/add")
     assert condition is not None and condition.get("input") == "{HTTPS}" and condition.get("pattern") == "^OFF$"
-    assert ET.parse(API_CONFIG).getroot().find("system.webServer/rewrite") is None  # the API's site is http, loopback
+    assert ET.parse(API_CONFIG).getroot().find("system.webServer/rewrite") is None
 
 
 def test_the_installer_fills_every_placeholder_the_web_configs_hold() -> None:
@@ -127,9 +116,6 @@ def test_the_installer_fills_every_placeholder_the_web_configs_hold() -> None:
     texts = [path.read_text(encoding="utf-8") for path in (API_CONFIG, DASHBOARD_CONFIG)]
     held = {name.strip("_") for text in texts for name in PLACEHOLDER.findall(text)}
     assert held and held <= filled, held - filled
-
-
-# --- the settings templates -----------------------------------------------------------------------------------------
 
 
 def _template(path: Path) -> dict[str, str]:
@@ -150,23 +136,19 @@ def test_the_iis_templates_fail_safe(tmp_path: Path) -> None:
         assert backend[name] == "", name
     assert (backend["LLM_MODE"], backend["DIGEST_CHANNEL"], backend["LOG_FORMAT"]) == ("stub", "file", "json")
     assert (backend["API_DOCS"], backend["API_ALLOW_INSECURE"]) == ("false", "false")
-    # Where the admin commands and `python -m oversight.healthcheck` find the API site: the installer's -ApiPort.
     assert (backend["API_HOST"], backend["API_PORT"]) == ("127.0.0.1", "3300")
     for name in ("APP_URL", "ALLOWED_EMAIL_DOMAINS", "AUTH_SECRET", "OVERSIGHT_SERVICE_KEY", "OVERSIGHT_JIRA_BASE_URL",
                  "ATLASSIAN_CLIENT_ID", "ATLASSIAN_CLIENT_SECRET", "ATLASSIAN_AUTH_URL", "ATLASSIAN_API_URL",
                  "SAMPLE_NOW", "SAMPLE_LATENCY", "SAMPLE_PEOPLE_COMPARISON"):
         assert dashboard[name] == "", name
-    # Nobody is an admin by name, and no setting a development machine owns is in either file.
     assert "ADMIN_EMAILS" not in dashboard and "ACCESS_MODE" not in dashboard
     for text in (str(backend), str(dashboard)):
         assert "@" not in text and "atlassian.net" not in text and "localhost" not in text
-    # Every active name is one the code reads: the backend's Settings, the dashboard's own template.
     fields = {name.upper() for name in Settings.model_fields}
     assert set(backend) <= fields, set(backend) - fields
     ui_template = DASHBOARD / ".env.example"
     if ui_template.exists():
         assert set(dashboard) <= set(_template(ui_template)), set(dashboard) - set(_template(ui_template))
-    # The backend's loads as it stands (the API then refuses to start without a key, and the doctor fails it).
     copy = tmp_path / "backend.env"
     copy.write_text((IIS / "backend.env.example").read_text(encoding="utf-8"), encoding="utf-8")
     loaded = Settings(_env_file=copy)
@@ -180,7 +162,7 @@ def test_the_dashboard_template_says_how_to_make_only_some_people_admins() -> No
 
 
 def test_the_pack_is_ascii_and_lf_only() -> None:
-    # Windows PowerShell 5.1 reads a script that has no byte-order mark as the machine's code page: ASCII stays safe.
+    # Windows PowerShell 5.1 reads a script without a byte-order mark in the machine's code page: stay ASCII.
     for path in (INSTALLER, TASK, PUBLISH, API_CONFIG, DASHBOARD_CONFIG, IIS / "backend.env.example",
                  IIS / "dashboard.env.example", *([GUIDE] if GUIDE.exists() else [])):
         data = path.read_bytes()
@@ -191,9 +173,6 @@ def test_the_pack_is_ascii_and_lf_only() -> None:
 
 def test_the_docker_build_context_still_leaves_the_pack_out() -> None:
     assert "deploy" in (PROJECT_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-
-
-# --- the scripts ----------------------------------------------------------------------------------------------------
 
 
 def powershell(
@@ -243,7 +222,7 @@ def run_task(tmp_path: Path, task: str, *, exit_code: int = 0, prune: Path | Non
 
 
 def lock_name(tmp_path: Path) -> str:
-    """A lock of this test's own, so a cycle running on this machine (or another test run) never holds it up."""
+    """A lock of this test's own, so another running cycle never holds it up."""
     return f"Local\\jira-oversight-test-{abs(hash(str(tmp_path)))}"
 
 
@@ -261,7 +240,6 @@ def test_each_job_runs_its_command_and_logs_it(tmp_path: Path, task: str, comman
     assert code == 0 and ran(lines) == [command]
     assert any("start: python -m oversight " + command in line for line in lines)
     assert any("(exit 0," in line for line in lines)
-    # The command's own stderr (the JSON logs) is in the same file.
     assert any(line.startswith('{"event": "stub_log"') for line in lines)
 
 
@@ -340,7 +318,6 @@ def test_the_installer_with_whatif_prints_the_plan_and_changes_nothing(tmp_path:
     ):
         assert planned in out, planned
     assert "(WhatIf, nothing was changed)" in out and "would be made" in out
-    # Nothing was created, written or registered.
     assert sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")) == before
 
 
@@ -382,9 +359,6 @@ def test_the_dashboard_builds_standalone_when_asked_and_the_publisher_asks() -> 
     assert "$env:STANDALONE_OUTPUT = '1'" in PUBLISH.read_text(encoding="utf-8")
 
 
-# --- the guide ------------------------------------------------------------------------------------------------------
-
-
 @pytest.mark.skipif(not GUIDE.exists(), reason="docs/DEPLOYMENT_IIS.md is local only, not on this machine")
 def test_the_guide_covers_the_pack_and_every_section_the_files_cite() -> None:
     guide = GUIDE.read_text(encoding="utf-8")
@@ -393,12 +367,10 @@ def test_the_guide_covers_the_pack_and_every_section_the_files_cite() -> None:
     for number, title in {3: "Prerequisites", 4: "Put the code in place", 7: "Settings and secrets", 8: "Install",
                           9: "HTTPS", 10: "First start", 11: "Updating", 12: "Backups"}.items():
         assert headings[number].startswith(title), number
-    # Scripts and templates say "section N" for a step of this guide: each N is a section.
     for path in (INSTALLER, TASK, PUBLISH, API_CONFIG, DASHBOARD_CONFIG, IIS / "backend.env.example",
                  IIS / "dashboard.env.example"):
         for cited in re.findall(r"section (\d+)", path.read_text(encoding="utf-8")):
             assert int(cited) in headings, f"{path.name}: section {cited}"
-    # Every installer parameter is explained, and every part of the brief is in it.
     block = INSTALLER.read_text(encoding="utf-8").split("param(", 1)[1].split("\n)\n", 1)[0]
     for parameter in re.findall(r"\$([A-Za-z]+)(?: =|,|$)", block, re.MULTILINE):
         assert f"-{parameter}" in guide, parameter

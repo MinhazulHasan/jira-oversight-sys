@@ -1,85 +1,4 @@
-"""Numbers and keys in an answer must exist in the facts (Planning.md principle 3).
-
-The validator also produces the citations: each verified number or key in the
-text is bound to the fact row and column it came from, which is what the Ask
-page's tick-and-tie lines draw.
-
-validate(text, facts, plan) -> Check
-1. Issue keys: KEY = \\b[A-Z][A-Z0-9_]+-\\d+\\b. Every key in the text must appear
-   in some fact row (any column of kind issue_key, or the issue_key/epic_key
-   columns, or sample_keys lists). Unknown keys are problems ("unknown key X").
-2. Dates: DATE = \\b\\d{4}-\\d{2}-\\d{2}\\b, and the spelled forms "4 Nov 2026" /
-   "Nov 2026". A date in the text must match a date column value in the facts
-   (its ISO form, or its spelled form). Matched dates and keys are removed from
-   the text before the number scan.
-3. Numbers: NUM = -?(?:\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?%?|\\d+(?:\\.\\d+)?%?), with a
-   (?<![\\w.-]) lookbehind: a leading minus belongs to the number, and no match
-   starts inside another number or word. Commas are dropped before comparing. A number in the
-   text is allowed when its normalised form is in the display forms of any
-   number in the facts or in the plan parameters, or equals a fact's row
-   count. Otherwise "unverified number X".
-   A number written in words (SPELLED: "two" to "nineteen", the tens, their
-   compounds such as "twenty-one", and hundreds and thousands of them, in any
-   case) is checked the same way, as its value, and cited as written
-   ("Seventeen"): 18 Nov 2026, a poem wrote its five counts in words and none
-   was checked or cited. "One" on its own is left alone ("the one in progress"
-   is no count), and so are ordinals ("second") and words such as "dozen",
-   "half" and "twice". Code-written text quotable as it is allows the numbers
-   it writes in words too ("Phase Two").
-4. display_forms(value) -> the strings a number may legitimately be written
-   as: the raw repr, rounded to 0, 1 and 2 decimals, with thousands separators,
-   and for a share (0..1) also its whole-percent and one-decimal percent forms
-   ("16%", "15.8%"); hours and ratios never gain a percent form. Column kinds
-   decide which forms apply (share -> percent forms; others not).
-5. Bindings: for each verified key/number occurrence (in text order) a
-   Binding(marker, text, fact_ref, row_index, column); numbers from plan
-   parameters or row counts get fact_ref of the fact and column "params" /
-   "row_count" with row_index -1. Markers start at 1. A key is bound to the
-   first place that holds it. A number or date that only one place holds is
-   bound there; when several places hold its value (a 3 in three people's
-   rows), it is bound to the one its context points at (the tick-and-tie line
-   must reach the row the figure is about, never merely the first 3):
-   - `hints` first: an answer written in code (scorecards.code_built) maps the
-     start of each figure it wrote to its row and column, and that is final
-     (a hint binds only a number the facts allow anyway);
-   - otherwise the places are narrowed, each step kept only when some place
-     survives it: (a) to the rows of the figure's entities: in a Markdown table
-     the entities named anywhere in the figure's table row, in prose those
-     named before it in the same sentence (a sentence ends at . ; ! or ?
-     followed by a space, or at a line break; a dot inside a name ends
-     nothing), people and issue keys first, then a fact's other row labels,
-     each kind nearest first; (b) to the fact of the figures already bound in
-     the same sentence, or above it in the same table column; (c) in a table,
-     to the fact columns whose label or key matches the column's header; (d)
-     in a table, to the fact of the figures already bound in the same table;
-     then (e) the first place left, in the facts' order, as before.
-   An entity is a text cell of a fact row as the answer writes it: a person's
-   name (person_id/name, assignee_id/assignee, or `people`, so a name also
-   reaches the rows that hold only the person's id), an issue or epic key, or
-   another label such as a status group. A name of two words or more is found
-   whole, in any case and with or without its accents (people.fold); a one-word
-   label only as the data writes it ("will" is not Will), as people.named_in
-   finds names. `context`: the answer as written, when `text` has names masked
-   (people level): entities are read there, figures in `text`.
-Check.ok is True when there are no problems. Pure function: no I/O.
-
-Where numbers may come from, exactly: columns of a number kind (number, count,
-hours, share, ratio); text columns that code wrote (a finding's message, a
-group label such as "Sprint 4427", a note), quoted as they are; the fact's
-`as_of` and note; the plan's parameters; each fact's row count. Ticket text
-(the summary and epic_title columns) never supplies a number: anyone who can
-edit a ticket can write one there (tests/test_injection.py). Nor does a rule's
-title or description (the rule_title, title and description columns, and
-wherever code quotes one in its own text, a note or a candidate's title: the
-board's rules, `rules`, say which they are): an admin writes a custom rule's
-(JO-20), the AI drafts it, and "Bugs untouched for 14 days" is no count of
-anything. Dates come from date columns, as_of and code-written text, and a
-verified date also allows its year as a bare number. Rule ids such as R-EST-01
-are vocabulary, not data, and are ignored; so is a rule's title the answer
-quotes whole ("'Bugs untouched for 14 days' has 4 open findings": the 4 is
-checked, the 14 is the rule's name). Verified dates are bound like keys and
-numbers.
-"""
+"""Checks that every number, date and key in an answer exists in the facts, and binds each to its source."""
 from __future__ import annotations
 
 import re
@@ -96,13 +15,10 @@ from oversight.rules.catalog import RulesConfig
 
 KEY = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
-# The sign belongs to the number: "-4.5" is one token, so a real negative value
-# verifies whole and an invented "-40" is checked instead of skipped. "." in the
-# lookbehind keeps a match from starting mid-number (the "5" of "-4.5").
+# The sign belongs to the number, so an invented "-40" is checked rather than skipped.
 NUM = re.compile(r"(?<![\w.-])-?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?%?|\d+(?:\.\d+)?%?)")
 
-# Numbers written in words (the module docstring, 3). Longest first in each alternation, so "nineteen" is never read
-# as "nine" and the rest.
+# Longest first in each alternation, so "nineteen" is never read as "nine" and the rest.
 _UNIT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9}
 _TEEN_WORDS = {"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
                "seventeen": 17, "eighteen": 18, "nineteen": 19}
@@ -127,14 +43,12 @@ SPELLED = re.compile(
 NUMBER_KINDS = frozenset({"number", "count", "hours", "share", "ratio"})
 # Text columns that hold ticket text: untrusted, never a source of numbers or dates, nor a label a figure is placed by.
 TICKET_TEXT_COLUMNS = frozenset({"summary", "epic_title"})
-# Text columns that are never a source of numbers or dates: ticket text, and a rule's title and description (an admin
-# writes a custom rule's: JO-20). A rule's title still labels its row, so a figure beside it is cited there.
+# Ticket text and rule titles and descriptions are user-written, so never a source of numbers or dates.
 UNTRUSTED_TEXT_COLUMNS = TICKET_TEXT_COLUMNS | {"rule_title", "title", "description"}
 
 _RULE_ID = re.compile(r"\b[RW]-[A-Z]+-\d{2,3}\b")
 _ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}")
-# An ISO date, optionally with the time part the storage format carries, so a
-# timestamp quoted whole is checked by its date and leaves no stray numbers.
+# An ISO date with an optional time, so a quoted timestamp leaves no stray numbers.
 _ISO_DATETIME = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?)?")
 _MONTH = (
     r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?"
@@ -207,18 +121,12 @@ def _with_commas(form: str) -> str:
 def validate(text: str, facts: list[Facts], plan: Plan | None,
              hints: Mapping[int, tuple[str, int, str]] | None = None, *, context: str | None = None,
              people: Sequence[tuple[str, str]] = (), rules: RulesConfig | None = None) -> Check:
-    """hints: where each figure an answer written in code starts -> (fact ref, row index, column) it was read from.
-    context: the answer as written, when `text` is that answer with names masked (just as long): the entities that
-    place a figure are read there. people: (person id, display name) of everyone the answer may name, so a name also
-    reaches the rows that hold only that person's id. rules: the board's rules the facts were read with, whose titles
-    and descriptions are words, never figures, wherever the facts or the answer quote them (see the module
-    docstring)."""
+    """Check every key, date and number in `text` against the facts and bind each to its source."""
     titles, words = _rule_words(rules)
     keys, dates, numbers = _allowed(facts, plan, words)
     found: list[_Found] = []
     problems: list[str] = []
-    # A rule's title quoted whole is vocabulary, not data (masked first: a title may name another rule's id); so are
-    # rule ids, masked so "FLOW-02" is never read as a key.
+    # Rule titles quoted whole and rule ids are vocabulary, not data, so they are masked first.
     work = titles.sub(_blank, text) if titles is not None else text
     work = _RULE_ID.sub(_blank, work)
 
@@ -274,8 +182,7 @@ _HEADER_WORD = re.compile(r"[^\W_]+")
 _PERSON_COLUMNS = (("person_id", "name"), ("assignee_id", "assignee"))
 # A text cell longer than this is a sentence (a message, a note), not a row's label.
 _LABEL_MAX = 120
-# An entity's kind, the strongest first: a person or an issue key; a label only one row of its column holds (a status
-# group, a sprint); any other label (a measure's name, a status many tickets share).
+# An entity's kind, strongest first: a person or issue key; a unique row label; any other label.
 _IDENTITY, _ROW_LABEL, _LABEL = 0, 1, 2
 
 
@@ -323,8 +230,7 @@ class _TableRow:
 
 def _bind(found: list[_Found], text: str, facts: Sequence[Facts], hints: Mapping[int, tuple[str, int, str]],
           people: Sequence[tuple[str, str]]) -> list[_Source]:
-    """The place each verified value is bound to, in text order (the module docstring, 5): a hint; a key's first
-    place; the only place that holds a value; else the place the value's context points at."""
+    """The place each verified value is bound to, in text order: a hint, else where its context points."""
     reading: _Reading | None = None
     chosen: list[tuple[int, _Source]] = []
     for item in found:
@@ -375,8 +281,7 @@ class _Reading:
             together = [source for at, source in reversed(chosen)
                         if self.row(at) is None and self.sentence(at) == sentence]
             return _by_fact(candidates, together)[0]
-        # A table row: the entities named anywhere in it (those before the figure first), then the figures bound
-        # above it in its column, then its column's header, then the figures bound anywhere in the table.
+        # A table row: its entities, then the column's bound figures and header, then the table's figures.
         named = [entity for entity in self.entities if row.start <= entity.start < row.end]
         candidates = _by_entities(sources, sorted(
             named, key=lambda entity: (entity.tier, entity.start > start, abs(start - entity.start))))
@@ -488,8 +393,7 @@ def _phrase(value: str) -> _Phrase | None:
 
 
 def _entities(text: str, index: _Index) -> list[_Entity]:
-    """The entities the text names, in text order; where two would overlap, the longer ("Ada Brooks", never also
-    "Ada")."""
+    """The entities the text names, in text order; of two overlapping, the longer."""
     spans: list[tuple[int, int, int, set[tuple[str, int]]]] = []
     for match in KEY.finditer(_RULE_ID.sub(_blank, text)):
         if rows := index.keys.get(match.group()):
@@ -573,8 +477,7 @@ def _header_words(text: str) -> frozenset[str]:
 
 # --- what the facts allow ------------------------------------------------------------------
 
-# A value -> every place that holds it, in the facts' order (a dict kept as an ordered set): the first place is where
-# a value with no context is bound.
+# Value -> every place holding it, in facts order (an ordered set); the first is the default binding.
 _Places = dict[str, dict[_Source, None]]
 
 
@@ -583,10 +486,7 @@ def _put(places: _Places, value: str, source: _Source) -> None:
 
 
 def _rule_words(rules: RulesConfig | None) -> tuple[re.Pattern[str] | None, re.Pattern[str] | None]:
-    """The board's rules' words as two patterns: their titles (masked in the answer: a title quoted whole is a name),
-    and their titles and descriptions (masked in the facts' own text: never a figure there). Each matched whole, in
-    any case, any run of spaces between its words; only words that hold a figure (a digit, or a number in words), as
-    no other changes what is read. None when there are none."""
+    """Patterns for the board's rule titles and descriptions that hold a figure; None when there are none."""
     if rules is None:
         return None, None
     titles: set[str] = set()
@@ -614,8 +514,7 @@ _DIGIT_ANYWHERE = re.compile(r"\d")
 
 def _allowed(facts: list[Facts], plan: Plan | None,
              rule_words: re.Pattern[str] | None = None) -> tuple[_Places, _Places, _Places]:
-    """Allowed keys, dates (ISO day) and number forms, each mapped to every place it came from, in order. rule_words:
-    the board's rules' titles and descriptions, masked in any text the facts hold before it is read."""
+    """Allowed keys, dates (ISO day) and number forms, each mapped to every place it came from, in order."""
     keys: _Places = {}
     dates: _Places = {}
     numbers: _Places = {}
@@ -709,8 +608,7 @@ def _spelled_numbers(text: str) -> list[re.Match[str]]:
 
 
 def spelled_value(text: str) -> int:
-    """A number written in words (one SPELLED match) as its value: "Seventeen" 17, "twenty-one" 21, "a hundred and
-    five" 105, "two thousand" 2000."""
+    """A number written in words as its value: "twenty-one" -> 21."""
     total = current = 0
     for word in re.findall(r"[a-z]+", text.lower()):
         if word == "a":

@@ -1,14 +1,3 @@
-"""JO-13, the person card: GET /people/{person_id}/card (contract 4.19 in jira-oversight-ui), one person's work on a
-board at a glance, for admins (people level).
-
-Two seeded boards share one store (DEMO and AIL, the demo's fictional people on both): every person's card on each
-board, over each period, is checked against their scorecard and GET /people (one computation), members with no
-tickets and the demo's holder with too few tickets to compare included; the tickets in progress, their order and
-since, and the last activity against SQL written here. The hand-built store of test_api_people pins a card word for
-word, with numbers worked out by hand. Then the level, the parameters, the 404s, no-store, the access log (an entry
-at most once per viewer, person and board in any ten minutes, two reads at once leaving one, nothing served when the
-log cannot be written or looked at), and that a card holds nobody's account id. No network.
-"""
 from __future__ import annotations
 
 import sqlite3
@@ -48,8 +37,8 @@ from tests.test_governance import ADMIN, ADMIN_NAME, GONE, OTHER, UNAVAILABLE, C
 
 KEY = "test-key"
 NOW = datetime(2026, 11, 4, 14, 30, tzinfo=UTC)
-BOARDS = ("DEMO", "AIL")  # JIRA_PROJECTS, in order
-BOARD_NAMES = {"DEMO": "Demo project", "AIL": "AIL"}  # process.yaml's names (AIL has none: its key)
+BOARDS = ("DEMO", "AIL")
+BOARD_NAMES = {"DEMO": "Demo project", "AIL": "AIL"}
 CARD_FIELDS = ("meta", "person", "board", "membership", "work", "findings", "process", "in_progress_now",
                "in_progress_more", "other_boards", "last_activity_at")
 DEMO_PEOPLE = {pid(account): name for account, name in {**ASSIGNEE_NAMES, **MEMBER_NAMES}.items()}
@@ -68,7 +57,6 @@ def client_of(settings: Settings, *, clock: Clock | None = None, **sent: Any) ->
 
 @pytest.fixture(scope="module")
 def two(tmp_path_factory: pytest.TempPathFactory) -> Settings:
-    """DEMO (the full demo, its people's habits and all) and a smaller AIL, both seeded, derived and checked at NOW."""
     settings = make_settings(tmp_path_factory.mktemp("person_card"))
     process = ProcessConfig.load(settings.process_file)
     rules = RulesConfig.load(settings.rules_file)
@@ -88,7 +76,6 @@ def client(two: Settings) -> TestClient:
 
 @pytest.fixture
 def fresh(two: Settings) -> Settings:
-    """The store with an empty access log, for a test that counts its entries."""
     conn = sqlite3.connect(two.db_file)
     try:
         conn.execute("DELETE FROM access_log")
@@ -100,7 +87,6 @@ def fresh(two: Settings) -> Settings:
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TestClient]:
-    """test_api_people's hand-built store: DEMO and AIL, full Jira user objects, members on each board."""
     root = tmp_path_factory.mktemp("person_card_built")
     build(root / "oversight.db")
     with serve(root) as served:
@@ -122,22 +108,16 @@ def card(client: TestClient, person_id: str, board: str = "DEMO", days: int | No
 
 
 def by_name(client: TestClient, board: str = "DEMO") -> dict[str, dict[str, Any]]:
-    """The board's people by name (the directory's person objects)."""
     directory = get(client, "/people/directory", {"project": board})["people"]
     return {entry["person"]["name"]: entry["person"] for entry in directory}
 
 
 def standing(measures: list[dict[str, Any]], values: dict[str, Any]) -> dict[str, int] | None:
-    """The process meter worked out from a scorecard row, as the dashboard reads one (people/model.ts standingOf):
-    each measure the board can show that is not a count is closer, level, further, or too few tickets (no mark)."""
     marks = [values[measure["key"]]["vs_board"] for measure in measures
              if measure["measurable"] and measure["kind"] != "count"]
     found = {"closer": marks.count("closer"), "level": marks.count("level"), "further": marks.count("further"),
              "too_few": marks.count(None), "measurable": len(marks)}
     return found if found["closer"] + found["level"] + found["further"] else None
-
-
-# --- one computation: every figure is the scorecard's and GET /people's -----------------------------------------
 
 
 @pytest.mark.parametrize("days", [30, 90, 180])
@@ -156,7 +136,7 @@ def test_every_figure_is_the_scorecards_and_get_peoples_for_everyone_on_each_boa
         scored = {row["person"]["id"]: row for row in scorecard["people"]}
         listed = get(client, "/people", {"project": board})["people"]
         rows = {row["person"]["id"]: row for row in listed if row["person"] is not None}
-        assert {entry["person"]["id"] for entry in directory} == set(DEMO_PEOPLE)  # the demo's people, on both boards
+        assert {entry["person"]["id"] for entry in directory} == set(DEMO_PEOPLE)
         for entry in directory:
             who = entry["person"]
             body = card(client, who["id"], board, days)
@@ -168,11 +148,11 @@ def test_every_figure_is_the_scorecards_and_get_peoples_for_everyone_on_each_boa
                 assert body["work"] == {"open_tickets": figures["open_tickets"]["value"],
                                         "in_progress": figures["in_progress"]["value"],
                                         "done_in_period": figures["done_in_period"]["value"], "days": days}
-                assert body["work"]["open_tickets"] == row["open_tickets"]  # G5: one meaning of open tickets
+                assert body["work"]["open_tickets"] == row["open_tickets"]
                 assert body["findings"] == {"open_breaches": row["open_breaches"],
                                             "open_warnings": row["open_warnings"]}
                 assert body["process"] == standing(scorecard["measures"], figures)
-            else:  # a member who holds none: on the directory only
+            else:
                 assert body["membership"] == "member_no_tickets" and values is None and row is None
                 assert body["work"] == {"open_tickets": 0, "in_progress": 0, "done_in_period": 0, "days": days}
                 assert body["findings"] == {"open_breaches": 0, "open_warnings": 0}
@@ -185,14 +165,12 @@ def test_every_figure_is_the_scorecards_and_get_peoples_for_everyone_on_each_boa
             ]
             seen[body["membership"]] += 1
             seen["process" if body["process"] else "no_process"] += 1
-    # Holders and members on both boards, and holders compared with the board.
     assert seen["member_no_tickets"] == len(BOARDS) * len(MEMBER_NAMES)
     assert seen["holds_tickets"] >= len(BOARDS) * len(ASSIGNEE_NAMES) - 2
     assert seen["process"] >= len(ASSIGNEE_NAMES) // 2
 
 
 def test_nothing_measurable_for_someone_with_too_few_tickets(client: TestClient) -> None:
-    """Hana Mori, part time of late (the demo's habit): she holds tickets, but too few to compare on any measure."""
     hana = card(client, by_name(client)["Hana Mori"]["id"])
     assert hana["membership"] == "holds_tickets" and hana["work"]["open_tickets"] + hana["work"]["done_in_period"] > 0
     assert hana["process"] is None
@@ -226,11 +204,7 @@ def test_the_body_has_exactly_the_contracts_keys(client: TestClient) -> None:
         assert body["last_activity_at"] is None or is_ts(body["last_activity_at"])
 
 
-# --- the tickets in progress, and the last activity, against SQL ------------------------------------------------
-
-
 def timeline(two: Settings) -> tuple[dict[str, list[sqlite3.Row]], dict[str, str]]:
-    """DEMO's status intervals by ticket (timeline order) and its statuses' categories, read here."""
     conn = open_readonly(two.db_file)
     try:
         intervals: dict[str, list[sqlite3.Row]] = {}
@@ -246,7 +220,6 @@ def timeline(two: Settings) -> tuple[dict[str, list[sqlite3.Row]], dict[str, str
 
 
 def theirs(two: Settings, account: str, where: str = "") -> list[sqlite3.Row]:
-    """A person's tickets on DEMO, Epics left out (as the rules leave them out), read here."""
     conn = open_readonly(two.db_file)
     try:
         return list(conn.execute(
@@ -265,7 +238,7 @@ def test_in_progress_now_is_longest_in_progress_first_at_most_three_and_the_rest
         expected = []
         for ticket in theirs(two, account, " AND status_category = 'indeterminate'"):
             run = intervals[ticket["issue_key"]]
-            since = run[-1]["entered_at"]  # the status it is in now, then back while still in progress
+            since = run[-1]["entered_at"]
             for interval in reversed(run[:-1]):
                 if categories[interval["status"]] != "indeterminate":
                     break
@@ -277,7 +250,7 @@ def test_in_progress_now_is_longest_in_progress_first_at_most_three_and_the_rest
         assert body["in_progress_now"] == expected[:CARD_TICKETS]
         assert body["in_progress_more"] == max(0, len(expected) - CARD_TICKETS)
         checked_more += body["in_progress_more"] > 0
-    assert checked_more >= 5  # most of the demo's people have more than three in progress
+    assert checked_more >= 5
 
 
 def test_last_activity_is_the_latest_status_change_or_logged_work_on_their_tickets(
@@ -303,30 +276,21 @@ CREATED = "2026-07-01T09:00:00.000Z"
 
 
 def changes_of(*moves: tuple[str, str, str]) -> list[dict[str, Any]]:
-    """Status changes as sync stores them: (from, to, when), their changelog ids in order."""
     return [{"changelog_id": str(100 + n), "changed_at": at, "from_status": before, "to_status": after}
             for n, (before, after, at) in enumerate(moves)]
 
 
 @pytest.mark.parametrize(("status", "moves", "expected"), [
-    # Created in progress and never moved: since its creation.
     ("In Progress", [], CREATED),
-    # Into progress once.
     ("In Progress", [("To Do", "In Progress", "2026-11-01T09:00:00.000Z")], "2026-11-01T09:00:00.000Z"),
-    # Still in progress in another status: In Progress to In Review keeps it going.
     ("In Review", [("To Do", "In Progress", "2026-10-03T09:00:00.000Z"),
                    ("In Progress", "In Review", "2026-10-05T09:00:00.000Z")], "2026-10-03T09:00:00.000Z"),
-    # Reopened from Done: the clock starts again.
     ("In Progress", [("To Do", "In Progress", "2026-09-02T09:00:00.000Z"),
                      ("In Progress", "Done", "2026-09-09T09:00:00.000Z"),
                      ("Done", "In Progress", "2026-10-20T09:00:00.000Z")], "2026-10-20T09:00:00.000Z"),
-    # Created in progress, moved on within progress: since its creation.
     ("In Review", [("In Progress", "In Review", "2026-08-03T09:00:00.000Z")], CREATED),
-    # The changes in any order, as a query returns them: the timeline sorts them as derive does.
     ("In Review", [("In Progress", "In Review", "2026-10-05T09:00:00.000Z"),
                    ("To Do", "In Progress", "2026-10-03T09:00:00.000Z")], "2026-10-03T09:00:00.000Z"),
-    # The history ends in To Do though Jira says In Progress now (a change missing from it): when it went back into
-    # progress is not known, so no time is made up (not its creation, nor the run that ended).
     ("In Progress", [("To Do", "In Progress", "2026-10-05T09:00:00.000Z"),
                      ("In Progress", "To Do", "2026-10-25T09:00:00.000Z")], None),
 ])
@@ -340,16 +304,12 @@ def test_since_is_when_the_ticket_last_went_into_progress(
 def test_since_is_never_made_up_when_there_is_no_timeline() -> None:
     category = (lambda name, _stage: SINCE_CATEGORY.get(name or "", "new"))
     assert in_progress_since([], category) is None
-    # No creation time, or a moment that cannot be read: no timeline, so no since.
     assert timeline_of({"created_at": None, "status": "In Progress"}, [], lambda _status: None) == []
     unreadable = changes_of(("To Do", "In Progress", "not a moment"))
     assert timeline_of({"created_at": CREATED, "status": "In Progress"}, unreadable, lambda _status: None) == []
 
 
 def resync(root: Path, *moves: tuple[str, str, timedelta]) -> None:
-    """A later sync of echo's DEMO-1 (In Progress in Jira now), as sync writes it: its status changes, (from, to,
-    how long before T), after the ones the store already has. No derive after it: derive's intervals still end
-    with the move into progress 20 days before T."""
     with Store.open(root / "oversight.db") as store, store.transaction():
         for n, (before, after, ago) in enumerate(moves, 1):
             store.upsert("status_changes", {"issue_key": "DEMO-1", "changelog_id": str(100 + n),
@@ -358,8 +318,6 @@ def resync(root: Path, *moves: tuple[str, str, timedelta]) -> None:
 
 
 def test_since_follows_a_sync_that_derive_has_not_followed_yet(tmp_path: Path) -> None:
-    """Sync, derive and the rules are separate steps: a sync that has stored a reopening, and no derive since, must
-    not leave the card counting from the run before it."""
     build(tmp_path / "oversight.db")
     resync(tmp_path, ("In Progress", "Done", timedelta(days=10)), ("Done", "In Progress", timedelta(hours=4)))
     with serve(tmp_path) as served:
@@ -369,8 +327,6 @@ def test_since_follows_a_sync_that_derive_has_not_followed_yet(tmp_path: Path) -
 
 
 def test_a_history_that_ends_outside_progress_gives_no_since(tmp_path: Path) -> None:
-    """The history says DEMO-1 went back to To Do; Jira says it is in progress now (the change back is not in the
-    history, which derive keeps, flagging current_status_mismatch): its since is not known, derived or not."""
     build(tmp_path / "oversight.db")
     resync(tmp_path, ("In Progress", "To Do", timedelta(days=3)))
     with serve(tmp_path) as served:
@@ -383,9 +339,6 @@ def test_a_history_that_ends_outside_progress_gives_no_since(tmp_path: Path) -> 
         assert built_card(served, "echo", "DEMO")["in_progress_now"][0]["since"] is None
 
 
-# --- a card word for word, on the hand-built store ------------------------------------------------------------
-
-
 def built_card(client: TestClient, who: str, board: str) -> dict[str, Any]:
     body = card(client, pid(ACCOUNTS[who]), board)
     body.pop("meta")
@@ -393,9 +346,7 @@ def built_card(client: TestClient, who: str, board: str) -> dict[str, Any]:
 
 
 def test_a_card_word_for_word(built: TestClient) -> None:
-    """echo holds DEMO-1 (in progress since it moved there 20 days before T, with time logged then) and DEMO-13
-    (done), two open breaches on DEMO-1, and AIL-2 on AIL; two tickets are too few to compare on any measure."""
-    moved = "2026-10-15T12:00:00.000Z"  # T less 20 days
+    moved = "2026-10-15T12:00:00.000Z"
     assert built_card(built, "echo", "DEMO") == {
         "person": shown("echo"),
         "board": {"key": "DEMO", "name": "Demo project"},
@@ -408,12 +359,11 @@ def test_a_card_word_for_word(built: TestClient) -> None:
         "other_boards": [{"key": "AIL", "name": "AIL", "open_tickets": 1}],
         "last_activity_at": moved,
     }
-    # On AIL: AIL-2, created in progress 25 days before T and never moved, and DEMO beside it.
     on_ail = built_card(built, "echo", "AIL")
     assert on_ail["in_progress_now"] == [{"key": "AIL-2", "summary": "Sample task 15", "status": "In Progress",
                                           "since": "2026-10-10T12:00:00.000Z"}]
     assert on_ail["other_boards"] == [{"key": "DEMO", "name": "Demo project", "open_tickets": 1}]
-    assert on_ail["last_activity_at"] is None  # no status change and no time logged on AIL-2
+    assert on_ail["last_activity_at"] is None
 
 
 def test_someone_whose_tickets_are_all_done_holds_tickets_with_none_open(built: TestClient) -> None:
@@ -433,14 +383,10 @@ def test_members_with_no_tickets_and_people_on_one_board_only(built: TestClient)
             "findings": {"open_breaches": 0, "open_warnings": 0}, "process": None, "in_progress_now": [],
             "in_progress_more": 0, "other_boards": [], "last_activity_at": None,
         }
-    # outsider holds AIL-1 only: a card on AIL, with no other board; on DEMO, as oscar, no one by that id.
     assert built_card(built, "outsider", "AIL")["other_boards"] == []
     for who in ("outsider", "oscar"):
         response = built.get(f"/api/v1/people/{pid(ACCOUNTS[who])}/card", params={"level": "people"})
         assert response.status_code == 404 and response.json() == {"detail": "nobody by that id is on this board"}
-
-
-# --- the level, the parameters, the 404s, no-store --------------------------------------------------------------
 
 
 @pytest.mark.parametrize("params", [{}, {"level": "team"}, {"level": "team", "days": "30"}])
@@ -477,15 +423,12 @@ def test_a_person_not_on_the_board_or_not_a_person_id_is_404(
 
 
 def test_a_board_this_service_does_not_serve_is_404_unknown_board(client: TestClient, fresh: Settings) -> None:
-    """A board not served and a person not on a served board are both 404s; the code tells them apart (the dashboard
-    never reads the words), so a card on a board taken out of JIRA_PROJECTS never says the person is not on it."""
     ada = by_name(client)["Ada Brooks"]["id"]
     response = client.get(f"/api/v1/people/{ada}/card", params={"level": "people", "project": "NOPE"})
     assert response.status_code == 404
     assert response.json() == {"detail": "that board is not one this service serves", "code": "unknown_board"}
     absent = client.get(f"/api/v1/people/{GONE}/card", params={"level": "people", "project": "AIL"})
     assert absent.status_code == 404 and "code" not in absent.json()
-    # Every board-scoped route answers a board it does not serve the same way.
     for path in ("/people?project=NOPE", "/people/directory?project=NOPE", "/people/scorecard?level=people&project=NOPE",
                  f"/people/{ada}/avatar?project=NOPE"):
         refused = client.get(f"/api/v1{path}")
@@ -520,9 +463,6 @@ def test_a_card_holds_no_account_id_and_no_ones_address_zone_or_picture_url(clie
                 assert secret not in text, (board, secret)
 
 
-# --- the access log: once per viewer, person and board in any ten minutes ---------------------------------------
-
-
 def test_a_card_is_recorded_at_most_once_per_viewer_person_and_board_in_any_ten_minutes(
     two: Settings, fresh: Settings
 ) -> None:
@@ -536,19 +476,19 @@ def test_a_card_is_recorded_at_most_once_per_viewer_person_and_board_in_any_ten_
                           params={"level": "people", "project": board, "days": days}).status_code == 200
 
     read(admin, ada)
-    read(admin, ada)  # hovered again at once
+    read(admin, ada)
     clock.at = NOW + timedelta(minutes=5)
-    read(admin, ada, days=30)  # another period is the same card
-    clock.at = NOW + PERSON_CARD_ONCE_IN  # exactly ten minutes after the entry: still held
+    read(admin, ada, days=30)
+    clock.at = NOW + PERSON_CARD_ONCE_IN
     read(admin, ada)
     assert [(row["action"], row["subjects"], row["detail"], row["at"]) for row in entries(fresh)] == [
         ("person_card_view", [ada], {"days": 90}, to_iso(NOW))]
 
-    clock.at = NOW + PERSON_CARD_ONCE_IN + timedelta(milliseconds=1)  # more than ten minutes: a new entry
+    clock.at = NOW + PERSON_CARD_ONCE_IN + timedelta(milliseconds=1)
     read(admin, ada)
-    read(admin, ben)  # another person
-    read(other, ada)  # another viewer
-    read(admin, ada, board="AIL")  # another board
+    read(admin, ben)
+    read(other, ada)
+    read(admin, ada, board="AIL")
     found = entries(fresh)
     later = to_iso(clock.at)
     assert [(row["viewer_hash"], row["project_key"], row["subjects"], row["at"]) for row in found] == [
@@ -563,8 +503,6 @@ def test_a_card_is_recorded_at_most_once_per_viewer_person_and_board_in_any_ten_
 
 
 def test_two_reads_at_once_leave_one_entry(two: Settings, fresh: Settings) -> None:
-    """Two card reads at the same moment (the hover's fetch and the click's, say): the look and the write are one
-    write transaction, so exactly one of them writes the entry, whichever comes first."""
     access = AccessLog(two.db_file, days=365, now=lambda: NOW)
     viewer = Viewer(hash=ADMIN, name=ADMIN_NAME)
     ada = pid("acc-01")
@@ -577,7 +515,7 @@ def test_two_reads_at_once_leave_one_entry(two: Settings, fresh: Settings) -> No
             start.wait()
             written.append(access.record(viewer=viewer, level="people", project="DEMO", action=PERSON_CARD_VIEW,
                                          subjects=[ada], detail={"days": 90}, once_within=PERSON_CARD_ONCE_IN))
-        except BaseException as exc:  # the test fails below, naming it
+        except BaseException as exc:
             failed.append(exc)
 
     threads = [threading.Thread(target=read) for _ in range(8)]
@@ -597,7 +535,7 @@ def test_a_refused_card_read_records_nothing(client: TestClient, two: Settings, 
     assert client.get(f"/api/v1/people/{ada}/card").status_code == 403
     assert client.get(f"/api/v1/people/{GONE}/card", params={"level": "people"}).status_code == 404
     assert client.get(f"/api/v1/people/{ada}/card", params={"level": "people", "days": 7}).status_code == 422
-    response = unnamed.get(f"/api/v1/people/{ada}/card", params={"level": "people"})  # no viewer named
+    response = unnamed.get(f"/api/v1/people/{ada}/card", params={"level": "people"})
     assert response.status_code == 422 and response.json()["detail"][0]["loc"] == ["header", "X-Oversight-Viewer"]
     assert "Ada Brooks" not in response.text
     assert entries(fresh) == []
@@ -620,8 +558,6 @@ def test_when_the_entry_cannot_be_written_the_card_is_not_served(
 def test_when_the_log_cannot_be_looked_at_the_card_is_not_served(
     client: TestClient, fresh: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Another writer holds the snapshot past the busy timeout: the look for a recent entry cannot be made, so
-    nothing is served, rather than a card that may go unrecorded."""
     ada = by_name(client)["Ada Brooks"]["id"]
     real = access_log_module._connect
 
@@ -640,15 +576,13 @@ def test_when_the_log_cannot_be_looked_at_the_card_is_not_served(
     finally:
         holder.close()
     assert entries(fresh) == []
-    assert client.get(f"/api/v1/people/{ada}/card", params={"level": "people"}).status_code == 200  # free again
+    assert client.get(f"/api/v1/people/{ada}/card", params={"level": "people"}).status_code == 200
     assert len(entries(fresh)) == 1
 
 
 def test_a_repeat_read_needs_no_write_lock(
     client: TestClient, fresh: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A name hovered again within ten minutes finds its entry with a plain read: it is served even while another
-    writer (a sync, say) holds the snapshot, and writes nothing."""
     ada = by_name(client)["Ada Brooks"]["id"]
     assert client.get(f"/api/v1/people/{ada}/card", params={"level": "people"}).status_code == 200
     real = access_log_module._connect
@@ -663,7 +597,7 @@ def test_a_repeat_read_needs_no_write_lock(
     try:
         holder.execute("BEGIN IMMEDIATE")
         assert client.get(f"/api/v1/people/{ada}/card", params={"level": "people"}).status_code == 200
-        ben = by_name(client)["Ben Okafor"]["id"]  # someone not read yet: an entry to write, which must wait
+        ben = by_name(client)["Ben Okafor"]["id"]
         assert client.get(f"/api/v1/people/{ben}/card", params={"level": "people"}).json() == UNAVAILABLE
         holder.execute("ROLLBACK")
     finally:

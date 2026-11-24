@@ -1,47 +1,4 @@
-"""POST /rules/settings/draft (JO-20; contract 4.23 in the jira-oversight-ui repository): a custom rule drafted from an
-admin's words, for the admin to check, adjust and add. It never writes settings: the draft fills the dashboard's form,
-and only a save (POST /rules/settings) adds the rule. It writes one llm_calls row per model call, and nothing else.
-
-The body is {"text": "..."}: 3 to 500 characters once cleaned as a reason is (control characters as spaces, spaces
-collapsed), with no email address or account id in it (it goes to the model); anything else is a 422
-rule_settings_invalid on the field `text`. The answer, 200 in every case below:
-    {meta, project, outcome, draft, explanation, note, problems}
-- outcome "drafted": draft {title, description, check, params, applies_to: {status_category, issue_type}, severity}
-  and explanation (what it will flag, one or two plain sentences); problems [] once it validates exactly as a save of
-  it would (settings.plan_changes with the board's settings and options as they are now: the registry, the board's
-  names, the bounds, the title free on the board, the limit), names written as the board writes them, and its title
-  says no number the rule does not hold. Otherwise one repair, when a problem is with something the model fills in
-  (its title, description, check, severity, params or applies_to; never the board's limit, which no draft can put
-  right) and the day's budget is not used up: the same prompt with the draft and its problems, and the repaired draft
-  validated again; if that still fails (or the repair call does not answer, or is not made), outcome "drafted" with its
-  problems, each {field, message} on the form field it is about (title, description, check, severity, params.<name>,
-  applies_to.status_category, applies_to.issue_type; rule for the rule as a whole), so the admin fixes the form. A
-  title or description longer than the form takes is cut to it, at a word.
-- outcome "not_supported" (no check can do it: note says why and names the closest check) or "not_understood" (note
-  says what to add): draft null.
-- outcome "unavailable", draft null, note in plain words, never a 500: with no call, the board already holds as many
-  custom rules as it can (LIMIT_REASON: no draft could be added) or the day's model budget is used up (BUDGET_REASON;
-  never for the scripted drafter, which calls no model); the model declined (REFUSED_NOTE) or failed (ERROR_NOTE).
-The model's words (title, description, explanation, note) are kept as plain text, cut to their lengths, and one that
-holds an email address or an account id is left out (a default note said instead). The explanation and the
-description must say what the rule does: each number in them one the rule holds, in its unit or one a reader turns it
-into (72 hours as 3 days), and, for a check that flags only work past its limit, no "or more" or "at least"; words that
-say anything else are replaced by registry.explain's sentence, written from the rule itself ("Flags bugs in 'Code
-Review' for more than 3 days."), so the form never shows the AI describing another rule than the one it drafted.
-
-The call (oversight/ask/prompts.py: RULE_DRAFT_SYSTEM, rule_draft_user): provider.structured with RuleDraftReply, a
-closed schema (structured outputs close every object, so params is a JSON object in a string, as Ask's plan writes a
-call's params: llm.provider.CallParams), on settings.llm_model_qa at effort low, max_tokens DRAFT_MAX_TOKENS: Claude
-Opus 5.5 thinks before every answer (adaptive thinking cannot be turned off), so the cap leaves room for it beside a
-reply of a few hundred tokens. The prompt holds the check registry for the board, the board's names (statuses with
-their categories, issue types, mapped stages, evidence names, estimate basis) and the request quoted as data: no
-ticket text, no people, no figure from the board. Each call, the repair too, is recorded with llm.audit
-(purpose "rule_draft"), so Governance's usage counts it: a call that failed with the tokens its response reported (a
-refusal, a reply cut off), so the day's budget counts what was billed. The app log has one line for each draft
-(rule_draft: the board, the viewer's hash, the outcome, how many problems and the llm_calls ids of its model calls;
-never the words), so who asked the AI to draft on which board, and when, is always known. In LLM_MODE=stub the
-ScriptedProvider drafts from keywords (oversight/llm/scripted.py).
-"""
+"""POST /rules/settings/draft: a custom rule drafted by the model from an admin's words; it never saves."""
 from __future__ import annotations
 
 import json
@@ -110,8 +67,7 @@ _AT_OR_PAST = re.compile(r"\b(?:or more|or longer|or over|or above|at least|no l
 _DIGITS = re.compile(r"\d+(?:\.\d+)?")
 _NEAR = 0.05  # how near a number in words must be to the rule's ("3.3 days" for 80 hours)
 
-# The model writes params as a JSON object inside a string, as Ask's plan does (llm.provider.CallParams): structured
-# outputs close every object, so a free-form object could only ever be {}.
+# Structured outputs close every object, so params travels as a JSON string, as in Ask's plan.
 DraftParams = Annotated[
     dict[str, Any],
     BeforeValidator(_params_from_json),
@@ -149,8 +105,7 @@ class RuleDraftReply(BaseModel):
 
 @dataclass(frozen=True)
 class DraftAnswer:
-    """The draft as the route answers it (see the module docstring), and the llm_calls ids of the model calls it made
-    (for the log line; never answered)."""
+    """The draft as the route answers it, plus the llm_calls ids of its model calls (for the log only)."""
 
     outcome: Outcome
     draft: dict[str, Any] | None = None
@@ -165,8 +120,7 @@ class DraftAnswer:
 
 
 def parse_draft(raw: bytes) -> str:
-    """The admin's words from the body, cleaned; 422 rule_settings_invalid for anything else (the body read as every
-    rule settings body is: a JSON object, no key it does not take)."""
+    """The admin's words from the body, cleaned; 422 rule_settings_invalid for anything else."""
     body = _object(raw)
     problems = _unknown(body, frozenset({"text"}))
     value = body.get("text")
@@ -181,9 +135,7 @@ def parse_draft(raw: bytes) -> str:
 
 
 def draft_body(conn: sqlite3.Connection, ctx: ApiContext, text: str, viewer: Viewer) -> dict[str, Any]:
-    """POST /rules/settings/draft's body: the board's settings and options read in one snapshot, whether a draft can be
-    made at all (the board's limit, the day's budget: rule_settings.unavailable), then the draft (draft_rule), its model
-    calls recorded through a Store of its own; and the draft's log line (see the module docstring)."""
+    """POST /rules/settings/draft's body: check availability, draft the rule, record its calls, log one line."""
     with snapshot(conn):
         current = load_board_settings(conn, ctx.project)
         board = custom_context(conn, ctx.process, ctx.catalogue, ctx.project, at="", by=viewer.name)
@@ -211,9 +163,7 @@ def draft_rule(
     store: Store,
     now: Callable[[], datetime],
 ) -> DraftAnswer:
-    """The draft of `text` on a board (its settings `current` and options `board`): the call, the validation, the one
-    repair, the words checked against the rule (see the module docstring). Each model call is recorded in `store`, and
-    its llm_calls id kept on the answer."""
+    """Draft `text` on a board: the call, validation, one repair and the wording check; calls recorded in `store`."""
     calls: list[str] = []
     user = rule_draft_user(text, checks_payload(board.options), board_payload(board.options))
     try:
@@ -248,8 +198,7 @@ def draft_rule(
 def _checked(
     catalogue: RulesConfig, current: BoardSettings, definition: Mapping[str, Any], board: CustomContext
 ) -> tuple[list[dict[str, str]], dict[str, Any] | None]:
-    """validate_draft, and the drafted title's numbers: a name that says a number the rule does not hold ("over 4
-    days" for a limit of 3) is a problem on the title, for the repair or the admin to put right."""
+    """validate_draft, plus a title problem when the title says a number the rule does not hold."""
     problems, valid = validate_draft(catalogue, current, definition, board)
     title = definition.get("title")
     if isinstance(title, str):
@@ -261,21 +210,17 @@ def _checked(
 
 
 def _repairable(problems: list[dict[str, str]]) -> bool:
-    """Whether a problem is with something the model fills in (_MODEL_FIELDS, or a part of one): the board's limit, or
-    its custom rule ids all given, are no draft's to put right."""
+    """Whether a problem is with something the model fills in, so a repair could fix it."""
     return any(str(problem["field"]).split(".")[0] in _MODEL_FIELDS for problem in problems)
 
 
 def _spent(store: Store, provider: Any, settings: Settings, now: Callable[[], datetime]) -> bool:
-    """Whether the day's model budget is used up now (never for the scripted drafter, which calls no model): a draft
-    that reaches it makes no repair call."""
+    """Whether the day's model budget is used up now; never for the scripted drafter."""
     return getattr(provider, "name", None) != SCRIPTED and budget_reached(store.conn, settings, now())
 
 
 def _says_the_rule(text: object, rule: Mapping[str, Any]) -> bool:
-    """Whether the model's words say only what the rule does (see the module docstring): each number in them one the
-    rule holds (_unheld), and no "or more" for a check that flags only work past its limit. No words say nothing
-    wrong."""
+    """Whether the model's words say only what the rule does; empty words say nothing wrong."""
     if not isinstance(text, str) or not text:
         return True
     if _unheld(text, rule) is not None:
@@ -284,8 +229,7 @@ def _says_the_rule(text: object, rule: Mapping[str, Any]) -> bool:
 
 
 def _unheld(text: str, rule: Mapping[str, Any]) -> str | None:
-    """The first number the words say (in digits, or in words: "two weeks") that the rule does not hold (_figures), as
-    written; None when there is none."""
+    """The first number the words say that the rule does not hold, as written; None when there is none."""
     figures = _figures(rule)
     said = [(match.group(), match.group().rstrip("%").replace(",", "")) for match in NUM.finditer(text)]
     said += [(match.group(), str(spelled_value(match.group()))) for match in SPELLED.finditer(text)
@@ -297,9 +241,7 @@ def _unheld(text: str, rule: Mapping[str, Any]) -> str | None:
 
 
 def _figures(rule: Mapping[str, Any]) -> list[float]:
-    """Every number words about the rule may say: each number param in its unit and in the units a reader turns it
-    into (hours as days and weeks, days as hours and weeks, a share as a percentage), and the numbers in the status
-    and issue type names it picks."""
+    """Every number words about the rule may say, in its unit and the units a reader converts it to."""
     check = rule.get("check")
     spec = CHECK_SPECS.get(check) if isinstance(check, str) else None
     params, applies = _mapping(rule.get("params")), _mapping(rule.get("applies_to"))
@@ -331,8 +273,7 @@ def _mapping(value: object) -> Mapping[str, Any]:
 def validate_draft(
     catalogue: RulesConfig, current: BoardSettings, definition: Mapping[str, Any], board: CustomContext
 ) -> tuple[list[dict[str, str]], dict[str, Any] | None]:
-    """A drafted rule validated exactly as a save of it would be: its problems, {field, message} each, or none and the
-    rule as the board would keep it (names in the board's spelling, numbers as floats)."""
+    """A drafted rule validated exactly as a save would be: its problems, or none and the rule as kept."""
     try:
         plan = plan_changes(catalogue, current, [Change.adding(definition)], board)
     except SettingsInvalid as exc:
@@ -356,9 +297,7 @@ def board_payload(options: BoardOptions) -> dict[str, Any]:
 def _call(
     store: Store, provider: Any, settings: Settings, user: str, now: Callable[[], datetime], calls: list[str]
 ) -> RuleDraftReply:
-    """One structured call, recorded (ok, refused or error) whatever happens, its llm_calls id added to `calls`;
-    LLMError (LLMRefusal) when it fails. A failure that came with a response is recorded with the tokens it reported
-    (LLMError.usage), as is a reply that does not fit RuleDraftReply: those tokens were billed."""
+    """One structured call, always recorded with any billed tokens; raises LLMError (or LLMRefusal) on failure."""
     name = str(getattr(provider, "name", "unknown"))
     prompt_hash = llm_audit.prompt_hash(RULE_DRAFT_SYSTEM, user)
     model = settings.llm_model_qa
@@ -407,9 +346,7 @@ def _definition(reply: RuleDraftReply) -> dict[str, Any]:
 
 
 def _words(text: str | None, limit: int) -> str | None:
-    """The model's words as plain text, cut at a word to `limit` characters; None when there are none, or when they
-    hold an email address or an account id. Anything after a piece of JSON in them (a quote that closes an object or
-    opens a key, which no sentence holds) is left out: the reply's structure written into its words."""
+    """The model's words as plain text, cut at a word to `limit`; None if empty or holding personal identifiers."""
     if not isinstance(text, str):
         return None
     words = plain_text(text)

@@ -1,9 +1,3 @@
-"""The general checks custom rules use (JO-20, oversight/rules/checks.py): time_in_status_over, open_longer_than,
-no_update_for and missing_field, each called directly on hand-built issues, as tests/test_rules_checks.py calls the
-others: whole Hits (evidence key, evidence and message) for the hit cases, and an evidence key that never holds a limit.
-Each time is checked at its limit exactly (no hit: the checks flag only work past it) and a minute past it (a hit whose
-message never reads as the limit itself).
-"""
 from __future__ import annotations
 
 import re
@@ -17,12 +11,11 @@ from tests.rules_helpers import FIVE_STAGES, HOURS_BASIS, add_issue, at, context
 
 MINUTE = 1 / 60  # hours
 
-IN_REVIEW = [(-100.0, "To Do", "In Progress"), (-80.0, "In Progress", "Code Review")]  # in Code Review for 80 h
+IN_REVIEW = [(-100.0, "To Do", "In Progress"), (-80.0, "In Progress", "Code Review")]
 
 
 @pytest.fixture
 def five(process: ProcessConfig) -> ProcessConfig:
-    """AIL with a workflow that maps code review and testing too."""
     return with_project(process, "AIL", status_to_stage=FIVE_STAGES)
 
 
@@ -33,9 +26,6 @@ def _ctx(store: Store, process: ProcessConfig, fields: FieldsConfig, project: st
 
 def test_the_general_checks_are_registered() -> None:
     assert {"time_in_status_over", "open_longer_than", "no_update_for", "missing_field"} <= set(CHECKS)
-
-
-# --- time_in_status_over --------------------------------------------------------------------
 
 
 def test_time_in_one_of_the_statuses_over_the_limit_is_a_hit(
@@ -53,7 +43,6 @@ def test_time_in_one_of_the_statuses_over_the_limit_is_a_hit(
     )]
     assert hits(ctx, "time_in_status_over", "AIL-2", statuses=["Code Review"], hours=72.0) == []
     assert hits(ctx, "time_in_status_over", "AIL-3", statuses=["Code Review", "Testing"], hours=72.0) == []
-    # Statuses are matched ignoring case; a limit under 48 hours reads in hours.
     assert hits(ctx, "time_in_status_over", "AIL-2", statuses=["code review"], hours=36.0) == [Hit(
         "in-status-Code Review", {"status": "Code Review", "age_h": 50.0, "threshold_h": 36.0},
         "In 'Code Review' for 2.1 days; the limit is 36 h",
@@ -74,9 +63,6 @@ def test_the_finding_is_named_by_the_status_never_by_the_limit(
 def test_a_status_the_board_no_longer_has_is_said_on_the_run_line_as_what_happens(
     store: Store, five: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    """Renamed in Jira since: the board's statuses no longer list 'Peer Review', but the last sync still shows AIL-2 in
-    it (a rename changes no ticket's update time). AIL-2 is still in that status, so it is still checked, and the run
-    line says exactly that: its finding never closes as fixed only because a name changed."""
     add_issue(store, "AIL-1", status="Code Review", changes=IN_REVIEW)
     add_issue(store, "AIL-2", status="Peer Review", changes=[(-100.0, "To Do", "Peer Review")])
     ctx = _ctx(store, five, fields)
@@ -103,7 +89,6 @@ def test_a_board_with_no_statuses_synced_yet_checks_every_status_named(
 def test_the_time_is_the_current_stay_in_the_status_when_work_came_back_to_it(
     store: Store, five: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    """Back in Code Review for 10 hours after 90 hours there before: the time in the status is this stay's."""
     add_issue(store, "AIL-1", status="Code Review", changes=[
         (-200.0, "To Do", "In Progress"), (-150.0, "In Progress", "Code Review"),
         (-60.0, "Code Review", "In Progress"), (-10.0, "In Progress", "Code Review")])
@@ -168,9 +153,6 @@ def test_work_with_no_updated_time_is_never_called_idle(
     assert hits(ctx, "no_update_for", "AIL-1", days=1.0) == []
 
 
-# --- open_longer_than -------------------------------------------------------------------------
-
-
 def test_work_open_longer_than_the_limit_is_a_hit(store: Store, process: ProcessConfig, fields: FieldsConfig) -> None:
     add_issue(store, "AIL-1", status="In Progress", created=-41 * 24.0, changes=[(-24.0, "To Do", "In Progress")])
     add_issue(store, "AIL-2", status="To Do", created=-20 * 24.0)
@@ -184,13 +166,9 @@ def test_work_open_longer_than_the_limit_is_a_hit(store: Store, process: Process
     )]
     assert hits(ctx, "open_longer_than", "AIL-2", days=30.0) == []
     assert hits(ctx, "open_longer_than", "AIL-3", days=30.0) == []  # done work is never "open too long"
-    # 36 hours past a 1-day limit: never "Open for 1 day; the limit is 1 day".
     assert hits(ctx, "open_longer_than", "AIL-4", days=1.0)[0].message == "Open for 1.5 days; the limit is 1 day"
     assert {hit.evidence_key for days in (1.0, 10.0) for hit in hits(ctx, "open_longer_than", "AIL-1", days=days)} == {
         "open-too-long"}
-
-
-# --- no_update_for ----------------------------------------------------------------------------
 
 
 def test_open_work_jira_has_not_changed_for_too_long_is_a_hit(
@@ -207,9 +185,6 @@ def test_open_work_jira_has_not_changed_for_too_long_is_a_hit(
     )]
     assert hits(ctx, "no_update_for", "AIL-2", days=7.0) == []
     assert hits(ctx, "no_update_for", "AIL-3", days=7.0) == []
-
-
-# --- missing_field ----------------------------------------------------------------------------
 
 
 def test_a_missing_assignee_estimate_epic_or_sprint_is_a_hit(

@@ -1,98 +1,4 @@
-"""The rule engine: evaluate the catalogue, open and resolve findings (Phase 3),
-record what could not be measured, and link warnings to the breaches they
-foreshadowed (Phase 4), each board as its rule settings say (JO-15).
-
-run_rules(store, process, rules, fields, *, projects, now=utcnow) -> list[RulesResult]
-`rules` is the catalogue (config/rules.yaml). One run record (kind "rules",
-rules_version=rules.version, the catalogue's) for the whole call; each project
-is processed inside one store.transaction(). Per project:
-
-0. The board's rules: its rule settings are read from the store at the start of
-   its transaction (oversight/rules/settings.py) and applied to the catalogue
-   (effective_rules), so every caller (the CLI's rules, the cycle, "Sync now",
-   the re-check after a save, the eval, the demo) runs each board as its admins
-   set it, with no change of its own, the rules they added to it (custom rules,
-   JO-20) after the catalogue's. A board with no settings runs the catalogue
-   itself, exactly as before. Each rule's findings carry its rule_version (the
-   catalogue's version, or "<version>+<severity>" where the board changed its
-   severity; a custom rule's "c<revision that created it>", "+<severity>" the
-   same way) and its settings_hash (None while its params are the catalogue's;
-   a custom rule's covers its params and its scope).
-1. The board (board_for): a RuleContext (checks.py) and the issues in scope.
-   Issues come from `issues` LEFT JOIN `issue_metrics`; an issue with no
-   metrics row is skipped, with one note on every rule ("<n> issues have no
-   metrics: run derive").
-   The look-back (rules defaults.lookback_days, when set): a done issue
-   (status category done) finished before now - lookback_days is out of scope
-   and no rule checks it. Finished is the later of issue_metrics.done_at and
-   resolved_at; a done issue with neither stays in scope, and open work is
-   always in scope. A condition on long-finished work can never clear, so
-   without this its findings would stay open for ever.
-2. For each rule on the board, evaluate(), which writes nothing: the one
-   place a rule is evaluated, for a run and for a preview of new settings alike.
-   - missing = evidence the rule needs that process.yaml leaves null, plus
-     stages it needs that the project's workflow doesn't map. If any is
-     missing, rule_status records the rule as not measurable (measurable 0,
-     missing named) and the rule is skipped: "not measurable" is recorded,
-     never silent.
-   - Issues are selected by applies_to (status_category, issue_type, case-
-     insensitive); defaults.exclude_types are excluded unless the rule's
-     applies_to.issue_type names them. Sprint-scoped rules iterate the active
-     sprints instead, under issue_key "sprint:<id>". Each is checked with the
-     board's params; the check names what it finds (the evidence key) by the
-     catalogue's (Rule.identity_params), so a ticket over both an old and a new
-     threshold stays the same finding.
-   Then each Hit upserts a finding (finding_id from rule id, the rule's
-   rule_version, issue key and evidence key), keeping first_seen_at and
-   setting last_seen_at, run_id, message, evidence, severity, settings_hash
-   and an open state. A finding is "opened" when it had no row or its row was
-   resolved, else "refreshed". rule_status records measurable 1, issues
-   checked, hits, the rule's note and its settings_hash.
-3. Resolve (Resolution.why): an open finding this run did not produce is
-   resolved as
-   - "superseded": its rule_version is not its rule's now (a catalogue version
-     bump, or a severity changed on the board), so old and new never mix;
-   - "aged_out": the look-back put its issue out of scope. Never "cleared":
-     nothing was fixed, so the digest (which reports only cleared findings)
-     leaves it out;
-   - "settings_changed": its rule is off by the board's settings (rules.yaml has
-     it on, or the board turned on a rule rules.yaml has off and then off again:
-     settings.turned_off; a custom rule is on as created), its rule is a custom
-     rule the board deleted (JO-20: whatever its rule_version, checked first),
-     or its rule ran and the finding was last seen under other params (its
-     settings_hash differs from the rule's now, NULL as NULL; a custom rule's
-     covers its scope too). Never "cleared": when the data and the settings
-     both changed, nothing is claimed as fixed;
-   - "cleared": its rule ran, under the same params, and no longer finds it.
-   Findings of rules off in rules.yaml itself that the board never turned on,
-   or not measurable, are left as they are, and counted as untouched. Turning a
-   rule back on, or a threshold back, reopens the same ids (the upsert keeps
-   first_seen_at), and so does restoring a deleted custom rule (its id and its
-   rule_version are the same).
-4. Link: every breach opened in this run whose rule has warnings
-   (rules.warnings_for) is linked to that issue's findings of those warning
-   rules, each at its own rule_version, first seen no later than it ("warned
-   on X, breached on Y"). A link is written once and keeps its linked_at.
-5. The run is finished with per-project stats, among them settings_revision
-   (the board's settings revision the run applied; 0: none) and
-   settings_changed; on an exception it is marked failed and the exception
-   re-raised (the project's transaction rolled back, so no partial findings
-   remain).
-
-preview(store, process, rules, fields, project, settings, *, now) -> list[Impact]
-What a re-check with other settings would do to the findings of each rule
-whose settings they change, on the board's data now: the rules evaluated as a
-run evaluates them and the open findings resolved as a run would resolve them,
-with nothing written (the API passes a store on a read-only connection). The
-re-check applies every saved setting, so a rule whose saved settings have not
-reached the findings yet (a re-check that failed, or has not run: what the run
-the findings show recorded in rule_status differs) is in the preview too, when
-the re-check would open or close anything of it, marked pending. A custom rule
-the settings add (or restore) is in it with every finding it would raise now;
-one they delete with every open finding it would close; and one a saved change
-deleted whose findings are still open (its re-check failed, or has not run),
-with those it would close, marked pending.
-"""
+"""The rule engine: evaluates the catalogue, opens and resolves findings."""
 from __future__ import annotations
 
 import hashlib
@@ -159,8 +65,6 @@ class RulesResult:
     # Done issues the look-back left unchecked, and the look-back itself (None: off).
     out_of_scope: int = 0
     lookback_days: int | None = None
-    # Findings resolved as "settings_changed" (JO-15), the board's settings revision the run applied (0: none) and the
-    # rules those settings change on it, in catalogue order.
     settings_changed: int = 0
     settings_revision: int = 0
     customised: list[str] = field(default_factory=list)
@@ -170,8 +74,6 @@ class RulesResult:
         return [s for s in self.stats if not s.measurable]
 
     def render(self) -> str:
-        """Human summary: version, counts, one line per rule (hits, or 'not measurable: <missing>', or the note),
-        then the look-back (when set), the board's rule settings (when it has any) and the findings left untouched."""
         lines = [
             f"rules {self.project} (catalogue {self.rules_version}): {self.opened} opened, "
             f"{self.refreshed} still open, {self.resolved} resolved, {self.superseded} superseded, "
@@ -216,7 +118,7 @@ def run_rules(
     projects: list[str],
     now: Callable[[], datetime] = utcnow,
 ) -> list[RulesResult]:
-    """Evaluate every rule each board has on, with its settings (`rules`: the catalogue). See the module docstring."""
+    """Evaluate every rule each board has on, with its settings (`rules`: the catalogue)."""
     try:
         projects = validate_project_keys(projects)
     except ValueError as exc:
@@ -241,8 +143,6 @@ def run_rules(
                 not_measurable=[s.rule_id for s in result.not_measurable],
             )
     except BaseException as exc:
-        # finished_at from the same clock as started_at (as every other run does), so a run
-        # under an injected clock never "finishes" at the wall-clock time, before it started.
         try:
             store.finish_run(
                 run,
@@ -327,10 +227,6 @@ def _run_project(
 
 @dataclass
 class Board:
-    """One board as its rules are evaluated over it, read once for every rule: the checks' context (its rules are the
-    board's), the issues in scope (with metrics, the look-back applied), the keys of those the look-back left out, how
-    many issues have no metrics yet, and the stages its workflow maps."""
-
     ctx: _checks.RuleContext
     in_scope: list[Any]
     aged: set[str]
@@ -338,8 +234,6 @@ class Board:
     mapped: set[str]
 
     def missing(self, rule: Rule) -> list[str]:
-        """What the rule needs that the board does not record: evidence process.yaml leaves null, then stages its
-        workflow does not map. Any of it makes the rule not measurable (oversight.ask.catalog.rule_missing too)."""
         process, project = self.ctx.process, self.ctx.project
         missing = [e for e in rule.requires_evidence if not process.has_evidence(project, e)]
         missing += [s for s in rule.requires_stages if s not in self.mapped and s not in missing]
@@ -369,9 +263,6 @@ def board_for(
 
 @dataclass
 class Evaluation:
-    """What one rule finds on one board: the targets it checked and its hits, by issue key ("sprint:<id>" for a
-    sprint), and its note; nothing written. Not measurable when it misses evidence or stages, with them named."""
-
     rule: Rule
     missing: list[str]
     checked: int = 0
@@ -384,11 +275,6 @@ class Evaluation:
 
 
 def evaluate(rule: Rule, board: Board) -> Evaluation:
-    """One rule over one board, writing nothing: the one place a rule is evaluated, by a run and by a preview of new
-    settings alike. A rule that is not measurable checks nothing. Otherwise every target in scope (the issues
-    applies_to and the excluded types select, or the active sprints) is checked with the rule's params, its findings
-    named by its identity params (the catalogue's), and the rule's note gathered (with the issues that have no metrics
-    yet)."""
     missing = board.missing(rule)
     if missing:
         return Evaluation(rule, missing)
@@ -405,12 +291,7 @@ def evaluate(rule: Rule, board: Board) -> Evaluation:
 
 
 def _out_of_scope(issues: list[Any], lookback_days: int | None, moment: datetime) -> set[str]:
-    """Keys of the done issues finished before the look-back (none when it is off).
-
-    Finished is the later of done_at and resolved_at, so work finished recently by
-    either account stays in scope; a done issue with neither (or with timestamps
-    that do not parse) stays in scope, and so does all open work.
-    """
+    """Keys of the done issues finished before the look-back (none when it is off)."""
     if lookback_days is None:
         return set()
     cutoff = moment - timedelta(days=lookback_days)
@@ -536,11 +417,6 @@ def _record_status(
 
 @dataclass(frozen=True)
 class Resolution:
-    """How a board's rules stand after a run (or would after a re-check), to say why an open finding the run did not
-    produce resolves: each rule's rule_version and settings_hash now, the rules that ran and could measure, the rules
-    the board's settings turn off (rules.yaml has them on, or the board turned them on and off again; a custom rule is
-    on as created), the custom rules the board deleted, and the issues the look-back put out of scope."""
-
     catalogue_version: str
     versions: Mapping[str, str]
     hashes: Mapping[str, str | None]
@@ -559,9 +435,7 @@ class Resolution:
         board_off: Collection[str] = (),
         deleted: Iterable[str] = (),
     ) -> Resolution:
-        """For a board's rules (`rules`, from `catalogue`) after the rules in `measured` ran. `board_off`: the rules the
-        board itself turned off (settings.turned_off), which a rule rules.yaml has off is only once the board turned it
-        on. `deleted`: the custom rules the board deleted (JO-20)."""
+        """For a board's rules (`rules`, from `catalogue`) after the rules in `measured` ran."""
         on_by_default = {rule.id for rule in catalogue.rules if rule.enabled} | {
             rule.id for rule in rules.rules if rule.custom
         }
@@ -579,9 +453,7 @@ class Resolution:
         )
 
     def why(self, row: Mapping[str, Any], produced: Collection[str]) -> str | None:
-        """Why an open finding (its finding_id, rule_id, rule_version, issue_key and settings_hash) resolves:
-        superseded, aged_out, settings_changed or cleared (see the module docstring); None when it stays open, as
-        produced again or untouched."""
+        """Why an open finding resolves."""
         rule_id = row["rule_id"]
         if rule_id in self.deleted:
             return "settings_changed"
@@ -629,8 +501,6 @@ def _link(store: Store, rules: RulesConfig, opened: list[tuple[str, Rule, str, s
         warnings = rules.warnings_for(rule.id)
         if not warnings:
             continue
-        # Each warning rule at its own rule_version on the board: versions never mix, and after a version bump (or a
-        # severity change) every reopened breach would otherwise be linked again to its old warnings.
         either = " OR ".join("(rule_id = ? AND rule_version = ?)" for _ in warnings)
         found = store.query(
             f"SELECT finding_id FROM findings WHERE issue_key = ? AND first_seen_at <= ? AND ({either})",
@@ -669,14 +539,6 @@ def _stats(result: RulesResult) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class Impact:
-    """What a re-check with other settings would do to one rule's open findings on a board: how many are open now,
-    how many would open (new ids, or resolved ones reopening), close (settings_changed, superseded by a severity
-    change, or cleared or aged out by the data since the last run) and stay open (the same ids), with up to EXAMPLES
-    issue keys ("sprint:<id>" for a sprint) of those that would open and close. Measurable: the rule's evidence and
-    stages are all there on the board. Pending: the settings leave the rule as saved, but its findings do not reflect
-    the settings it runs with yet (an earlier change whose re-check failed or never ran), so the re-check applies them
-    too."""
-
     rule_id: str
     measurable: bool
     enabled: bool
@@ -707,13 +569,6 @@ def preview(
     *,
     now: datetime,
 ) -> list[Impact]:
-    """What a re-check of the board with `settings` would do, rule by rule (catalogue order, then the custom rules in
-    the order they were added), against the board's data now: for each rule whose settings they change (a custom rule
-    they add, restore or delete too), each rule they leave as saved whose saved settings have not reached its findings
-    yet (pending) and that the re-check would open or close findings of, and each custom rule a saved change deleted
-    whose findings are still open (pending: the re-check closes them, as it closes every finding of a deleted rule).
-    evaluate() as a run evaluates, Resolution.why as a run resolves, nothing written. `rules` is the catalogue; `store`
-    may sit on a read-only connection."""
     saved = load_board_settings(store.conn, project)
     current = effective_rules(rules, saved)
     proposed = effective_rules(rules, settings)
@@ -788,9 +643,6 @@ def _deleted_impact(
     store: Store, project: str, rule: Rule | None, board: Board, resolution: Resolution, *, rule_id: str | None = None,
     pending: bool = False,
 ) -> Impact:
-    """A custom rule the settings delete (pending: one a saved change deleted, its findings not closed yet): every open
-    finding of it closes (settings_changed), nothing opens. `rule` is None for a deleted rule whose row no longer fits
-    the registry (it is named by `rule_id`)."""
     named = rule.id if rule is not None else str(rule_id)
     open_rows = store.query(_RULE_OPEN_SQL, (project, named))
     closing = [row["issue_key"] for row in open_rows if resolution.why(row, ()) is not None]
@@ -809,7 +661,6 @@ def _deleted_impact(
 
 
 def _live(rules: RulesConfig, rule_id: str) -> Rule | None:
-    """One of the board's rules by id; None for a rule it does not run (one a change adds, or one it deleted)."""
     return next((rule for rule in rules.rules if rule.id == rule_id), None)
 
 
@@ -819,15 +670,10 @@ def _settings_of(rule: Rule, rules: RulesConfig) -> tuple[bool, str, str | None]
 
 
 def _ran_as(rule: Rule, rules: RulesConfig) -> tuple[str, str | None] | None:
-    """How a run of the board runs the rule, as rule_status records it: its rule_version and settings_hash; None when
-    it is off, so not run."""
     return (rules.rule_version(rule), rule.settings_hash) if rule.enabled else None
 
 
 def _shown(store: Store, project: str) -> dict[str, tuple[str, str | None]] | None:
-    """Each rule as the board's findings show it: the rule_version and settings_hash the run whose settings they show
-    (settings.showing) ran it with, by rule id, a rule it did not run left out; None before the board's first rules
-    run, when there is nothing for saved settings to have reached."""
     run = showing(recent_runs(store.conn, project))
     if run is None:
         return None

@@ -13,7 +13,6 @@ from tests.conftest import CONFIG_FIXTURES
 
 
 def test_real_config_files_load() -> None:
-    """The shipped config/ files must always be valid."""
     process = ProcessConfig.load(PROJECT_ROOT / "config" / "process.yaml")
     fields = FieldsConfig.load(PROJECT_ROOT / "config" / "fields.yaml")
     assert "AIL" in process.projects
@@ -98,8 +97,6 @@ def test_missing_and_broken_files_are_config_errors(tmp_path: Path) -> None:
 
 
 def test_unreadable_files_are_config_errors_not_tracebacks(tmp_path: Path) -> None:
-    # Regression: only a missing file and bad YAML were ConfigErrors, so a folder
-    # or Notepad's "Unicode" (UTF-16) save crashed sync, derive and baseline.
     utf16 = tmp_path / "process.yaml"
     utf16.write_text((CONFIG_FIXTURES / "process.yaml").read_text(encoding="utf-8"), encoding="utf-16")
     with pytest.raises(ConfigError, match="not UTF-8"):
@@ -115,8 +112,6 @@ def test_a_utf8_file_with_a_byte_order_mark_loads(tmp_path: Path) -> None:
 
 
 def test_missing_evidence_also_names_stages_left_out(tmp_path: Path) -> None:
-    # Regression: a stage left out of `evidence` has no evidence (has_evidence is
-    # False) but was never named, so doctor called the project fully configured.
     data = _base()
     evidence = data["projects"]["AIL"]["evidence"]
     del evidence["testing"]
@@ -133,7 +128,6 @@ def test_stages_the_workflow_maps_need_no_evidence_entry(tmp_path: Path) -> None
     project["status_to_stage"].update({"Code Review": "code_review", "Testing": "testing"})
     project["evidence"] = {"test_signoff": None}
     process = ProcessConfig.load(_write(tmp_path, data))
-    # Code review and testing show in the status history; the other three are recorded nowhere.
     assert process.missing_evidence("AIL") == ["dev_signoff", "test_review", "test_signoff"]
 
 
@@ -165,8 +159,6 @@ def test_fields_round_trip_through_dump(tmp_path: Path, fields: FieldsConfig) ->
 def test_a_failed_dump_keeps_the_previous_file(
     tmp_path: Path, fields: FieldsConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Regression: dump wrote in place, so an interrupted write could leave sync
-    # a truncated fields.yaml that still parses, with fields silently missing.
     path = tmp_path / "fields.yaml"
     path.write_text("previous\n", encoding="utf-8")
 

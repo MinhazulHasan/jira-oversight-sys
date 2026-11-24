@@ -1,47 +1,4 @@
-"""Way 1: the read-only Jira REST client.
-
-Every request is checked against an allowlist of (method, route) before it is
-sent, so a write cannot reach Jira even by mistake. Some reads are POSTs
-(search/jql, changelog/bulkfetch, worklog/list), which is why the guard is an
-allowlist of method + route rather than "GET only".
-
-CONTRACT (ticket 2). Response shapes: tests/fixtures/jira/SHAPES.md.
-
-Guard
-- `route_of(path)` returns the ALLOWED route template a request path matches,
-  or None. The path is the path only: no scheme or host, no query string.
-  `{key}` and `{id}` match exactly one segment of [A-Za-z0-9_.-]+.
-- It returns None for anything that is not a plain "/rest/..." path:
-  absolute URLs, "..", "//", backslashes, "%" (encoded tricks), "?", "#",
-  whitespace or control characters.
-- `check_allowed(method, path)` upper-cases the method and returns the route,
-  or raises ReadOnlyViolation(method, path). `JiraClient.request` calls it
-  before any I/O, so a violation never reaches the transport.
-
-Retries (JiraClient.request)
-- Up to `max_attempts` sends in total. Retry on 429, any 5xx, and
-  httpx.TransportError (timeouts, connection errors).
-- Wait `Retry-After` when the response has it (delta-seconds or an HTTP date;
-  clamp to [0, max_retry_after_s]); otherwise 2 ** attempt seconds
-  (1, 2, 4, ...). Never sleep after the final attempt.
-- After the final attempt, raise JiraUnavailable (status_code = last status, or None).
-- `deadline` (optional, on `clock`) bounds the whole call, waits included: no
-  attempt starts at or past it, each attempt's timeouts end at it, and a wait
-  that would reach it is not slept; each of those raises JiraBudgetSpent.
-- 401/403: raise JiraAuthError at once. Other 4xx: raise JiraError at once
-  with status_code, path and a short excerpt of the error body (at most 300
-  characters). Never put credentials or auth headers into errors or logs.
-- 2xx: return the parsed JSON, or None for an empty body (204).
-- `request_count` counts every send, retries included.
-- Log one debug line per send (method, route, status, attempt, elapsed_ms)
-  with oversight.logs.get_logger("jira").
-
-Transport
-- An httpx.Client with base_url, basic auth (email, api_token),
-  httpx.Timeout(timeout_s, connect=connect_timeout_s), follow_redirects=False,
-  header Accept: application/json. `transport` is injectable for tests
-  (httpx.MockTransport); `sleep` is injectable so tests never really wait.
-"""
+"""Way 1: the read-only Jira REST client."""
 from __future__ import annotations
 
 import base64
@@ -74,7 +31,7 @@ ALLOWED: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/rest/api/3/myself"),
         ("GET", "/rest/api/3/field"),
         ("GET", "/rest/api/3/project/{key}"),
-        ("GET", "/rest/api/3/project/search"),  # board discovery (JO-17): the projects this account can browse
+        ("GET", "/rest/api/3/project/search"),  # board discovery: the projects this account can browse
         ("GET", "/rest/api/3/project/{key}/statuses"),
         ("POST", "/rest/api/3/search/jql"),  # a read, despite POST
         ("POST", "/rest/api/3/changelog/bulkfetch"),  # a read, despite POST
@@ -103,23 +60,14 @@ _SPRINT_PAGE_SIZE = 50
 _ASSIGNABLE_PAGE_SIZE = 100
 _PROJECT_PAGE_SIZE = 50
 
-# How far into the site's users the assignable-user search reads. In Atlassian's words: "This operation takes the
-# users in the range defined by startAt and maxResults, up to the thousandth user, and then returns only the users
-# from that range that can be assigned the issue. This means the operation usually returns fewer users than
-# specified in maxResults." So a range with no one assignable in it comes back empty while more follow, and no one
-# past the site's 1,000th user is ever returned: a board's members are read from every range below this limit.
 ASSIGNABLE_SCAN_LIMIT = 1000
 
-# The most of a board's assignable users one read keeps, a safety cap against a server that sends more than it was
-# asked for (ten ranges of 100 hold 1,000 at most): past it the read stops, and says so in the log.
 MAX_ASSIGNABLE_USERS = 2000
 
 _ERROR_EXCERPT_CHARS = 300
 
 _SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
 _PLACEHOLDERS = frozenset({"{key}", "{id}"})
-# Each allowed route split into segments, literal routes first, in a fixed
-# order: a frozenset's iteration order changes from run to run.
 _ROUTES: tuple[tuple[str, tuple[str, ...]], ...] = tuple(
     (route, tuple(route[1:].split("/")))
     for route in sorted({route for _, route in ALLOWED}, key=lambda r: ("{" in r, r))
@@ -133,8 +81,6 @@ def route_of(path: str) -> str | None:
     if not isinstance(path, str) or not path.startswith("/") or ".." in path:
         return None
     segments = path[1:].split("/")
-    # "." passes the character check, but httpx drops "." segments before
-    # sending, so the URL sent would not be the path checked here.
     if not all(_SEGMENT.fullmatch(segment) and segment != "." for segment in segments):
         return None
     for route, parts in _ROUTES:
@@ -238,9 +184,7 @@ class JiraClient:
         deadline: float | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> Any:
-        """Guard, send with retries, return parsed JSON. See the module docstring.
-
-        `deadline`, on `clock`, bounds the call with its retries and waits: past it, JiraBudgetSpent."""
+        """Guard, send with retries, return parsed JSON."""
         route = check_allowed(method, path)
         verb = _verb(method)
         response: httpx.Response | None = None
@@ -294,8 +238,7 @@ class JiraClient:
         body: Any,
         timeout: httpx.Timeout | None = None,
     ) -> tuple[httpx.Response | None, httpx.TransportError | None]:
-        """One send: the response, or the transport error raised instead of one. `timeout`: the client's own
-        when None."""
+        """One send: the response, or the transport error raised instead of one."""
         self.request_count += 1
         started = time.perf_counter()
         try:
@@ -318,8 +261,7 @@ class JiraClient:
     def _timeout_until(
         self, deadline: float | None, clock: Callable[[], float], verb: str, path: str, attempt: int
     ) -> httpx.Timeout | None:
-        """None (the client's timeouts) without a deadline; else the client's timeouts cut to the time left,
-        or JiraBudgetSpent when none is left."""
+        """The client's timeouts, cut to the time left before the deadline."""
         if deadline is None:
             return None
         left = deadline - clock()
@@ -399,11 +341,6 @@ class JiraClient:
     # --- paged reads ------------------------------------------------------------
 
     def project_search(self) -> list[dict[str, Any]]:
-        """GET /rest/api/3/project/search?action=browse&status=live&orderBy=key: every live project (a board; Jira
-        Cloud calls them spaces) this account can browse, as Jira sends them, ordered by key. Archived projects and
-        those in the trash are not live, so Jira leaves them out. Paged by startAt (maxResults 50) until isLast,
-        `total` or an empty page, as every startAt read. Callers keep only what they need of each (oversight/boards.py:
-        key, name, type and id)."""
         path = "/rest/api/3/project/search"
         params = {"action": "browse", "status": "live", "orderBy": "key"}
         return self._offset_pages(path, "values", _PROJECT_PAGE_SIZE, params=params)
@@ -411,14 +348,7 @@ class JiraClient:
     def search_jql(
         self, jql: str, fields: list[str], *, page_size: int | None = None
     ) -> Iterator[list[dict[str, Any]]]:
-        """POST /rest/api/3/search/jql; yield each page's `issues` list.
-
-        Body: {"jql", "fields", "maxResults": page_size or self.page_size,
-        "nextPageToken" (omitted on the first page)}. Stop when the response
-        has no nextPageToken, or isLast is true, or a page is empty. Raise
-        JiraError if Jira returns the same token twice (it would loop forever).
-        The enhanced search returns no total.
-        """
+        """POST /rest/api/3/search/jql; yield each page's `issues` list."""
         size = page_size or self.page_size
         if size < 1:
             raise ValueError(f"page_size must be at least 1, not {size}")
@@ -429,15 +359,7 @@ class JiraClient:
     def bulk_changelog(
         self, issue_ids_or_keys: list[str], field_ids: list[str]
     ) -> Iterator[dict[str, Any]]:
-        """POST /rest/api/3/changelog/bulkfetch; yield each `issueChangeLogs` entry.
-
-        Each entry is {"issueId": "52507", "changeHistories": [...]}: issue
-        ids, not keys. Chunk issues by 1000 and field ids by 10, and page with
-        nextPageToken (body: issueIdsOrKeys, fieldIds, maxResults 1000,
-        nextPageToken). The same issueId can appear in several entries (pages,
-        field chunks), so callers merge by issueId. An empty field_ids raises
-        ValueError (no filter would return every field's history).
-        """
+        """POST /rest/api/3/changelog/bulkfetch; yield each `issueChangeLogs` entry."""
         if not field_ids:
             raise ValueError(
                 "bulk_changelog needs at least one field id: without a filter Jira "
@@ -458,25 +380,17 @@ class JiraClient:
                     yield from page
 
     def issue_changelog(self, key: str) -> list[dict[str, Any]]:
-        """GET /rest/api/3/issue/{key}/changelog: every history, following startAt
-        and maxResults (100) until isLast is true or `total` is reached."""
+        """GET /rest/api/3/issue/{key}/changelog: every history, following startAt."""
         path = _path_for("GET", "/rest/api/3/issue/{key}/changelog", key)
         return self._offset_pages(path, "values", _CHANGELOG_PAGE_SIZE)
 
     def issue_worklogs(self, key: str) -> list[dict[str, Any]]:
-        """GET /rest/api/3/issue/{key}/worklog: every worklog, following startAt
-        and maxResults (5000) until `total` is reached."""
+        """GET /rest/api/3/issue/{key}/worklog: every worklog, following startAt."""
         path = _path_for("GET", "/rest/api/3/issue/{key}/worklog", key)
         return self._offset_pages(path, "worklogs", _WORKLOG_PAGE_SIZE)
 
     def worklog_updated(self, since_ms: int) -> list[dict[str, Any]]:
-        """GET /rest/api/3/worklog/updated?since=ms: every `values` entry
-        ({worklogId, updatedTime, properties}).
-
-        Page by calling again with since = the response's `until` while
-        lastPage is false. Never follow `nextPage` (an absolute URL the guard
-        rejects). Raise JiraError if `until` does not advance.
-        """
+        """GET /rest/api/3/worklog/updated?since=ms: every `values` entry."""
         return self._worklog_feed("/rest/api/3/worklog/updated", since_ms)
 
     def worklog_deleted(self, since_ms: int) -> list[dict[str, Any]]:
@@ -484,8 +398,7 @@ class JiraClient:
         return self._worklog_feed("/rest/api/3/worklog/deleted", since_ms)
 
     def worklog_list(self, ids: list[int | str]) -> list[dict[str, Any]]:
-        """POST /rest/api/3/worklog/list with {"ids": [...]}, in chunks of 1000.
-        Returns the worklogs (each carries issueId). Empty ids returns [] with no call."""
+        """POST /rest/api/3/worklog/list with {"ids": [...]}, in chunks of 1000."""
         path = "/rest/api/3/worklog/list"
         worklogs: list[dict[str, Any]] = []
         for chunk in _chunks(_unique(ids), WORKLOG_LIST_MAX_IDS):
@@ -493,8 +406,7 @@ class JiraClient:
         return worklogs
 
     def board_sprints(self, board_id: int | str) -> list[dict[str, Any]]:
-        """GET /rest/agile/1.0/board/{id}/sprint: every sprint, following startAt
-        until isLast is true."""
+        """GET /rest/agile/1.0/board/{id}/sprint: every sprint, following startAt until isLast is true."""
         path = _path_for("GET", "/rest/agile/1.0/board/{id}/sprint", board_id)
         return self._offset_pages(path, "values", _SPRINT_PAGE_SIZE)
 
@@ -505,31 +417,7 @@ class JiraClient:
         deadline: float | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> list[dict[str, Any]]:
-        """GET /rest/api/3/user/assignable/search?project=<key>: every user Jira lets the board's tickets be
-        assigned to (the users its own assignee picker lists) among the site's first ASSIGNABLE_SCAN_LIMIT
-        users, as Jira sends them, first seen first.
-
-        The body is a JSON array of user objects, paged by startAt with maxResults 100. As Atlassian documents
-        it (see ASSIGNABLE_SCAN_LIMIT), a page takes the site's users in [startAt, startAt + maxResults), up to
-        the thousandth user, and sends only those of them who can be assigned: a range with no one assignable
-        in it comes back empty while more follow, and no one past the site's 1,000th user is ever sent. So the
-        read asks for every range Jira serves, startAt 0, 100, ..., 900, whatever came of the one before: always
-        ten requests on a healthy server, never ended by an empty page, and never startAt 1000 or more
-        (site_has_users_beyond_scan says whether the site has accounts past the scan). Each account is kept
-        once, first seen first. A page that is not empty but brings no account not already seen never ends the
-        read either: the site's users can move while it is read (an account joining ahead of a member sends that
-        member again at the top of the next range, and the member after it one place on; Atlassian's
-        JRACLOUD-77719 reports users repeated when paging), so stopping there would drop the members still to
-        come, and a server that ignores startAt costs the ten requests and no more. Such pages are counted, and
-        once the read ends board_members_page_repeated is logged with the board, their number (`pages`; nine
-        for a server that ignores startAt) and the number kept. At most MAX_ASSIGNABLE_USERS are kept, a safety
-        cap against a server that sends more than it was asked for: an account past them stops the read, and
-        board_members_capped is logged with the board, the number kept and the cap. Every entry must be an
-        object with an accountId, or JiraError (not the documented shape). `deadline`, on `clock`, bounds the
-        whole read, checked before each page and inside request(), each page's retries and waits included:
-        past it, JiraBudgetSpent. Retries, timeouts and errors as every read. Callers keep only what they need
-        of each user (oversight.jira.mapping.map_member): never the email address, time zone or locale.
-        """
+        """GET /rest/api/3/user/assignable/search?project=<key>: every user assignable on the board."""
         if not isinstance(project_key, str) or not _SEGMENT.fullmatch(project_key):
             raise ValueError(f"not a project key: {project_key!r}")
         path = "/rest/api/3/user/assignable/search"
@@ -562,20 +450,6 @@ class JiraClient:
     def site_has_users_beyond_scan(
         self, *, deadline: float | None = None, clock: Callable[[], float] = time.monotonic
     ) -> bool | None:
-        """Whether Jira lists more accounts on the site than assignable_users can scan (ASSIGNABLE_SCAN_LIMIT), so
-        that a board's members past the site's 1,000th user may be missing:
-        GET /rest/api/3/users/search?startAt=1000&maxResults=1. Atlassian documents that read as listing all
-        users, active, inactive and previously deleted ones alike, and it lists app accounts too: what is
-        counted is accounts, never only the people site administration shows.
-
-        True when Jira sends a non-empty array (an account at place 1,000 or later), False for an empty array,
-        and None when Jira will not say: any JiraError but JiraBudgetSpent, such as a 403 for an account without
-        the Browse users and groups global permission, a 404, no answer after the retries (a refused connection,
-        or timeouts when there is no `deadline`) or a body that is not an array, each logged as
-        site_user_count_unknown with the status only. JiraBudgetSpent (`deadline`, on `clock`, as every read's)
-        propagates, so with a short deadline a slow or timing-out answer ends as the caller's spent time, not as
-        None. Nothing of the account Jira may send is logged or kept: only whether there is one.
-        """
         path = "/rest/api/3/users/search"
         params = {"startAt": ASSIGNABLE_SCAN_LIMIT, "maxResults": 1}
         try:
@@ -613,8 +487,6 @@ class JiraClient:
     def _offset_pages(
         self, path: str, items_key: str, page_size: int, *, params: dict[str, Any] | None = None
     ) -> list[Any]:
-        """Every item of a startAt-paged GET (`params` sent on every page besides): stop on isLast, on `total`, or
-        on an empty page."""
         items: list[Any] = []
         while True:
             page_params = {**(params or {}), "startAt": len(items), "maxResults": page_size}
@@ -727,8 +599,6 @@ def _retry_after_s(response: httpx.Response) -> float | None:
         retry_at = _parse_http_date(value)
         if retry_at is None:
             return None
-        # Measure from the server's own Date when it sent one, so a skewed
-        # local clock can neither stretch nor skip the wait.
         server_now = _parse_http_date(response.headers.get("Date", ""))
         seconds = (retry_at - (server_now or utcnow())).total_seconds()
     return None if math.isnan(seconds) else seconds

@@ -1,66 +1,4 @@
-"""Our MCP server (Phase 6): one read-only tool per catalogue entry, for Claude
-Desktop and Claude Code over stdio.
-
-CONTRACT (stub; the ask build implements it). Pinned `mcp<2` (1.30): use
-`from mcp.server.fastmcp import FastMCP` and `from mcp.types import ToolAnnotations`.
-Inspect the installed package for the exact `add_tool` / `tool()` signatures
-before writing; do not write from memory.
-
-build_server(settings, process, rules, *, db_path=None) -> FastMCP
-- Name "jira_oversight_mcp". For every spec in ask.catalog.CATALOG register a
-  tool named spec.name whose single argument `params` is the spec's
-  params_model (FastMCP derives the input schema from the pydantic model), with
-  spec.description and annotations ToolAnnotations(title=..., readOnlyHint=True,
-  destructiveHint=False, idempotentHint=True, openWorldHint=False).
-- Each call opens a read-only connection (open_readonly) to the store's file,
-  runs catalog.run_query with a fresh CatalogContext (project from params or
-  settings.jira_projects[0], now=utcnow(), row_limit from settings), and
-  returns json.dumps({"tool", "params", "columns", "rows", "truncated", "as_of"}).
-  A missing database file or a validation error returns a JSON object with an
-  "error" field (and the tool raises nothing else).
-- One extra tool, oversight_catalog, lists the tools and their parameters
-  (catalog_schema()), so a client can discover the vocabulary.
-main(): build and `run()` over stdio (the `python -m oversight mcp` command).
-Nothing here writes: tests check that every registered tool's annotations say
-read-only and that calling each tool over an in-process client session returns
-the same rows as catalog.run_query.
-
-Implementation notes
-- The `params` argument is declared as Annotated[Any, WithJsonSchema(<the
-  spec's params_model schema>)]: the tool's input schema is the pydantic
-  model's own JSON schema, but the value reaches this module unvalidated, so a
-  bad call comes back as {"error": "..."} in plain words (catalog.validate_params)
-  as the contract asks. Had FastMCP validated the model itself, an invalid
-  call would have been a protocol-level tool error, never a JSON object.
-- `params` is optional: a tool with no required parameter (oversight_rule_status,
-  oversight_hot_spots) can be called with no arguments at all. A client that
-  sends the object as a JSON string (Claude Desktop does) is handled by
-  FastMCP's pre-parsing.
-- structured_output=False: the JSON text is the whole result. The default would
-  wrap the same string again as structuredContent {"result": "..."}.
-- Every call opens its own read-only connection and closes it; the server holds
-  none, so a sync can replace the database while the server runs.
-- A project that process.yaml does not configure is refused with an error that
-  names the configured ones (the check ask() makes too); otherwise a query
-  could fail part-way with a ConfigError. Every board the service serves is
-  configured (JO-17): main() maps each one process.yaml leaves out from Jira's
-  status categories, from the snapshot as it is when the server starts
-  (oversight.boards.board_process).
-- The payload also carries the fact's note (the findings on a timeline, the
-  sprint fallback, the scope of a coverage count): without it a reader cannot
-  tell what the rows cover.
-- oversight_catalog also lists the configured projects, rules.yaml's enabled
-  rules (`rules`: id, title, kind, severity; these need no database) and each
-  board's own rules as its admins set them (`board_rules`, by project: id,
-  title, kind, severity, enabled and custom, the rules they added (JO-20)
-  among them, read from the snapshot through a read-only connection of its
-  own; rules.yaml's when there is no snapshot, or it cannot be read), so a
-  client can choose rule_id and project values that exist on the board.
-- Each query runs with the rules of the board it names (or the default board):
-  rules.yaml with the rule settings its admins saved for that board (JO-15,
-  oversight/rules/settings.py), read through the call's read-only connection,
-  so a rule's status, severity and threshold here are the dashboard's.
-"""
+"""Read-only MCP server over stdio: one tool per catalogue entry plus oversight_catalog."""
 from __future__ import annotations
 
 import json
@@ -153,8 +91,7 @@ def main(settings: Settings | None = None) -> int:
 
 
 def served_process(process: ProcessConfig, settings: Settings) -> ProcessConfig:
-    """process.yaml with every served board mapped (oversight.boards.board_process), from the snapshot read-only; from
-    nothing (JIRA_PROJECTS, each before its first sync) without one, or with one that cannot be read."""
+    """process.yaml with every served board mapped, from the snapshot when one can be read."""
     from oversight.boards import board_process
 
     if settings.db_file.exists():
@@ -233,8 +170,7 @@ class _Runner:
         return json.dumps(payload, ensure_ascii=False)
 
     def catalog(self) -> str:
-        """The vocabulary: tools, configured projects, rules.yaml's enabled rules and each board's rules (see the module
-        docstring). Never fails for want of a database: without one, every board's rules are rules.yaml's."""
+        """The vocabulary: tools, projects and rules; without a database, every board's rules are rules.yaml's."""
         return json.dumps(
             {
                 "server": SERVER_NAME,
@@ -259,8 +195,7 @@ class _Runner:
         )
 
     def board_rules(self) -> dict[str, RulesConfig]:
-        """Each configured board's rules, by project: rules.yaml with the board's settings and custom rules, read through
-        one read-only connection; rules.yaml's for every board when there is no snapshot or it cannot be read."""
+        """Each configured board's rules by project; rules.yaml's when there is no readable snapshot."""
         projects = sorted(self.process.projects)
         if not self.path.exists():
             return {project: self.rules for project in projects}
@@ -289,9 +224,7 @@ def _tool_function(spec: QuerySpec, runner: _Runner) -> Callable[..., str]:
     tool.__name__ = spec.name
     tool.__qualname__ = spec.name
     tool.__doc__ = spec.description
-    # Real type objects, not the strings `from __future__ import annotations`
-    # leaves behind: FastMCP evaluates them to build the argument model, and the
-    # schema it publishes for `params` is the spec's own model.
+    # Real types, not postponed strings: FastMCP evaluates them to build the argument model.
     tool.__annotations__ = {
         "params": Annotated[Any, WithJsonSchema(spec.params_model.model_json_schema())],
         "return": str,

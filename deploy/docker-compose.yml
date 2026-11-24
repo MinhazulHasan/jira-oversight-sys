@@ -1,22 +1,4 @@
-# The Jira Oversight stack: the API, the dashboard in front of it, the sync service, and the admin commands.
-# docs/DEPLOYMENT.md walks through it. Run every command from the oversight service's folder (jira-oversight-sys):
-#
-#   docker compose -f deploy/docker-compose.yml config      # check this file and the settings it will use
-#   docker compose -f deploy/docker-compose.yml build       # build both images (the base images are the only pull)
-#   docker compose -f deploy/docker-compose.yml up -d       # start the API, the dashboard and the sync service
-#   docker compose -f deploy/docker-compose.yml run --rm tools doctor --production
-#
-# No secret is in this file. Every setting comes from two env files beside it, made from the .env.example files and
-# never committed: deploy/backend.env (the API and the sync service) and deploy/dashboard.env (the dashboard). The
-# few values below are this stack's wiring, set here so no env file can change them. Without its env file a service
-# refuses to start or lets nobody in; it never runs open.
-#
-# Optional variables for this file itself (the shell, or deploy/.env, which holds no secret):
-#   DASHBOARD_DIR      the dashboard's folder, default ../../jira-oversight-ui (the two folders side by side)
-#   DASHBOARD_PORT     the loopback port the reverse proxy forwards to, default 3400
-#   OVERSIGHT_VERSION  the image tag, default local; tag each release to keep the last one for a rollback
-#   OVERSIGHT_UID/GID  the backend's user and group ids, default 10001; see DEPLOYMENT.md, "Config files"
-
+# Jira Oversight stack. Run from the service folder: docker compose -f deploy/docker-compose.yml up -d
 name: jira-oversight
 
 x-logging: &logging
@@ -115,8 +97,6 @@ services:
     logging: *logging
     # Health: the image's own check on /api/oversight/health (the dashboard's Dockerfile says what passes).
 
-  # The admin commands, never started by `up`:
-  #   docker compose -f deploy/docker-compose.yml run --rm tools <command>, for example doctor, backup, sync --full.
   tools:
     <<: *backend
     profiles:

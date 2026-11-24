@@ -1,5 +1,3 @@
-"""Shared test setup: no .env, no picture and no Jira site from the internet, never the real snapshot, temporary
-databases, AIL-shaped configs."""
 from __future__ import annotations
 
 import os
@@ -21,27 +19,21 @@ from oversight.jira.client import JiraClient
 from oversight.settings import PROJECT_ROOT, Settings, get_settings
 from oversight.store.db import Store
 
-# Tests never read the developer's .env.
 Settings.model_config["env_file"] = None
 get_settings.cache_clear()
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CONFIG_FIXTURES = FIXTURES / "config"
 JIRA_FIXTURES = FIXTURES / "jira"
-# The product owner's real snapshot lives here (data/oversight.db), and its backups: no test may open any of it.
 REAL_DATA = (PROJECT_ROOT / "data").resolve()
-# Who is reading, as the dashboard's server names them on every request it forwards (JO-12, oversight/api/
-# access_log.py): with sign-in off, the local reader. A test client stands in for that server, so it sends them.
 VIEWER_HEADERS = {"X-Oversight-Viewer": "local", "X-Oversight-Viewer-Name": "Local%20%28sign-in%20off%29"}
 
 
 class RealSnapshotOpened(AssertionError):
-    """A test tried to open the real snapshot, or anything else under data/: refused before SQLite sees the file."""
+    """A test tried to open a file under data/."""
 
 
 def into_real_data(database: object) -> str | None:
-    """The real data path a database argument points into (a path, bytes, or a SQLite file: URI, relative ones read
-    from the working folder as SQLite reads them), or None: elsewhere, in memory, or not a path at all."""
     if isinstance(database, (bytes, os.PathLike)):
         database = os.fsdecode(database)
     if not isinstance(database, str) or database in ("", ":memory:"):
@@ -53,7 +45,7 @@ def into_real_data(database: object) -> str | None:
             return None
         try:
             text = urllib.request.url2pathname(parsed.path)
-        except OSError:  # not a path Windows can read: no file of ours
+        except OSError:
             return None
     try:
         resolved = Path(text).resolve()
@@ -64,10 +56,6 @@ def into_real_data(database: object) -> str | None:
 
 @pytest.fixture(autouse=True)
 def _no_real_snapshot(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
-    """Tests never open the product owner's real snapshot (PROJECT_ROOT/data/oversight.db) or anything else under
-    data/: on 11 Nov 2026 it was found migrated while only agents and their test runs were working. Store.open,
-    sqlite3.connect (open_readonly's file: URIs too) and the analyst's read-only ATTACH are refused for any path there,
-    before SQLite sees the file, and a test that tried fails even if the code caught the refusal."""
     refused: list[str] = []
 
     def check(database: object) -> None:
@@ -104,9 +92,6 @@ def _no_real_snapshot(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
 
 @pytest.fixture(autouse=True)
 def _no_picture_from_the_internet(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
-    """Tests never fetch a picture from Gravatar or Atlassian. A fetcher made without a stub transport (as
-    a sync makes its own, through the CLI too) gets one that refuses every request, and a test that sent
-    one fails, even though the sync itself would carry on."""
     asked: list[str] = []
 
     def refuse(request: httpx.Request) -> httpx.Response:
@@ -125,9 +110,6 @@ def _no_picture_from_the_internet(monkeypatch: pytest.MonkeyPatch) -> Iterator[l
 
 @pytest.fixture(autouse=True)
 def _no_jira_from_the_internet(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
-    """Tests never reach a Jira site: a JiraClient made without a stub transport (the CLI's own factory, say)
-    gets one that refuses every request, and a test that sent one fails. Live tests (`-m live`) read the real
-    site on purpose, so they are left alone."""
     asked: list[str] = []
     if request.node.get_closest_marker("live") is not None:
         yield asked
@@ -149,8 +131,6 @@ def _no_jira_from_the_internet(request: pytest.FixtureRequest, monkeypatch: pyte
 
 @pytest.fixture(autouse=True)
 def _restore_logging() -> Iterator[None]:
-    """cli.main() configures structlog for the whole process; give the next test
-    the configuration this one started with, so no test depends on the order."""
     saved = structlog.get_config()
     yield
     structlog.configure(**saved)
@@ -158,13 +138,11 @@ def _restore_logging() -> Iterator[None]:
 
 @pytest.fixture
 def process() -> ProcessConfig:
-    """AIL's process mapping (To Do / In Progress / Done, points at 8 h)."""
     return ProcessConfig.load(CONFIG_FIXTURES / "process.yaml")
 
 
 @pytest.fixture
 def fields() -> FieldsConfig:
-    """AIL's field ids (story points customfield_10016, sprint customfield_10020, ...)."""
     return FieldsConfig.load(CONFIG_FIXTURES / "fields.yaml")
 
 
@@ -177,10 +155,8 @@ def store(tmp_path: Path) -> Iterator[Store]:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    """Settings pointing every path into tmp_path, with dummy Jira credentials."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    # rules.yaml too: the rules, digest, ask, insights and eval commands load it.
     for name in ("process.yaml", "fields.yaml", "baseline_expected.yaml", "rules.yaml"):
         source = CONFIG_FIXTURES / name
         if source.exists():

@@ -1,15 +1,4 @@
-#
-# The Jira Oversight service: the API, and from the same image the sync service and the admin commands
-# (deploy/docker-compose.yml; docs/DEPLOYMENT.md says how to run it). Build from this folder, for example:
-#   docker compose -f deploy/docker-compose.yml build
-#
-# Python 3.13 slim. The dependencies are installed into a virtual environment in a separate stage, so no pip cache
-# or build tool reaches the final image. The code is owned by root and read-only to the service, which runs as an
-# unprivileged user; it writes only to /app/data (the snapshot and its backups, a volume) and /app/reports.
-# Nothing here is secret: every setting comes from the environment at run time (env_file in the compose file). The
-# build context is an allowlist (.dockerignore): no .env file and no data ever reaches it. The base image is the only
-# pull: Docker's built-in Dockerfile frontend reads this file, so no syntax image is fetched either.
-
+# The Jira Oversight service image: the API, the sync service and the admin commands.
 ARG PYTHON_IMAGE=python:3.13-slim
 
 # --- dependencies ----------------------------------------------------------------------------------------------------
@@ -25,8 +14,6 @@ RUN grep -v '^pytest==' requirements.txt > runtime-requirements.txt \
 
 # --- the service -------------------------------------------------------------------------------------------------------
 FROM ${PYTHON_IMAGE}
-# The service's user and group. On a Linux host where the admin edits config/ through a bind mount, building with
-# their own ids (OVERSIGHT_UID and OVERSIGHT_GID in the compose file) lets `doctor` rewrite config/fields.yaml.
 ARG APP_UID=10001
 ARG APP_GID=10001
 ENV PYTHONDONTWRITEBYTECODE=1 \

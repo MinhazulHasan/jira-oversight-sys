@@ -1,34 +1,4 @@
-"""`python -m oversight cycle`: one oversight cycle, or with --loop one every SYNC_INTERVAL_MINUTES. The loop is the
-deployment's sync service (deploy/docker-compose.yml, docs/DEPLOYMENT.md).
-
-A cycle is `discover` (with BOARD_DISCOVERY on, JO-17), then `sync --incremental`, `derive`, `rules` and `baseline
---missing`, each its own `python -m oversight` process, stopping at the first sync, derive or rules step that fails (the
-exit code is that step's). Without --project, sync, derive and rules cover the kept boards: JIRA_PROJECTS and every
-other board synced at least once (oversight/boards.py), so a board first synced from the dashboard ("Sync now") stays
-fresh; `baseline --missing` writes the baseline report of each of them that has synced and has none yet, so every
-synced board's Baseline page has one (18 Nov 2026). A discovery that fails is logged (cycle_discovery_failed) and the
-cycle goes on: the boards stored before stay, and the sync never depends on it; a baseline step that fails is logged
-(cycle_baseline_failed) and the cycle has still succeeded: the board's figures are in, and the next cycle tries again.
-`--full` reads every issue instead (`sync --full`). Jira is only read, as everywhere.
-
-The loop adds what a hosted deployment needs and the Windows tasks do separately:
-- The first cycle of each UTC day, and the first after the service starts, syncs in full: only a full sync notices
-  issues deleted or moved in Jira. A full sync that fails is tried again at the next cycle.
-- After each cycle, `backup` when there is a snapshot and no backup was taken yet on the current UTC day
-  (oversight/backup.py; BACKUP_KEEP of them are kept): once a UTC day, right after the day's first cycle, so it
-  never drifts later day by day and never skips a day; a host's copy of it can run at a fixed time.
-- Cycles start SYNC_INTERVAL_MINUTES apart, start to start; one that overruns is followed at once. A failed step is
-  logged and the loop carries on: a Jira outage never stops the service, and GET /health reports the failed sync.
-- SIGTERM or SIGINT (`docker stop`) interrupts the running step as Ctrl-C would (the sync then records a run that
-  stopped part way, never one stuck at running, and GET /health says it was stopped, not that it failed), waits for
-  it, and ends the loop with exit 0. A step interrupted by a stop is logged as cycle_stopped, never cycle_failed: a
-  restart is not a failure. The signal handler never waits on the step runner's lock (the main thread may hold it
-  when the signal arrives). A step that runs past STEP_TIMEOUT_S is interrupted the same way, and that is a failure.
-Each step's JSON log lines go straight to this process's stderr; its report (stdout) is dropped, as "Sync now" drops
-it. The loop's own lines carry step names, exit codes and seconds only.
-
-Run one loop per snapshot: two would sync the same boards twice over.
-"""
+"""`python -m oversight cycle`: one oversight cycle, or with --loop one every SYNC_INTERVAL_MINUTES."""
 from __future__ import annotations
 
 import signal
@@ -57,7 +27,6 @@ TIMED_OUT = 124
 Runner = Callable[[Sequence[str]], int]
 
 
-# Board discovery (JO-17): the cycle's first step when BOARD_DISCOVERY is on. Its failure never fails the cycle.
 DISCOVER: tuple[str, ...] = ("discover",)
 # The baseline report of each kept board that has none yet: the cycle's last step. Its failure never fails the cycle.
 BASELINE: tuple[str, ...] = ("baseline", "--missing")
@@ -72,9 +41,6 @@ def cycle_steps(*, full: bool, discover: bool = False) -> list[tuple[str, ...]]:
 
 def run_cycle(runner: Runner, *, full: bool, discover: bool = False, stop: threading.Event | None = None,
               clock: Callable[[], float] = time.monotonic) -> int:
-    """The cycle's steps in order; the first non-zero exit code of sync, derive or rules ends it and is returned (0
-    when all succeed); discovery's and the baseline's are logged and the cycle goes on. A stop asked for between steps
-    ends it too, returning 0: nothing failed."""
     log = get_logger("cycle")
     started = clock()
     log.info("cycle_started", full=full)
@@ -90,8 +56,6 @@ def run_cycle(runner: Runner, *, full: bool, discover: bool = False, stop: threa
             log.info("cycle_stopped", during=argv[0], exit_code=code, seconds=round(clock() - started, 1))
             return 0
         if code != 0 and tuple(argv) in _OPTIONAL:
-            # Discovery: the boards stored before stay, and the boards the cycle keeps never depend on this one search.
-            # The baseline: the boards' figures are in; the next cycle writes the reports still missing.
             log.warning(_OPTIONAL[tuple(argv)], exit_code=code)
             continue
         if code != 0:
@@ -102,8 +66,6 @@ def run_cycle(runner: Runner, *, full: bool, discover: bool = False, stop: threa
 
 
 def backup_due(settings: Settings, now: datetime) -> bool:
-    """A snapshot exists and no backup was taken on `now`'s UTC day (backups are named by their UTC time): once a
-    calendar day, so the time a backup lands never creeps later from day to day, and no day goes without one."""
     if not settings.db_file.exists():
         return False
     newest = newest_backup(settings.backups_path)
@@ -118,7 +80,7 @@ def run_loop(
     now: Callable[[], datetime] = utcnow,
     clock: Callable[[], float] = time.monotonic,
 ) -> int:
-    """Cycles every SYNC_INTERVAL_MINUTES until `stop` is set; see the module docstring. Returns 0."""
+    """Cycles every SYNC_INTERVAL_MINUTES until `stop` is set; see the module docstring."""
     log = get_logger("cycle")
     interval_s = settings.sync_interval_minutes * 60
     log.info("cycle_loop_started", interval_minutes=settings.sync_interval_minutes)
@@ -141,14 +103,10 @@ def run_loop(
 
 
 class StepRunner:
-    """Runs each step as `python -m oversight <argv>` in the project folder, one at a time, and can interrupt the
-    one running (Ctrl-C's signal, so it records a failed run before it ends)."""
 
     def __init__(self, *, timeout_s: float = STEP_TIMEOUT_S, grace_s: float = INTERRUPT_GRACE_S) -> None:
         self.timeout_s = timeout_s
         self.grace_s = grace_s
-        # Re-entrant: the stop signal's handler runs on the main thread, which may be holding it already (around
-        # Popen, or in the finally below); a plain lock would leave the handler waiting on itself for good.
         self._lock = threading.RLock()
         self._child: subprocess.Popen[bytes] | None = None
         self._signalled: subprocess.Popen[bytes] | None = None

@@ -1,28 +1,4 @@
-"""`python -m oversight derive`: rebuild timelines and metrics from the snapshot.
-
-run_derive(store, process, projects=...)
-- Start a run (kind "derive"). Per project, in one store.transaction():
-  read the project's issues, their status_changes and the field_changes for the
-  estimate field (a few bulk queries, not one per issue), and the `statuses`
-  table for categories. category_of(name) uses the statuses table
-  (case-insensitive name); if a name isn't there, stage done_stage means "done",
-  and the issue's current status falls back to its status_category.
-- Delete the project's old status_intervals and insert the new ones (seq = the
-  interval's position in its issue's timeline); upsert one issue_metrics row
-  per issue. Also delete issue_metrics and status_intervals rows whose issue no
-  longer exists.
-- Whole-project rebuild every time: status_age_h depends on `now`, and
-  Planning.md requires a whole project to rebuild in under a minute.
-- finish_run with stats (issues, intervals, warnings, elapsed_s) and status;
-  on an exception record "failed" and re-raise.
-- A project missing from process.yaml raises ConfigError (via process.project).
-  Every project is checked before any is rebuilt, so a typo changes nothing.
-
-Data problems never stop the run; they are counted as warnings (names in
-_WARNING_NAMES) and logged with the issue keys or status names involved. An
-issue without created_at has no timeline to rebuild, so it is skipped and its
-derived rows are removed.
-"""
+"""`python -m oversight derive`: rebuild timelines and metrics from the snapshot."""
 from __future__ import annotations
 
 import sqlite3
@@ -71,10 +47,6 @@ _FIELD_CHANGES_SQL = """
 """
 _STATUSES_SQL = "SELECT name, category FROM statuses WHERE project_key = ? ORDER BY status_id"
 
-# A timeline is rebuilt whole, never upserted: each run deletes the project's
-# rows and inserts the new timelines in one transaction. seq is each interval's
-# position in its issue's timeline, the only reliable order (entered_at isn't:
-# a change can be dated before created_at).
 _DELETE_INTERVALS_SQL = (
     "DELETE FROM status_intervals WHERE issue_key IN (SELECT issue_key FROM issues WHERE project_key = ?)"
 )
@@ -231,11 +203,7 @@ def _category_lookup(
     done_stage: str,
     issue: Mapping[str, Any],
 ) -> Callable[[str | None], str | None]:
-    """category_of for one issue: the statuses table first, then the fallbacks.
-
-    A status can be missing from the table when it was renamed or removed, or
-    when it belongs to the project the issue was moved from.
-    """
+    """category_of for one issue: the statuses table first, then the fallbacks."""
     current = (issue.get("status") or "").casefold()
     current_category = issue.get("status_category")
 

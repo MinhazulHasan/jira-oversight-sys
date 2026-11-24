@@ -1,8 +1,4 @@
-"""The baseline report (tickets 5 and 6): every figure against hand-computed values.
-
-The snapshot is tests/fixtures/baseline/ail_snapshot.yaml. Its header explains
-the window; EXPECTED_FIGURES below shows the arithmetic for every figure.
-"""
+"""The baseline report"""
 from __future__ import annotations
 
 import json
@@ -35,10 +31,6 @@ WINDOW_DAYS = 90
 ZONE = "America/Chicago"
 FILES = ["baseline_AIL_2026-11-02.json", "baseline_AIL_2026-11-02.md"]
 
-# Worked out by hand from ail_snapshot.yaml. Times are UTC; "11-02 05:59" means
-# 2026-11-02T05:59:00.000Z. The window is [08-04 05:00, 11-02 06:00). Resolved in
-# it: AIL-1, 3, 4, 5, 6 and 7, so every share below is out of 6 unless noted.
-# Percentiles interpolate linearly (oversight.stats): rank = (n - 1) * pct / 100.
 EXPECTED_FIGURES: dict[str, Any] = {
     "snapshot": {
         "last_synced_at": "2026-11-04T11:00:00.000Z",  # AIL's cursor, not OPS's
@@ -49,9 +41,6 @@ EXPECTED_FIGURES: dict[str, Any] = {
         "by_status_category": {"done": 9, "indeterminate": 1, "new": 1},
     },
     "resolved": {
-        # In: AIL-1 (11-02 05:59, a minute before the end), AIL-3 (08-04 05:00, exactly the
-        # start), AIL-4, 5, 6, 7. Out: AIL-2 (11-02 06:00, exactly the end), AIL-10 (1 ms
-        # before the start), AIL-8, 9 and 11 (no resolution date), OPS-1 (another project).
         "in_window": 6,
         "with_original_estimate": {"count": 1, "share": 1 / 6},  # AIL-6 (7,200 s); AIL-4's 0 is no estimate
         "with_story_points": {"count": 4, "share": 4 / 6},  # AIL-1, 3, 5, 7; AIL-6 has 0, AIL-4 none
@@ -60,45 +49,23 @@ EXPECTED_FIGURES: dict[str, Any] = {
             "aggregate": {"count": 5, "share": 5 / 6},  # the same four and AIL-4 (subtask time)
             "worklog_rows": {"count": 3, "share": 3 / 6},  # AIL-1, 5, 6; AIL-3 and AIL-7 have none
         },
-        # AIL-3 only: AIL-10 and AIL-11 went straight too but aren't resolved in the window.
         "straight_todo_to_done": {"count": 1, "share": 1 / 6, "from_statuses": ["To Do"], "to_statuses": ["Done"]},
         "created_in_done": {"count": 1, "share": 1 / 6},  # AIL-4
-        # done_at in the window: AIL-1 (11-02 05:59), AIL-3 (08-04 05:00), AIL-4, 5, 6, 7, and
-        # AIL-11 (10-10 12:00, though it has no resolution date). Not AIL-2 or AIL-10.
         "done_entered_in_window": 7,
     },
     "estimates": {
-        # time_spent_s / 3600 / story_points: AIL-1 16/2 = 8, AIL-3 4/1 = 4, AIL-5 30/3 = 10,
-        # AIL-7 3/0.5 = 6. [4, 6, 8, 10]: median rank 1.5 -> 7; p25 rank 0.75 -> 4 + 0.75 * 2 = 5.5;
-        # p75 rank 2.25 -> 8 + 0.25 * 2 = 8.5.
         "hours_per_point": {"n": 4, "median": 7.0, "p25": 5.5, "p75": 8.5},
-        # 8 h per point +-25% is 6 to 10, both edges in: 6, 8 and 10 count, 4 doesn't.
         "within_25pct": {"hours_per_point": 8.0, "count": 3, "share": 3 / 4},
-        # Both set: AIL-1 (points 11-01 05:00, started 05:59) and AIL-5 (points 10-01 18:00,
-        # started 13:00: later). AIL-3 and AIL-7 never started; AIL-4 and AIL-6 have no points.
         "estimate_set_after_start": {"count": 1, "of": 2, "share": 1 / 2},
     },
     "time_in_status": {
-        # Closed intervals that ended in the window, in process order, unmapped last.
-        # To Do: AIL-1 1, AIL-2 1, AIL-3 24 (ends exactly at the start), AIL-5 1, AIL-6 1,
-        # AIL-7 2, AIL-8 2, AIL-11 2; AIL-10's ends 1 ms before the start.
-        # [1, 1, 1, 1, 2, 2, 2, 24]: median rank 3.5 -> 1.5; p75 rank 5.25 -> 2;
-        # p90 rank 6.3 -> 2 + 0.3 * 22 = 8.6.
         "To Do": {"stage": "backlog", "n": 8, "median": 1.5, "p75": 2.0, "p90": 8.6},
-        # AIL-1 24, AIL-5 24 and 12, AIL-6 48; AIL-2's 23 h ends exactly at the window end.
-        # [12, 24, 24, 48]: median rank 1.5 -> 24; p75 rank 2.25 -> 24 + 0.25 * 24 = 30;
-        # p90 rank 2.7 -> 24 + 0.7 * 24 = 40.8.
         "In Progress": {"stage": "development", "n": 4, "median": 24.0, "p75": 30.0, "p90": 40.8},
         "Done": {"stage": "done", "n": 1, "median": 24.0, "p75": 24.0, "p90": 24.0},  # AIL-5, before its reopen
         "In Review": {"stage": None, "n": 1, "median": 24.0, "p75": 24.0, "p90": 24.0},  # AIL-7
     },
-    # Resolved with a cycle time: AIL-1 24 (11-01 05:59 -> 11-02 05:59), AIL-5 60 (10-01 13:00
-    # -> 10-04 01:00), AIL-6 48. [24, 48, 60]: median 48; p75 rank 1.5 -> 54; p90 rank 1.8 -> 57.6.
     "cycle_time": {"n": 3, "median": 48.0, "p75": 54.0, "p90": 57.6},
     "reopens": {"count": 1, "share": 1 / 6},  # AIL-5
-    # Resolved issues' worklogs: AIL-1 3 x 19,200 s (Tempo), AIL-5 2 x 54,000 s (a developer),
-    # AIL-6 1 x 1,800 s (another): 6 worklogs, 167,400 s = 46.5 h. Tempo has the most worklogs
-    # (3), though not the most seconds: 57,600 / 167,400 = 32/93 of the seconds, 3/6 of the worklogs.
     "worklogs": {
         "count": 6,
         "total_hours": 46.5,
@@ -113,15 +80,12 @@ EXPECTED_FIGURES: dict[str, Any] = {
     "issue_links": {
         "issues_with_issue_links": 3,  # AIL-1, AIL-2, AIL-5 (OPS-1's link isn't AIL's)
         "issue_links": 4,
-        # AIL-5's "blocks; relates to" row counts once for each title.
         "issue_links_by_title": {"blocks": 2, "relates to": 2, "is blocked by": 1},
         "remote_links": 4,
-        # AIL-1 and AIL-6 (GitHub.com, after its credentials), AIL-7 ("not a url"), AIL-5.
         "remote_links_by_host": {"github.com": 2, "(no host)": 1, "example.atlassian.net": 1},
     },
 }
 
-# Ticket-4-style expectations for this snapshot, chosen so some figures match and some don't.
 MIXED = {
     "total_issues": 11,
     "resolved_in_window": 6,
@@ -157,9 +121,6 @@ MIXED_ROWS = [
     ),
     ComparisonRow(metric="straight_todo_to_done", expected=1, actual=1, match=True, note=""),
 ]
-
-
-# --- helpers -------------------------------------------------------------------------------
 
 
 def load_snapshot(store: Store) -> None:
@@ -244,9 +205,6 @@ def snapshot_store(store: Store, process: ProcessConfig) -> Store:
     return store
 
 
-# --- the figures ------------------------------------------------------------------------------
-
-
 def test_every_figure_matches_the_hand_computed_values(
     snapshot_store: Store, process: ProcessConfig, tmp_path: Path
 ) -> None:
@@ -254,7 +212,6 @@ def test_every_figure_matches_the_hand_computed_values(
 
     assert rounded(result.figures) == rounded(EXPECTED_FIGURES)
     assert rounded(read_json(result)["figures"]) == rounded(EXPECTED_FIGURES)
-    # Counts list the largest first (ties by name); statuses follow James's stage order.
     assert list(result.figures["snapshot"]["by_type"]) == ["Task", "Bug", "Epic", "Subtask"]
     assert list(result.figures["time_in_status"]) == ["To Do", "In Progress", "Done", "In Review"]
     assert list(result.figures["issue_links"]["remote_links_by_host"]) == [
@@ -267,7 +224,7 @@ def test_every_figure_matches_the_hand_computed_values(
 @pytest.mark.parametrize(
     ("resolved_at", "inside"),
     [
-        ("2026-11-02T05:59:00.000Z", True),  # a minute before the end: 2 Nov 00:00 CST is 06:00 UTC
+        ("2026-11-02T05:59:00.000Z", True),
         ("2026-11-02T06:00:00.000Z", False),  # exactly at the end
         ("2026-11-02T05:00:00.000Z", True),  # out, if the end wrongly used summer time (UTC-5)
         ("2026-08-04T05:00:00.000Z", True),  # exactly at the start: 4 Aug 00:00 CDT is 05:00 UTC
@@ -312,7 +269,6 @@ def test_straight_to_done_uses_every_status_of_both_stages(
     store.upsert_many(
         "status_changes",
         [
-            # Backlog -> Closed is straight; Backlog -> In Progress -> Closed is not.
             {"issue_key": "AIL-1", "changelog_id": "1", "changed_at": "2026-09-01T10:00:00.000Z",
              "from_status": "Backlog", "to_status": "Closed"},
             {"issue_key": "AIL-2", "changelog_id": "2", "changed_at": "2026-09-01T10:00:00.000Z",
@@ -358,7 +314,6 @@ def test_hours_per_point_needs_both_points_and_time_spent(
 def test_an_estimate_is_late_only_when_set_after_work_started(
     store: Store, process: ProcessConfig, tmp_path: Path, points_set_at: str | None, late: int
 ) -> None:
-    # Created straight into In Progress, so work started at created_at.
     add_issue(store, created_at="2026-09-01T00:00:00.000Z", story_points=2.0)
     store.upsert(
         "status_changes",
@@ -405,9 +360,6 @@ def test_worklog_shares_skip_missing_authors_and_break_ties_by_seconds(
     derive(store, process)
     result = report(store, process, tmp_path, expected=expected(tempo_account_id="acc-nobody"))
 
-    # 6 worklogs, 1,000 s. acc-a and acc-b tie on worklogs (2 each); acc-b has more seconds
-    # (300): 300/1,000 of the seconds and 2/6 of the worklogs. The author-less worklog counts
-    # in the totals but is no account; the Tempo id given wrote nothing here.
     assert rounded(result.figures["worklogs"]) == rounded(
         {
             "count": 6,
@@ -478,9 +430,6 @@ def test_an_empty_project_gives_an_empty_report(store: Store, process: ProcessCo
     assert "- The snapshot holds no AIL issues: run `python -m oversight sync --full` first." in markdown
     assert "No status interval ended in the window." in markdown
     assert "| 0 | n/a | n/a | n/a |" in markdown.splitlines()
-
-
-# --- the comparison ------------------------------------------------------------------------------
 
 
 def test_the_comparison_has_one_row_per_expected_figure(
@@ -555,15 +504,12 @@ def test_the_comparison_is_skipped_for_another_run(
     markdown = read_markdown(result)
     assert f"Skipped: {note}." in markdown.splitlines()
     assert "| Metric |" not in markdown
-    # The Tempo account is site-wide, so its share is still reported.
     assert "tempo_share" in result.figures["worklogs"]
 
 
 def test_another_zone_is_compared_with_a_note(snapshot_store: Store, process: ProcessConfig, tmp_path: Path) -> None:
     result = report(snapshot_store, process, tmp_path, expected=expected(), tz_name="UTC")
 
-    # In UTC the window is [08-04 00:00, 11-02 00:00): AIL-1 (2 points) drops out and
-    # AIL-10 (no points, straight to Done at 08-04 04:59:59.999) comes in.
     resolved = result.figures["resolved"]
     assert (resolved["in_window"], resolved["with_story_points"]["count"]) == (6, 3)
     assert resolved["straight_todo_to_done"]["count"] == 2
@@ -571,9 +517,6 @@ def test_another_zone_is_compared_with_a_note(snapshot_store: Store, process: Pr
     note = "the reference audit used America/Chicago and this report uses UTC, so the window edges differ"
     assert read_json(result)["metadata"]["comparison_note"] == note
     assert f"Note: {note}." in read_markdown(result).splitlines()
-
-
-# --- the outputs ------------------------------------------------------------------------------
 
 
 def test_reports_are_written_and_the_run_is_recorded(
@@ -585,7 +528,6 @@ def test_reports_are_written_and_the_run_is_recorded(
     assert result.markdown_path == out_dir / "baseline_AIL_2026-11-02.md"
     assert result.json_path == out_dir / "baseline_AIL_2026-11-02.json"
     assert sorted(path.name for path in out_dir.iterdir()) == FILES
-    # The same bytes on every platform, so a regenerated report diffs cleanly.
     assert b"\r\n" not in result.markdown_path.read_bytes()
     assert b"\r\n" not in result.json_path.read_bytes()
 
@@ -655,7 +597,6 @@ def test_the_markdown_report_renders_every_section_and_the_comparison_table(
     for line in (
         "| Window | 2026-08-04 00:00 to 2026-11-02 00:00 America/Chicago (90 days; the end is excluded) |",
         "| Window in UTC | 2026-08-04T05:00:00.000Z to 2026-11-02T06:00:00.000Z |",
-        # The comparison table, row by row.
         "| Metric | What is counted | Reference audit | Regenerated | Match | Note |",
         "|---|---|---:|---:|---|---|",
         "| total_issues | issues created before the window end | 11 | 10 | no "
@@ -670,7 +611,6 @@ def test_the_markdown_report_renders_every_section_and_the_comparison_table(
         "| straight_todo_to_done | resolved, straight from the first stage to done | 1 | 1 | yes |  |",
         "3 of 6 figures match. Each difference has a note; where the data and the reference audit disagree, the "
         "data wins.",
-        # The figures.
         "| Created before the window end | 10 |",
         "| Task | 8 |",
         "| With logged time: time spent including subtasks | 5 | 83.3% |",
@@ -703,7 +643,6 @@ def test_no_account_id_name_or_link_text_reaches_any_output(
         for row in [case["issue"], *case.get("status_changes", []), *case.get("worklogs", [])]:
             accounts |= {row[key] for key in ("assignee_id", "author_id") if row.get(key)}
     assert accounts == {"acc-dev-1", "acc-dev-2", "app-tempo", "Developer One"}
-    # Remote link titles are ticket text; URLs can carry paths, credentials and tokens.
     link_text = {"PR #1", "PR #2", "leaked secret", "hunter2", "token=abc", "example/repo", "pageId"}
 
     result = report(snapshot_store, process, tmp_path, expected=expected())
@@ -728,7 +667,6 @@ def test_jira_data_cannot_break_the_markdown(store: Store, process: ProcessConfi
     assert "| Waiting \\| on &lt;b&gt;them&lt;/b&gt; | 1 |" in lines
     assert "| &lt;script&gt; | 1 |" in lines
     assert not any("<b>" in line or "<script>" in line for line in lines)
-    # The JSON is data: it keeps the values exactly as stored.
     figures = read_json(result)["figures"]
     assert figures["snapshot"]["by_status"] == {"Waiting | on <b>them</b>": 1}
     assert figures["issue_links"]["remote_links_by_host"] == {"<script>": 1}
@@ -765,9 +703,6 @@ def test_render_copes_with_a_result_built_by_hand() -> None:
     ]
 
 
-# --- what derive must provide ---------------------------------------------------------------------
-
-
 def test_a_project_without_derived_metrics_is_a_config_error(
     store: Store, process: ProcessConfig, tmp_path: Path
 ) -> None:
@@ -802,7 +737,6 @@ def test_missing_and_stale_derived_data_are_flagged(store: Store, process: Proce
         "- The last sync is newer than the derived metrics: run `python -m oversight derive`, "
         "then regenerate this report."
     ) in lines
-    # AIL-2 is still resolved in the window; only the derived figures leave it out.
     assert result.figures["resolved"]["in_window"] == 2
     assert result.figures["resolved"]["done_entered_in_window"] == 1
 
@@ -810,8 +744,6 @@ def test_missing_and_stale_derived_data_are_flagged(store: Store, process: Proce
 def test_the_oldest_metrics_row_dates_the_derived_data(
     snapshot_store: Store, process: ProcessConfig, tmp_path: Path
 ) -> None:
-    # A row an earlier derive left behind (09:00) is older than the last sync (11:00), even
-    # though the other rows were derived at 12:00: the report must not look fresh.
     snapshot_store.upsert("issue_metrics", {"issue_key": "AIL-9", "computed_at": "2026-11-04T09:00:00.000Z"})
 
     metadata = read_json(report(snapshot_store, process, tmp_path))["metadata"]
@@ -837,9 +769,6 @@ def test_invalid_arguments_are_config_errors(
     failed = snapshot_store.last_run("baseline", status="failed")
     assert json.loads(failed["stats_json"])["error"].startswith("ConfigError")
     assert not out_dir.exists()
-
-
-# --- baseline_expected.yaml -------------------------------------------------------------------------
 
 
 def test_load_expected_reads_the_shipped_config() -> None:
@@ -917,14 +846,10 @@ def test_load_expected_needs_the_file(tmp_path: Path) -> None:
 
 
 def test_load_expected_reports_a_file_that_is_not_utf8(tmp_path: Path) -> None:
-    # Regression: a UTF-16 save (Notepad's "Unicode") escaped as UnicodeDecodeError.
     path = tmp_path / "baseline_expected.yaml"
     path.write_text((FIXTURES / "config" / "baseline_expected.yaml").read_text(encoding="utf-8"), encoding="utf-16")
     with pytest.raises(ConfigError, match="not UTF-8"):
         load_expected(path)
-
-
-# --- the command line ----------------------------------------------------------------------------------
 
 
 def test_cli_baseline_compare_writes_both_reports(
@@ -934,8 +859,6 @@ def test_cli_baseline_compare_writes_both_reports(
         load_snapshot(store)
         derive(store, process)
 
-    # The test copy of baseline_expected.yaml holds the reference audit's real figures (1,134 issues,
-    # 291 resolved, ...), so none of them match this small snapshot.
     assert main(["baseline", "--compare"], settings=settings) == EXIT_OK
 
     out = capsys.readouterr().out
@@ -958,9 +881,6 @@ def test_cli_baseline_asks_for_derive_first(settings: Settings, capsys: pytest.C
 def test_cli_baseline_missing_writes_one_for_each_synced_board_that_has_none(
     settings: Settings, process: ProcessConfig, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """18 Nov 2026: neither "Sync now" nor the cycle wrote a baseline, so the Baseline page of every board synced from
-    the dashboard stayed empty and its "Check again" could never help. `baseline --missing` (the cycle's last step, and
-    each board's Sync now) writes one for each board that has synced and has none, and leaves the rest as they are."""
     with Store.open(settings.db_file) as store:
         load_snapshot(store)  # AIL and OPS have synced
         derive(store, process)  # AIL's metrics only
@@ -971,7 +891,6 @@ def test_cli_baseline_missing_writes_one_for_each_synced_board_that_has_none(
     assert sorted(path.name for path in settings.reports_path.iterdir()) == FILES
     written = (settings.reports_path / FILES[0]).stat().st_mtime_ns
 
-    # A board with a report is left as it is, and so is one never synced, named or not.
     for argv in (["baseline", "--missing"], ["baseline", "--missing", "--project", "NEW"]):
         assert main(argv, settings=boards) == EXIT_OK
         assert capsys.readouterr().out == ""
@@ -999,12 +918,7 @@ def test_cli_baseline_compare_and_missing_do_not_go_together(settings: Settings)
         main(["baseline", "--compare", "--missing"], settings=settings)
 
 
-# --- go-live wording (18 Nov 2026) -----------------------------------------------------------------------------
-
-
 def test_no_output_names_a_ticket_number(snapshot_store: Store, process: ProcessConfig, tmp_path: Path) -> None:
-    """The Baseline page showed the comparison's notes ("ticket 4 counted during 2 Nov; ...") to real users: no
-    output of the report says "ticket 4", in any case, whether the zones match or not."""
     for zone_name in (ZONE, "UTC"):
         result = report(snapshot_store, process, tmp_path / zone_name.replace("/", "-"), expected=expected(),
                         tz_name=zone_name)
@@ -1017,8 +931,6 @@ def test_no_output_names_a_ticket_number(snapshot_store: Store, process: Process
 def test_the_api_words_the_notes_of_a_report_written_before_the_go_live_as_this_version_does(
     snapshot_store: Store, process: ProcessConfig, tmp_path: Path
 ) -> None:
-    """A report written before 18 Nov 2026 holds "ticket 4" in its notes, and the reports already on disk are served as
-    they are: GET /baseline/latest words every note of a metric it knows as this version does."""
     result = report(snapshot_store, process, tmp_path, expected=expected(), tz_name="UTC")
     assert result.json_path is not None
     payload = read_json(result)

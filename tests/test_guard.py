@@ -1,4 +1,4 @@
-"""The endpoint guard: only allowlisted reads ever reach Jira (Planning.md section 8, Guard layer)."""
+"""The endpoint guard: only allowlisted reads ever reach Jira."""
 from __future__ import annotations
 
 import logging
@@ -15,9 +15,7 @@ from oversight.jira.client import ALLOWED, JiraClient, check_allowed, route_of
 
 BASE_URL = "https://fake.atlassian.net"
 
-# Planning.md, Phase 1, JO-10's board members (assignable users), whether the site has users past the 1,000 the
-# assignable-user search can scan (users/search, one user at startAt 1000), and JO-17's board discovery
-# (project/search). Growing the allowlist must be a deliberate, reviewed change.
+# Growing the allowlist must be a deliberate, reviewed change.
 PLANNED_ALLOWLIST = {
     ("GET", "/rest/api/3/myself"),
     ("GET", "/rest/api/3/field"),
@@ -37,7 +35,6 @@ PLANNED_ALLOWLIST = {
     ("GET", "/rest/api/3/users/search"),
 }
 
-# One realistic request per allowed (method, route): (method, path, route).
 ALLOWED_CALLS = [
     ("GET", "/rest/api/3/myself", "/rest/api/3/myself"),
     ("GET", "/rest/api/3/field", "/rest/api/3/field"),
@@ -57,7 +54,6 @@ ALLOWED_CALLS = [
     ("GET", "/rest/api/3/users/search", "/rest/api/3/users/search"),
 ]
 
-# Writes, and reads that are simply not on the allowlist.
 WRONG_METHOD_OR_ROUTE = [
     pytest.param("PUT", "/rest/api/3/issue/AIL-1", id="edit an issue"),
     pytest.param("PATCH", "/rest/api/3/issue/AIL-1", id="patch an issue"),
@@ -87,7 +83,6 @@ WRONG_METHOD_OR_ROUTE = [
     pytest.param("GET", "/rest/api/3/user/assignable/multiProjectSearch", id="assignable users of many boards"),
 ]
 
-# Paths that are not plain "/rest/..." paths, so no method can use them.
 PATH_TRICKS = [
     pytest.param("GET", "https://evil.example/rest/api/3/myself", id="absolute URL"),
     pytest.param("GET", "//evil.example/rest/api/3/myself", id="scheme-relative URL"),
@@ -140,11 +135,7 @@ def _never_sleep(seconds: float) -> None:
 
 @pytest.fixture(autouse=True)
 def logs() -> Iterator[list[dict[str, Any]]]:
-    """Capture structlog events for the test and restore the configuration after.
-
-    Capturing also keeps the client's log lines off any stream an earlier CLI
-    test left structlog writing to.
-    """
+    """Capture structlog events for the test and restore the configuration after."""
     saved = structlog.get_config()
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
     try:
@@ -171,9 +162,6 @@ def client(transport: Recorder) -> Iterator[JiraClient]:
         yield jira
 
 
-# --- the allowlist itself ------------------------------------------------------------
-
-
 def test_the_allowlist_is_the_planned_set() -> None:
     assert ALLOWED == PLANNED_ALLOWLIST
 
@@ -191,9 +179,6 @@ def test_the_allowed_calls_below_cover_every_allowed_route() -> None:
     assert {(method, route) for method, _, route in ALLOWED_CALLS} == ALLOWED
 
 
-# --- what passes ---------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(("method", "path", "route"), ALLOWED_CALLS)
 def test_every_allowed_call_passes_and_is_sent_unchanged(
     client: JiraClient, transport: Recorder, method: str, path: str, route: str
@@ -204,7 +189,6 @@ def test_every_allowed_call_passes_and_is_sent_unchanged(
     [sent] = transport.requests
     assert sent.method == method
     assert sent.url.host == "fake.atlassian.net"
-    # What the guard checked is exactly what went out.
     assert sent.url.raw_path == path.encode()
 
 
@@ -225,12 +209,9 @@ def test_each_path_shape_resolves_to_its_own_route() -> None:
     assert route_of("/rest/api/3/project/AIL/statuses") == "/rest/api/3/project/{key}/statuses"
     # "statuses" is a valid key too, so this is the project route, not the statuses route.
     assert route_of("/rest/api/3/project/statuses") == "/rest/api/3/project/{key}"
-    # Board discovery's search is its own route; a project keyed SEARCH (keys are upper case) is still a project.
+    # A project keyed SEARCH is still a project, not board discovery's search route.
     assert route_of("/rest/api/3/project/search") == "/rest/api/3/project/search"
     assert route_of("/rest/api/3/project/SEARCH") == "/rest/api/3/project/{key}"
-
-
-# --- what never reaches Jira ---------------------------------------------------------
 
 
 @pytest.mark.parametrize(("method", "path"), WRONG_METHOD_OR_ROUTE + PATH_TRICKS)

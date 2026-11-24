@@ -1,106 +1,4 @@
-"""The weekly summary (Phase 7): candidates in code, ranking in code, a short
-narrative from the model, verified by the same validator as Ask.
-
-CONTRACT (the insights build implements it).
-
-build_candidates(store, process, rules, *, project, now) -> list[Candidate]
-"This week" is the 7 days ending at now; "last week" the 7 before.
-- wow_change: per status, the median hours of intervals closed this week vs
-  last week (each with n >= 5; the done stage left out, as in Ask's time in
-  status: it is the wait before a reopen); the biggest absolute change. severity "warning"
-  when longer, "info" when shorter; affected = n this week; trend = this/last.
-- breach_hot_spot: the 3 epics with the most open breach findings. affected =
-  open breaches; severity "breach"; trend = open now / open 7 days ago (>= 1;
-  2.0 when there were none; 1.0 in a cold start, below).
-- rising_rule: rules with more findings first seen this week than last week.
-  affected = this week's count; severity = the rule's; trend = this/last (2.0 when last was 0).
-  None in a cold start.
-- outlier: open issues above the project's p90 effort_ratio or p90 status_age_h
-  (computed over open work; at least 10 issues or no candidate). affected =
-  count; severity "warning"; trend 1.0; detail lists up to 5 issue keys and values.
-- coverage: the active sprint's share of issues with an estimate and with
-  logged time (or, with no active sprint, issues created in the last 30 days).
-  severity "warning" when either share < 0.8, else "info"; affected = uncovered count; trend 1.0.
-Each candidate carries the figures it is about in `detail`, a list of
-DetailEntry {key, label, value, unit} (the facts the narrative may quote; the
-dashboard renders any candidate from them, API contract section 8), its issue
-keys and finding ids. The candidates-as-facts the validator reads are built
-from the same entries, one column per entry.
-
-rank(candidates, top=5): score = affected * SEVERITY[severity] * trend, with
-SEVERITY = {"breach": 3, "warning": 2, "info": 1}; stable sort, highest first.
-
-run_insights(store, process, rules, provider, settings, *, projects, now=utcnow, tz_name=None) -> list[Insight]
-- One run record (kind "insights"). Per project: candidates, rank, then
-  provider.structured(INSIGHTS_SYSTEM, insights_user([c.to_dict()...]),
-  Narrative, model=settings.llm_model_insights, effort="high", max_tokens=1200).
-- Verification: join the sentences with spaces and validate(text,
-  candidates_as_facts, None, rules=the board's rules) where each candidate
-  becomes a Facts whose rows hold its detail numbers and keys (one Facts per
-  candidate, ref = candidate id); a rule's title in a candidate is words, never
-  a figure (a custom rule's is an admin's, JO-20). Not ok -> one strict retry;
-  still not ok (or LLMRefusal / LLMError, recorded with the tokens a response
-  reported) ->
-  narrative = render_insights_table(top) and verified False, sentences built
-  from the table (one per candidate, tone from severity).
-- Sentences: each Narrative sentence maps to Sentence(id "s1".., text, tone,
-  candidate_ids, issue_keys and finding_ids gathered from those candidates).
-- Store the insights row (week_of = the Monday of now's week in tz_name or
-  UTC; generated_at; verified; narrative; sentences_json; candidates_json;
-  model; prompt_hash; run_id) and record the LLM calls.
-latest_insight(store_or_conn, project) -> Insight | None reads the newest row.
-
-Done when (Planning.md Phase 7): every sentence points to at least one
-candidate and its issue keys; the dashboard can click through to the findings.
-
-HOW THE CONTRACT IS READ (the choices the text above leaves open)
-- Weeks are half-open: this week is (now - 7 d, now], last week (now - 14 d,
-  now - 7 d], compared as storage-format text (which sorts chronologically).
-- Container types (rules.defaults.exclude_types, Epic) are left out of
-  wow_change, outlier and coverage, as the catalogue and the rules do.
-  Findings already follow the rules' own selection.
-- An epic for a subtask is its parent's epic (COALESCE(i.epic_key,
-  parent.epic_key)), as the catalogue does; work outside any epic is not an epic.
-- wow_change: medians are rounded to 0.1 h and the change is taken between the
-  rounded medians, so the numbers a reader sees add up. No change, no
-  candidate. The change is reported as a size, with its direction in the title
-  and in `direction`: the validator cannot check a minus sign.
-- breach_hot_spot: "open at t" is first_seen_at <= t and not resolved by t.
-- Cold start: a project's first rules run "first sees" every finding already
-  open, so in its first fortnight this week holds them all and last week none
-  ("247 new this week vs 0 last week"), and a week ago nothing was open. When
-  the project's history starts after the start of last week, rising_rule
-  candidates are skipped and breach hot spots take trend 1.0, without a
-  week-ago figure. The history starts at the project's first successful rules
-  run (one that recorded rule status for it), or at its first finding when
-  that is earlier (a store whose runs were not kept).
-- rising_rule: a finding is new in the week its (rule, issue, evidence) was
-  first seen under any catalogue version, so a version bump (which re-creates
-  every finding) is not read as a spike. Only rules on for the board count (its
-  rule settings applied to the catalogue, JO-15), each at the board's severity.
-- outlier: open work is status category new or indeterminate; each p90 needs
-  10 known values; thresholds and values are compared as displayed.
-- coverage: the active sprint is the latest-started sprint whose synced sprint
-  object says "active" (found as the catalogue finds it), its issues those
-  whose sprint_ids hold it. An estimate is the project's basis (story points
-  or original estimate) above 0, logged time is time_spent_s above 0, as the
-  catalogue counts them.
-- Candidate ids are "<kind>" or "<kind>:<epic key or rule id>", stable from
-  week to week. Titles carry no digits of their own (a status name or an epic
-  key at most), and nothing from ticket text: no summaries, no epic titles.
-- Verification also needs every sentence to name at least one candidate it was
-  given (the Phase 7 done-when); the strict retry names the problems. The
-  llm_calls purposes are "insights" and "insights_strict".
-- No candidates: no model call; the narrative says nothing stood out, with no
-  sentences, and counts as verified (there is nothing in it to check).
-- The day's model budget (JO-12, oversight/llm/budget.py: LLM_DAILY_TOKEN_BUDGET):
-  checked before each board's model call. Once today's (UTC) model tokens reach
-  it, that board is skipped: no model call and no insights row (the last
-  briefing stays the latest), one log line (insights_skipped_budget, with the
-  board and the budget), and the run's stats say "skipped": "budget"; the run
-  still succeeds. The scripted provider (LLM_MODE=stub) calls no model, so it is
-  never skipped.
-"""
+"""Weekly insights: candidates and ranking in code, a model-written narrative checked by the Ask validator."""
 from __future__ import annotations
 
 import json
@@ -152,8 +50,7 @@ _TONES: dict[str, Tone] = {"blatantly_bad": "blatantly_bad", "trending_bad": "tr
 _NOTHING = (
     "Nothing stood out this week."
 )
-# Appended to the user prompt for the one retry. It lives here, not in prompts.py,
-# because it speaks of <candidates>; COMPOSE_STRICT_SUFFIX speaks of <facts>.
+# Kept here, not in prompts.py, because it speaks of <candidates>.
 _STRICT_SUFFIX = """
 The previous sentences failed verification: {problems}.
 Write them again: every number and issue key must appear verbatim in <candidates>, and every sentence must list the id of the candidate it is about in candidate_ids."""
@@ -185,11 +82,7 @@ _KIND_OF_UNIT: dict[str, ColumnKind] = {
 
 @dataclass(frozen=True)
 class DetailEntry:
-    """One figure a candidate is about: a row of its table on the dashboard, a fact the narrative may quote.
-
-    `value` is a number, a code-written word (a status, a rule title, an epic key) or None;
-    `unit` says how to read a number and is None for words. An entry about one issue of
-    several (the outliers) has the key "<issue key>:<metric>" and names the issue in its label."""
+    """One figure a candidate is about: a dashboard table row and a fact the narrative may quote."""
 
     key: str
     label: str
@@ -252,8 +145,7 @@ class Candidate:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Candidate:
-        """The inverse of to_dict; the score is derived, so it is not read back. A detail
-        stored as a dict (rows written before the entries) is read as entries."""
+        """The inverse of to_dict; the score is derived, and a legacy dict detail is read as entries."""
         detail = data.get("detail")
         if isinstance(detail, Mapping):
             entries = _legacy_entries(detail)
@@ -341,8 +233,7 @@ class Insight:
 
 @dataclass(frozen=True)
 class _Weeks:
-    """This week is (now - 7 d, now], last week the 7 days before, as storage-format
-    strings: SQL and Python compare them as text, which sorts chronologically."""
+    """Week bounds as storage-format strings, which SQL and Python compare chronologically as text."""
 
     now: str
     this_start: str
@@ -365,10 +256,7 @@ class _Weeks:
 def build_candidates(
     store: Store, process: ProcessConfig, rules: RulesConfig, *, project: str, now: datetime
 ) -> list[Candidate]:
-    """Every candidate for the project at `now`, in a fixed order (wow_change, breach
-    hot spots, rising rules, outlier, coverage); rank() puts them in order of score.
-    `rules` is the catalogue: the board's rule settings (JO-15) apply, so a rule off on
-    the board is never a rising rule there, and each rule has the board's severity."""
+    """Every candidate for the project at `now`, in a fixed order; rank() orders them by score."""
     estimate = process.estimate_for(project)  # ConfigError for an unknown project, before any query
     rules = effective_rules(rules, load_board_settings(store.conn, project))
     weeks = _Weeks.ending(now)
@@ -390,8 +278,7 @@ def build_candidates(
     return candidates
 
 
-# A project's findings history starts at its first successful rules run: the rule_status
-# rows say which projects a run covered (re-seeding the demo deletes them with its findings).
+# History starts at the first successful rules run, per the rule_status rows it wrote.
 _FIRST_RULES_RUN_SQL = """
     SELECT MIN(r.started_at) FROM runs AS r
     WHERE r.kind = 'rules' AND r.status = 'succeeded'
@@ -401,8 +288,7 @@ _FIRST_FINDING_SQL = "SELECT MIN(first_seen_at) FROM findings WHERE project_key 
 
 
 def history_starts(store: Store, project: str) -> str | None:
-    """When the project's findings history starts (storage format): its first successful
-    rules run, or its first finding when that is earlier; None with neither."""
+    """Start of the project's findings history: its first rules run or first finding, whichever is earlier."""
     starts: list[str] = []
     for sql in (_FIRST_RULES_RUN_SQL, _FIRST_FINDING_SQL):
         row = store.query_one(sql, (project,))
@@ -412,14 +298,12 @@ def history_starts(store: Store, project: str) -> str | None:
 
 
 def cold_start(store: Store, project: str, now: datetime) -> bool:
-    """True while the project's history starts after the start of last week (now - 14 days):
-    the first rules run saw every open finding at once, so the weeks cannot be compared yet."""
+    """True while history starts after last week began, when the weeks cannot be compared yet."""
     start = history_starts(store, project)
     return start is None or start > _Weeks.ending(now).last_start
 
 
-# Time in the done stage is the wait before a reopen, not time in the process (as in
-# Ask's time in status): a change there is never a week-on-week candidate.
+# Time in the done stage is the wait before a reopen, so it is never a week-on-week candidate.
 _INTERVALS_SQL = """
     SELECT si.issue_key, si.status, si.hours, si.left_at
     FROM status_intervals AS si JOIN issues AS i ON i.issue_key = si.issue_key
@@ -473,8 +357,7 @@ def _wow_change(
         detail=[
             DetailEntry("this_week_median_h", "Median this week", this_h, "hours"),
             DetailEntry("last_week_median_h", "Median last week", last_h, "hours"),
-            # A size: the validator reads "-4.5" as an unverified "5", so the sign
-            # goes into words (the title and `direction`).
+            # A size: the validator cannot check a minus sign, so the direction goes into words.
             DetailEntry("change_h", "Change in the median", abs(best_change), "hours"),
             DetailEntry("this_week_intervals", "Intervals closed this week", n_this, "count"),
             DetailEntry("last_week_intervals", "Intervals closed last week", n_last, "count"),
@@ -498,8 +381,7 @@ _BREACHES_SQL = """
 
 
 def _breach_hot_spots(store: Store, rules: RulesConfig, project: str, weeks: _Weeks, *, cold: bool) -> list[Candidate]:
-    """In a cold start nothing was open a week ago only because the rules had not run:
-    the trend is 1.0 and the week-ago figure is left out."""
+    """In a cold start the trend is 1.0 and the week-ago figure is left out."""
     # Every breach open now or 7 days ago; which of the two is decided per row below.
     rows = store.query(_BREACHES_SQL, (project, weeks.now, weeks.this_start))
     open_now: dict[str, list[sqlite3.Row]] = {}
@@ -828,8 +710,7 @@ def _most_common(values: Iterable[str]) -> tuple[str, int]:
 
 
 def _rule(rules: RulesConfig, rule_id: str) -> Rule | None:
-    """The rule a finding names on the board: a custom rule it deleted too (JO-20), by its title; None for a rule no
-    longer in the catalogue."""
+    """The rule a finding names on the board, deleted custom rules included; None if gone from the catalogue."""
     return rules.find(rule_id)
 
 
@@ -866,9 +747,7 @@ _UNIT_OF_KIND: dict[str, Unit] = {"count": "count", "hours": "hours", "ratio": "
 
 
 def _legacy_entries(detail: Mapping[str, Any]) -> list[DetailEntry]:
-    """A detail dict, as insights rows written before the entries kept it: each word or
-    number one entry (its unit read from its name), each listed issue's figures
-    "<issue key>:<metric>" entries, as the outlier writes them now."""
+    """Entries from a legacy detail dict, as insights rows written before entries kept it."""
     entries: list[DetailEntry] = []
     for key, value in detail.items():
         if isinstance(value, list):
@@ -903,9 +782,7 @@ _HEAD_COLUMNS = [
 
 
 def _facts_for(candidate: Candidate, as_of: str) -> Facts:
-    """The candidate as the validator's facts (ref = its id): one row with its own numbers
-    and title, a column per detail entry (the entries the dashboard shows, the kind from
-    the unit) and its keys as sample_keys. Finding ids stay out: they are hex, not numbers."""
+    """The candidate as the validator's facts: its figures, a column per detail entry, and its keys."""
     row: dict[str, Any] = {
         "candidate_id": candidate.id,
         "title": candidate.title,
@@ -951,10 +828,7 @@ def _column_kind(name: str, value: Any) -> ColumnKind:
 
 
 def _verify(narrative: Narrative, facts: list[Facts], known: set[str], rules: RulesConfig | None = None) -> Check:
-    """validate() over the joined sentences, plus the Phase 7 done-when: every
-    sentence names at least one of the candidates it was written from. `rules`:
-    the board's, whose titles (a rising rule's, a hot spot's most frequent rule)
-    are words in a candidate, never figures (validate.py)."""
+    """validate() over the joined sentences, plus a check that each sentence names one of its candidates."""
     check = validate(" ".join(sentence.text for sentence in narrative.sentences), facts, None, rules=rules)
     problems = list(check.problems)
     if not narrative.sentences:
@@ -986,8 +860,7 @@ def _narrate(
     clock: Callable[[], datetime],
     rules: RulesConfig | None = None,
 ) -> _Narration:
-    """One call, one strict retry when the check fails; a refusal or an error ends it at once. `rules`: the board's,
-    for the check (_verify)."""
+    """One call and one strict retry when the check fails; a refusal or an error ends it at once."""
     known = {candidate.id for candidate in top}
     user = insights_user([candidate.to_dict() for candidate in top])
     model = settings.llm_model_insights
@@ -1031,8 +904,7 @@ def _audit(
     *,
     failure: LLMError | None = None,
 ) -> None:
-    """One llm_calls row; a failed call's (`failure`) with the tokens and stop_reason its response reported, when one
-    came back, so the day's budget counts what was billed."""
+    """One llm_calls row; a failed call keeps its reported tokens so the day's budget counts what was billed."""
     if result is not None:
         usage, stop_reason = result.usage, result.stop_reason
     else:
@@ -1116,8 +988,7 @@ def run_insights(
     now: Callable[[], datetime] = utcnow,
     tz_name: str | None = None,
 ) -> list[Insight]:
-    """One run (kind "insights"); per project the candidates, the ranked top, the
-    narrative (or the table) and the insights row. See the module docstring."""
+    """One insights run: per project the candidates, the ranked top, the narrative or table, and the row."""
     try:
         wanted = list(dict.fromkeys(validate_project_keys(projects)))
     except ValueError as exc:

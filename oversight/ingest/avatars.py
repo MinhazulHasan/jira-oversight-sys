@@ -1,38 +1,4 @@
-"""Jira pictures: fetched after every sync, kept in `people`, served by GET /people/{id}/avatar.
-
-Jira gives every user object a 48x48 picture URL (avatarUrls["48x48"]). A sync keeps it in
-people.avatar_url, which never leaves the service, and once the sync has committed,
-refresh_pictures() brings the pictures of the synced boards' people up to date: everyone assigned
-one of their tickets now, and every member of their last member fetch (board_members). A person's
-picture is fetched when none is stored, when avatar_url is not the URL the stored one came
-from (avatar_source), or when the stored one is more than 7 days old: at most 200 a run, and
-no more than two minutes in all, so a picture host that is down cannot hold up "sync now"
-(the rest wait for the next sync). The dashboard API serves the stored bytes by person id
-and sends their version (people.avatar_hash: the first 12 hex characters of the SHA-256 of
-the bytes) in every person object.
-
-The fetch rules (PictureFetcher.fetch):
-- https only, from secure.gravatar.com or a host matching
-  avatar-management--avatars.<region>.prod.public.atl-paas.net: the only two hosts the real
-  site's pictures come from. The URL is parsed, not pattern-matched: one with a user name or
-  password, a port other than 443 or an IP address is refused, and the host must be one of
-  the two exactly (host names compare in lower case, as httpx normalises them).
-- A client of its own, with no credentials: no auth, no cookies kept, never the Jira token.
-- Redirects are followed by hand, at most 3, and every URL one names meets the same rules
-  before anything is sent to it. Gravatar sends a person without a Gravatar on to the
-  default picture its URL names (d=, which Jira points at their Atlassian initials picture),
-  through an image proxy of its own (i0.wp.com) that is neither of the two hosts: that
-  redirect is never followed, and the default picture is fetched from where it is instead,
-  once, under the same rules, so the person gets the picture Jira shows them.
-- 5 seconds for the whole picture, redirects included; at most 256 KB, counted while reading,
-  which stops past it. The body is taken as sent: a content-coded (compressed) one is refused.
-- The bytes decide what it is: PNG, JPEG, GIF or WebP by their magic numbers, whatever the
-  server calls it. Never SVG, never anything else.
-A refusal or a failure (PictureError) keeps whatever picture is stored, is logged as a warning
-with the person id and a short reason (never the URL), and never fails the sync: a run counts
-its pictures fetched, unchanged and failed, and its stats keep each failure as {person, reason}
-too, so the reason outlives the log (ids only, never a URL or a name).
-"""
+"""Jira pictures: fetched after every sync, kept in `people`, served by GET /people/{id}/avatar."""
 from __future__ import annotations
 
 import hashlib
@@ -90,7 +56,6 @@ class Picture:
 
 
 def sniff(data: bytes) -> str | None:
-    """The picture's media type by its magic numbers: PNG, JPEG, GIF or WebP; None for anything else, SVG included."""
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
     if data.startswith(b"\xff\xd8\xff"):
@@ -103,12 +68,10 @@ def sniff(data: bytes) -> str | None:
 
 
 def version_of(data: bytes) -> str:
-    """A picture's version, as people.avatar_hash keeps it: the first 12 hex characters of the SHA-256 of its bytes."""
     return hashlib.sha256(data).hexdigest()[:12]
 
 
 def check_url(url: object) -> httpx.URL:
-    """The URL, parsed, when a picture may be fetched from it; PictureError naming the rule it breaks otherwise."""
     if not isinstance(url, (str, httpx.URL)) or not str(url):
         raise PictureError("no picture URL")
     try:
@@ -139,8 +102,6 @@ def _is_ip(host: str) -> bool:
 
 
 def gravatar_default(url: httpx.URL) -> httpx.URL | None:
-    """The default picture a Gravatar URL names (its d= or default= parameter: Jira points it at the person's
-    Atlassian initials picture), parsed, when the rules allow it; None for any other URL or default."""
     if url.host != GRAVATAR_HOST:
         return None
     default = url.params.get("d") or url.params.get("default")
@@ -151,11 +112,7 @@ def gravatar_default(url: httpx.URL) -> httpx.URL | None:
 
 
 class PictureFetcher:
-    """Fetches pictures under the module's rules; one client for a whole run. Use as a context manager.
-
-    `transport` is for tests (httpx.MockTransport): without one the client goes to the internet,
-    through the proxy the environment names, as the Jira client does. `clock` measures the 5 seconds.
-    """
+    """Fetches pictures under the module's rules; one client for a whole run. Use as a context manager."""
 
     def __init__(
         self,
@@ -204,8 +161,6 @@ class PictureFetcher:
                 try:
                     target = self._redirect(target, response)
                 except PictureError:
-                    # Gravatar's own redirect for someone with no Gravatar goes through its image proxy, which the
-                    # rules refuse: the default picture its URL named is fetched from where it is instead, once.
                     if default is None or target.host != GRAVATAR_HOST:
                         raise
                     target, default = default, None
@@ -217,8 +172,6 @@ class PictureFetcher:
         left = deadline - self._clock()
         if left <= 0:
             raise PictureError(f"took longer than {self.timeout_s:g} s")
-        # Built here rather than by the client, so it carries these headers and nothing else; every
-        # network step may take what is left of the 5 seconds, no more.
         request = httpx.Request(
             "GET", url, headers=_HEADERS, extensions={"timeout": httpx.Timeout(min(left, self.timeout_s)).as_dict()}
         )
@@ -295,12 +248,9 @@ class PictureStats:
         return {"fetched": self.fetched, "unchanged": self.unchanged, "failed": self.failed}
 
     def record(self) -> dict[str, Any]:
-        """What a sync run keeps of its pictures (runs.stats_json): the counts, and each failure's person and reason."""
         return {**self.as_dict(), "failures": [dict(failure) for failure in self.failures]}
 
 
-# The boards' people whose picture is due (assignees and members): none stored first, then the longest since it
-# was fetched.
 _DUE_SQL = """
     SELECT account_id, avatar_url, avatar_hash
     FROM people
@@ -315,7 +265,6 @@ _DUE_SQL = """
 
 
 def due(store: Store, projects: Sequence[str], now: datetime, limit: int = MAX_PER_RUN) -> list[sqlite3.Row]:
-    """The people of these boards (assigned one of their tickets now, or members) whose picture should be fetched."""
     if not projects:
         return []
     sql = _DUE_SQL.format(marks=", ".join("?" * len(projects)))
@@ -332,8 +281,7 @@ def refresh_pictures(
     budget_s: float = RUN_BUDGET_S,
     clock: Callable[[], float] = time.monotonic,
 ) -> PictureStats:
-    """Fetch the pictures due for these boards' people, each kept in its own short transaction. A picture
-    that fails is counted and logged, and leaves the stored one as it was; none stops the others."""
+    """Fetch the pictures due for these boards' people, each kept in its own short transaction."""
     stats = PictureStats()
     people = due(store, projects, now(), limit)
     ends = clock() + budget_s

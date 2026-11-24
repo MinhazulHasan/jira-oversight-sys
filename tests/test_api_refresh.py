@@ -1,11 +1,3 @@
-"""Sync now (JO-18): POST /refresh?project=KEY syncs that board alone (discover, sync, derive and rules for it, then
-its baseline report when it has none), one job at a time, another board's request queued behind it; GET
-/refresh?project=KEY reports that board. And the re-check of one board after its rule settings are saved (JO-15),
-which shares the one worker, so it never runs beside a sync.
-
-A fake step runner stands in for the `python -m oversight` processes, so nothing
-here talks to Jira.
-"""
 from __future__ import annotations
 
 import subprocess
@@ -31,7 +23,6 @@ from tests.conftest import CONFIG_FIXTURES
 
 KEY = "test-key"
 NOW = datetime(2026, 11, 6, 9, 0, tzinfo=UTC)
-# One board's refresh once it has synced before, with discovery off (the default Refresher's).
 AIL_STEPS = [("sync", "--incremental", "--project", "AIL"), ("derive", "--project", "AIL"),
              ("rules", "--project", "AIL"), ("baseline", "--missing", "--project", "AIL")]
 STEPS = len(AIL_STEPS)
@@ -86,7 +77,6 @@ def test_a_refresh_syncs_derives_and_checks_the_board_picked_and_no_other(tmp_pa
     assert body["project"] == "AIL" and body["state"] == "succeeded" and body["message"] is None
     assert body["started_at"] == "2026-11-06T09:00:00.000Z" and body["finished_at"] == "2026-11-06T09:00:00.000Z"
     assert steps.calls == AIL_STEPS
-    # The default board was not touched, and says so.
     assert client.get("/api/v1/refresh").json() == {**IDLE, "project": "DEMO"}
 
 
@@ -139,10 +129,6 @@ def test_a_discovery_that_fails_never_stops_the_boards_sync() -> None:
 
 
 def test_a_boards_sync_writes_its_baseline_when_it_has_none_and_a_baseline_that_fails_never_fails_the_sync() -> None:
-    """18 Nov 2026: a board synced from the dashboard never got a baseline report, so its Baseline page stayed empty
-    and its "Check again" could never help. The refresh ends with `baseline --missing` for the board (a report only
-    when it has none); the board's figures are in by then, so a report that fails is logged and the sync has
-    succeeded (the next cycle writes it)."""
     steps = Steps(fail="baseline")
     refresher = Refresher(runner=steps, now=Clock(), synced=lambda _project: False)
     with capture_logs() as events:
@@ -206,8 +192,6 @@ def test_the_cooldown_is_each_boards_own(tmp_path: Path) -> None:
 
 
 def test_a_failed_step_stops_the_refresh_and_says_what_to_do_in_one_line(tmp_path: Path) -> None:
-    """18 Nov 2026: the dashboard leads with "The last sync didn't finish." and the message said it again ("The sync
-    failed while copying from Jira. ..."): the message is what to do, and the step that failed goes to the log."""
     steps = Steps(fail="sync")
     refresher = Refresher(runner=steps, now=Clock())
     client = client_with(tmp_path, refresher)
@@ -230,13 +214,11 @@ def test_a_failed_first_sync_says_to_try_again_rather_than_point_at_figures_ther
 
 
 @pytest.mark.parametrize(("code", "first", "message"), [
-    # The service's settings (a JIRA_BASE_URL that is not https, say) or the read-only guard: trying again cannot help.
     (EXIT_CONFIG, True, "The service's settings need fixing. Ask your administrator."),
     (EXIT_GUARD, True, "The service's settings need fixing. Ask your administrator."),
     (EXIT_JIRA_AUTH, True, "Jira didn't accept the service's account. Ask your administrator."),
     (EXIT_CONFIG, False, "The service's settings need fixing. Ask your administrator. The figures on screen are from "
                          "the last sync that worked."),
-    # Jira out of reach, or anything else: it may well work in a few minutes.
     (EXIT_JIRA, True, "Try again in a few minutes."),
     (1, True, "Try again in a few minutes."),
 ])
@@ -283,7 +265,6 @@ def test_refresh_needs_the_service_key(tmp_path: Path) -> None:
 
 
 def test_a_board_that_never_synced_can_be_synced_from_the_dashboard(tmp_path: Path) -> None:
-    """The way a never-synced board gets its first sync: the refresh routes never answer board_not_synced."""
     with Store.open(tmp_path / "oversight.db"):
         pass  # a snapshot, with nothing of either board in it
     steps = Steps()
@@ -293,9 +274,6 @@ def test_a_board_that_never_synced_can_be_synced_from_the_dashboard(tmp_path: Pa
     assert client.post("/api/v1/refresh", params={"project": "AIL"}).status_code == 202
     refresher.wait(5)
     assert steps.calls[0] == ("sync", "--full", "--project", "AIL")
-
-
-# --- the re-check after a board's rule settings are saved (JO-15) --------------------------------------------------
 
 
 def test_a_recheck_runs_the_rules_for_its_board_alone_and_keeps_its_state_apart_from_sync_now() -> None:
@@ -310,7 +288,6 @@ def test_a_recheck_runs_the_rules_for_its_board_alone_and_keeps_its_state_apart_
     assert done is not None and (done.state, done.started_at, done.finished_at, done.message) == (
         "succeeded", NOW, NOW, None)
     assert refresher.recheck_of("DEMO") is None
-    # "Sync now"'s own state is the sync's alone.
     assert refresher.status("AIL") == IDLE
 
 
@@ -386,7 +363,6 @@ def test_a_recheck_that_fails_says_so_in_plain_words_and_the_next_job_still_runs
 
     found = refresher.recheck_of("AIL")
     assert found is not None and found.state == "failed" and found.finished_at == NOW
-    # The board by its name, as the page names it (18 Nov 2026: it said "AIL's" beside a page that says AILED).
     assert found.message == (
         f"Couldn't re-check AILED's findings with the new settings: {problem}. They will apply at the next sync.")
     refresher.start("AIL", background=False)
@@ -409,8 +385,6 @@ PICTURE_WARNING = (
 def test_a_steps_own_log_goes_on_into_the_apis_log_whether_it_succeeds_or_not(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A sync whose pictures fail still succeeds: its warnings (person id and reason) must reach the API's log all
-    the same, as the scheduled cycle's log keeps them, rather than be read only when a step fails."""
     answers = iter([
         (0, f"{PICTURE_WARNING}\r\n\n".encode()),
         (1, b'{"event": "sync_failed", "log_level": "error"}\nTraceback (most recent call last):\n'),
@@ -462,6 +436,5 @@ def test_each_step_is_this_interpreter_running_the_cli_in_the_project(monkeypatc
     assert seen["argv"] == [sys.executable, "-m", "oversight", "sync", "--incremental"]
     assert seen["cwd"] == PROJECT_ROOT
     assert seen["timeout"] == refresh_module.STEP_TIMEOUT_S
-    # A board's first sync reads every issue: it gets the scheduled cycle's hour.
     assert refresh_module.run_step(("sync", "--full", "--project", "NEW")) == 0
     assert seen["timeout"] == refresh_module.FULL_STEP_TIMEOUT_S == 60 * 60

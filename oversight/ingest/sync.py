@@ -1,119 +1,4 @@
-"""Full and incremental sync (Phase 1).
-
-CONTRACT (tickets 3 and 4).
-
-run_sync(client, store, fields, projects=..., mode=...)
-1. Validate project keys (oversight.settings.validate_project_keys). Start a
-   run (store.start_run("sync", started_at=now())); `cursor_time` is the run's
-   start, captured before any fetch, so anything that changes during the run is
-   picked up next time.
-2. client.myself()["timeZone"] is the account zone. JQL dates are read in it,
-   and it is saved with each project's cursor.
-3. Per project (each keeps its own cursor in sync_state, scope = project key):
-   - effective mode = "full" if mode == "full" or the project has no cursor yet
-     (log a warning when an incremental run falls back to full).
-   - statuses: store.replace_rows("statuses", {"project_key": p},
-     mapping.map_statuses(p, client.project_statuses(p))).
-   - JQL: f'project = "{p}"', plus for incremental
-     f' AND updated >= "{jql_datetime(cursor - overlap, account_tz)}"',
-     then " ORDER BY updated ASC". overlap defaults to 5 minutes (clock skew,
-     and JQL has only minute precision).
-   - For each page of client.search_jql(jql, fields.search_fields()), inside one
-     store.transaction():
-       * store.upsert_issue(map_issue(...)) for each issue, and its assignee
-         store.upsert("people", map_assignee(issue, run start)): the display name
-         and picture URL the latest issue carries win, and updated_at says when a
-         sync last saw the account;
-       * changelogs: client.bulk_changelog([issue ids], list of
-         fields.tracked_changelog_fields() ids); merge entries by issueId (the
-         page gives id -> key); upsert map_status_changes and map_field_changes
-         rows. If bulk fetch fails with JiraError status 400, 404 or 405, warn
-         once and fall back to client.issue_changelog(key) per issue for the
-         rest of the run.
-       * links: store.replace_rows("links", {"issue_key": key},
-         map_issue_links(issue) + map_remote_links(key, client.remote_links(key))).
-       * full mode only, worklogs: if the issue's timespent is null or 0,
-         replace its worklogs with [] without calling Jira (nothing can be
-         logged); otherwise replace with client.issue_worklogs(key) mapped.
-   - Full mode only, once every page has been read: issues stored for the project
-     but not returned by the search were deleted or moved in Jira, so
-     store.delete_issue() each one. Never do this after a failed or partial search.
-4. If any project ran incremental: since = (earliest incremental cursor - overlap)
-   in epoch ms. client.worklog_updated(since) gives ids; client.worklog_list(ids)
-   gives worklogs; keep those whose issueId is a stored issue
-   (store.issue_id_map()) and upsert them. client.worklog_deleted(since) gives
-   ids to delete from worklogs.
-5. Only after every project succeeded: set each project's cursor
-   (last_synced_at = to_iso(cursor_time), run id, account zone), then
-   finish_run(status="succeeded", stats=...). The stats name the run's boards
-   (`projects`), so health reads each board's own syncs (JO-18). On any exception:
-   finish_run(status="failed", stats={"error": str(exc), ...}) and re-raise.
-   Cursors don't move.
-6. Once the cursors are set: each synced board's members, the people Jira
-   lets its tickets be assigned to (Jira's assignable users, as its own
-   assignee picker lists them): client.assignable_users(board), one paged read
-   per board, mapped by mapping.map_member (people accounts only, active ones
-   only). A complete fetch replaces the board's board_members rows and upserts
-   their people rows (account id, display name, active flag, when seen and the
-   picture URL; never the stored picture's columns) in one transaction. A
-   board whose fetch fails (403, timeout, a bad payload, the time budget) keeps
-   the rows it had, logs board_members_not_refreshed with the board and a short
-   reason (never a name, an account id or an email address), and is counted
-   as failed; the next board is read all the same, and nothing in this step
-   fails the sync. The step's time (members_budget_s, measured on `clock`) is
-   MEMBERS_BOARD_BUDGET_S for each board (a board's read is always ten pages)
-   and SITE_PROBE_BUDGET_S for the size check below, at most
-   MEMBERS_BUDGET_CAP_S in all. A board may use at most an equal share of the
-   time left (what is left divided by the boards still to read), so a slow
-   board never leaves the boards after it without time, and the time a quick
-   one leaves passes on to them. It is checked before each board, each page
-   and each attempt, with every attempt's timeouts and retry waits cut to the
-   board's share (the client's `deadline`): a board it cuts short or does not
-   reach keeps its rows. Its counts are the run's `members` (boards refreshed,
-   members those boards have now, boards failed). Full and incremental runs
-   alike, so "sync now" (POST /refresh) too. Jira's assignable-user search
-   scans only the site's first 1,000 users (client.ASSIGNABLE_SCAN_LIMIT), so
-   before the boards, once a run and within at most SITE_PROBE_BUDGET_S of the
-   step's time, client.site_has_users_beyond_scan() asks whether Jira lists
-   more accounts on the site (people, apps and former users alike): True adds a
-   warning (board_members_site_over_scan_limit) that some people may be
-   missing from the @ list; None (Jira would not say) is the client's
-   site_user_count_unknown log line only; anything it raises (its time spent,
-   which is how a slow or timing-out answer ends) is logged as
-   site_user_count_unknown with a short reason and read as None. None of it
-   fails the step or the sync, and the `members` counts are unchanged by it.
-7. Then, before the run finishes: the pictures of the synced boards' people,
-   assignees and members (oversight.ingest.avatars.refresh_pictures, through
-   `pictures` or a fetcher of the run's own). Their counts (fetched, unchanged,
-   failed) join the run's stats, with each failure's person id and reason; a
-   picture that fails is counted, kept there and logged, and nothing in this
-   step ever fails the sync. A failed sync fetches neither members nor
-   pictures.
-
-Idempotency (Phase 1 done-when): a second run with no Jira changes must report
-rows_written == 0. Every write goes through upsert/replace_rows, which count
-only real changes. The people rows are counted apart (SyncResult.people), not in
-rows_written: a run that reads an issue again also notes when it saw its
-assignee, which is not a change in Jira.
-
-Details the contract leaves open:
-- A page is fetched completely before its transaction opens, so a failure
-  never leaves half a page behind and the database is locked only while rows
-  are written. Write counts join the run's totals once their transaction commits.
-- An issue new to the snapshot under its key (moved in from another project,
-  or re-keyed) also gets its worklogs read in an incremental run: the
-  updated-worklog feed lists recent changes only, never its older worklogs.
-- If /myself names no usable zone, incremental projects run full (with a
-  warning), because a JQL date read in the wrong zone could skip updates.
-- A moved or re-keyed issue's old key is removed before the new one is
-  written, so its removed rows are counted per table. `issues_deleted` counts
-  only issues that disappeared from a full search.
-- A bulk changelog entry, feed entry or listed worklog without the id it is
-  filed under raises JiraError (like mapping does); entries for issues the
-  snapshot doesn't hold are skipped.
-- Bad arguments (unknown mode, negative overlap, invalid or no project keys)
-  raise ValueError before a run is recorded.
-"""
+"""Full and incremental sync."""
 from __future__ import annotations
 
 import sqlite3
@@ -147,26 +32,17 @@ from oversight.timeutil import epoch_ms, hours_between, jql_datetime, parse_ts, 
 if TYPE_CHECKING:
     from oversight.jira.client import JiraClient
 
-# What Jira answers when a site doesn't offer the bulk changelog fetch. Any
-# other error (auth, outage, a bad payload) stops the run instead.
 _NO_BULK_FETCH = frozenset({400, 404, 405})
 
 # The synced tables that hold an issue's rows, counted when an issue is removed.
 _ISSUE_TABLES: tuple[str, ...] = ("issues", "status_changes", "field_changes", "worklogs", "links")
 
-# The members step's (6) time: MEMBERS_BOARD_BUDGET_S for each board, whose read is always ten pages (three
-# seconds a page, a retry wait or two included), and SITE_PROBE_BUDGET_S for the site-size check
-# (JiraClient.site_has_users_beyond_scan), which may never spend more, so a slow answer to it never leaves the boards
-# without time. MEMBERS_BUDGET_CAP_S bounds the whole step however many boards are synced, well inside the
-# 15 minutes "sync now" gives the sync (oversight.api.refresh.STEP_TIMEOUT_S). A board it cuts short or does not
-# reach keeps its rows.
 MEMBERS_BOARD_BUDGET_S = 30.0
 SITE_PROBE_BUDGET_S = 10.0
 MEMBERS_BUDGET_CAP_S = 300.0
 
 
 def members_budget_s(boards: int) -> float:
-    """The members step's time for `boards` boards: each board's share and the size check's, at most the cap."""
     return min(SITE_PROBE_BUDGET_S + MEMBERS_BOARD_BUDGET_S * boards, MEMBERS_BUDGET_CAP_S)
 
 
@@ -257,9 +133,7 @@ def run_sync(
     pictures: PictureFetcher | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> SyncResult:
-    """Sync the projects into the store. See the module docstring. `pictures` fetches the people's
-    pictures afterwards (tests give it a stub transport); without it the run makes its own. `clock`
-    measures the members step's budget."""
+    """Sync the projects into the store."""
     if mode not in ("full", "incremental"):
         raise ValueError(f"mode must be 'full' or 'incremental', not {mode!r}")
     if overlap < timedelta(0):
@@ -456,8 +330,6 @@ class _Sync:
 
         gone: list[str] = []
         if full:
-            # Every page arrived, so a stored issue the search didn't return was
-            # deleted in Jira or moved to another project.
             gone = sorted(self.store.issue_keys(project) - seen)
             if gone:
                 with self.writing() as counts:
@@ -560,10 +432,6 @@ class _Sync:
     # --- members (step 6) ----------------------------------------------------------------
 
     def refresh_members(self, projects: list[str], clock: Callable[[], float]) -> None:
-        """Each board's members, a board at a time, once Jira has been asked whether it lists more accounts on the
-        site than the members read can scan (a warning when it does). Whatever goes wrong with that question is a
-        log line, whatever goes wrong with one board is a warning, its stored members stay, and the next board is
-        read all the same: never the sync's failure. Each board has at most an equal share of the time left."""
         deadline = clock() + members_budget_s(len(projects))
         if self._site_over_scan_limit(deadline, clock):
             self.warn(
@@ -578,8 +446,6 @@ class _Sync:
             if now >= deadline:
                 self._members_not_refreshed(project, "time budget spent")
                 continue
-            # An equal share of the time left: a slow board never takes the time of the boards after it, and the
-            # time a quick one leaves passes on to them.
             share = (deadline - now) / (len(projects) - index)
             try:
                 users = self.client.assignable_users(project, deadline=now + share, clock=clock)
@@ -599,9 +465,7 @@ class _Sync:
             _log().info("board_members_refreshed", board=project, members=len(members))
 
     def _site_over_scan_limit(self, deadline: float, clock: Callable[[], float]) -> bool | None:
-        """The client's site_has_users_beyond_scan, given at most SITE_PROBE_BUDGET_S of the step's time. Anything
-        it raises (its time spent, which is how a slow or timing-out answer ends, or a fault of its own) is logged
-        and read as None, Jira not having said: never the step's failure, nor the sync's."""
+        """The client's site_has_users_beyond_scan, given at most SITE_PROBE_BUDGET_S of the step's time."""
         try:
             return self.client.site_has_users_beyond_scan(
                 deadline=min(deadline, clock() + SITE_PROBE_BUDGET_S), clock=clock
@@ -624,7 +488,7 @@ class _Sync:
     def refresh_pictures(
         self, projects: list[str], fetcher: PictureFetcher | None, now: Callable[[], datetime]
     ) -> None:
-        """The synced boards' people's pictures. Whatever goes wrong here is a warning, never the sync's failure."""
+        """The synced boards' people's pictures."""
         try:
             if fetcher is not None:
                 self.pictures = refresh_pictures(self.store, fetcher, projects=projects, now=now)
@@ -681,8 +545,6 @@ def _count(number: int, noun: str) -> str:
 
 
 def _members_reason(exc: Exception) -> str:
-    """Why a board's members were not refreshed, or the site's size not learnt, in a few words: never the error's
-    text, which may quote Jira's answer, and so a name or an address."""
     if isinstance(exc, JiraBudgetSpent):
         return "time budget spent"
     if isinstance(exc, JiraUnavailable):
@@ -726,8 +588,7 @@ def _worklog_ids(entries: list[Any], feed: str) -> list[int | str]:
 
 
 def _id_of(entry: Any, name: str, what: str) -> int | str:
-    """entry[name], the id an entry is filed under. Without it the payload is not
-    the documented shape, so JiraError stops the run rather than drop data."""
+    """entry[name], the id an entry is filed under."""
     value = entry.get(name) if isinstance(entry, dict) else None
     if isinstance(value, bool) or not isinstance(value, (int, str)) or value == "":
         raise JiraError(f"unexpected Jira payload: {what} without {name}")

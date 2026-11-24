@@ -1,38 +1,3 @@
-"""The check registry (JO-20): one place that says, for every check a rule can run, what it is called, what it flags,
-the params it takes, the status categories it may apply to and what it reads from Jira.
-
-JO-15's editable params (EDITABLE: the catalogue rules' numeric params an admin may set on a board, each with its
-bounds) live here too, and stay the authority for them. The registry builds on them: a number param of a check is one
-ParamSpec, the same object a catalogue rule's setting uses, so "threshold", "grace_hours" and "pct" have one name,
-one unit and one set of bounds for both kinds of rule. The new checks' number params (hours, days) are ParamSpecs of
-their own. Each check (CHECK_SPECS, in the order the dashboard lists them) holds:
-- name (checks.CHECKS / SPRINT_CHECKS), label (two to five plain words, from the JO-20 spec's table; the dashboard's
-  sample registry says them word for word) and summary (one line, at most 90 characters);
-- scope: issue, or sprint (a sprint check has no status filter: its categories are empty);
-- params, each a CheckParam of a kind: number (its ParamSpec), statuses (one or more of the board's status names),
-  stage (one of the stages the board maps), evidence (one of process.yaml's evidence names for the board) or field
-  (assignee, estimate, epic or sprint), with the value a new rule starts from (None: the admin picks one);
-- the status categories it may apply to (categories) and those a new rule starts with (default_categories);
-- what it reads from Jira (reads(), as GET /rules' `needs` says it) and its threshold in words (threshold_words(), as
-  GET /rules' `threshold` says it), for every rule that runs it, catalogue or custom.
-
-A custom rule (oversight/rules/settings.py) is one of these checks with its params, the categories and issue types it
-applies to, a title and a severity. check_definition validates one against the registry and the board's options
-(BoardOptions, read by board_options: the statuses Jira lists for the board, with their categories; its issue types,
-those rules.yaml leaves out by default (Epic) apart; the stages it maps; process.yaml's evidence names for it), in plain
-words, problem by problem, each on the field it is about: an unknown check, a missing or extra param, a number that is
-not one, out of its bounds or with more than 4 decimal places, a status, stage, evidence or field the board does not
-have, no category or one the check does not allow, a status in a category the rule does not apply to (the engine picks
-work by category first, so the rule could never flag anything there: status_problems), an unknown issue type, a title
-of 3 to 80 characters with a letter or a digit and a description of at most 300. Names are matched ignoring case and
-kept as the board writes them; numbers are kept as floats, statuses and issue types in the board's order, categories in
-theirs, so one definition has one fingerprint. Titles and descriptions arrive as plain text (the API cleans them as it
-cleans a reason) and are kept as a reader sees them (visible_text: look-alike compatibility forms folded, characters
-that show as nothing taken out), so two titles that look the same are one (title_key); whether a title is free on the
-board, and the limit of custom rules a board holds, are settings.py's to check, against the board's other rules.
-explain() says in one plain sentence what a rule flags, from the rule itself (the AI draft's words when the model's
-do not fit the rule, oversight/api/rule_draft.py).
-"""
 from __future__ import annotations
 
 import math
@@ -73,17 +38,12 @@ DEFAULT_EFFORT_RATIO = 1.5  # R-EFF-01's in rules.yaml
 
 @dataclass(frozen=True)
 class ParamSpec:
-    """One numeric param of a check: what it reads as, and its bounds (min and max included), which this module
-    enforces and the dashboard mirrors; `step` is how far the dashboard's field moves."""
-
     name: str
     label: str
     unit: Unit
     min: float
     max: float
     step: float
-    # The check's own default where rules.yaml leaves the param out; None: the check has none, so the param can be set
-    # only on a catalogue rule whose entry sets it.
     default: float | None
 
     def bounds(self) -> str:
@@ -106,8 +66,6 @@ class ParamSpec:
         return f"{_num(round(value * 100, 2))}%"
 
 
-# JO-15: the params an admin may set on a catalogue rule, by the rule's check. Structural params (stage, evidence) never
-# can be. The custom rules' checks use the same ParamSpecs (CHECK_SPECS).
 EDITABLE: dict[str, tuple[ParamSpec, ...]] = {
     "estimate_after_start": (
         ParamSpec("grace_hours", "Grace after work started", "hours", 0.0, 168.0, 0.5, DEFAULT_GRACE_HOURS),
@@ -137,9 +95,6 @@ def _editable(check: str, name: str) -> ParamSpec:
 
 @dataclass(frozen=True)
 class CheckParam:
-    """One param of a check: its name, how the form labels it, its kind and, for a number, its ParamSpec. `start` is
-    the value a new rule starts from: the number's default, a field's first choice, or None (the admin picks one)."""
-
     name: str
     label: str
     kind: Kind
@@ -166,7 +121,6 @@ class CheckSpec:
 
 
 def _number_param(spec: ParamSpec, start: float | None = None) -> CheckParam:
-    """A number param: its ParamSpec's name and label, so a field and its messages read the same."""
     return CheckParam(spec.name, spec.label, "number", spec, start)
 
 
@@ -262,8 +216,7 @@ def check_label(check: str) -> str:
 
 def reads(check: str, params: Mapping[str, Any], *, history_days: int, estimate: EstimateConfig,
           requires_evidence: Sequence[str] = (), requires_stages: Sequence[str] = ()) -> list[str]:
-    """What a rule of this check reads from Jira, in plain words (GET /rules' `needs`). A check (or params) this
-    does not know: what the rule says it requires."""
+    """What a rule of this check reads from Jira, in plain words (GET /rules' `needs`)."""
     sized = "Estimate (story points)" if estimate.basis == "points" else "Estimate (original estimate)"
     history = f"Closed work from the last {history_days} days"
     plain: dict[str, list[str]] = {
@@ -297,8 +250,6 @@ def reads(check: str, params: Mapping[str, Any], *, history_days: int, estimate:
 
 
 def threshold_words(check: str, params: Mapping[str, Any]) -> str | None:
-    """A rule's threshold in words, with the check's own defaults (GET /rules' `threshold`); None when it has none, or
-    when its params are not what the check reads (the engine would refuse them too: nothing is guessed)."""
     try:
         if check == "estimate_after_start":
             return f"{_num(float(params.get('grace_hours', DEFAULT_GRACE_HOURS)))} h grace"
@@ -324,8 +275,6 @@ def threshold_words(check: str, params: Mapping[str, Any]) -> str | None:
 
 
 def hours_words(hours: float) -> str:
-    """A limit in hours as a reader says it: from 48 hours on in days, as the checks' messages say a time ("3 days",
-    "2.5 days"), else in hours ("36 h")."""
     if hours >= 48:
         return f"{_num(round(hours / 24, 1))} days"
     return f"{_num(round(hours, 1))} h"
@@ -337,7 +286,6 @@ def days_words(days: float) -> str:
 
 
 def join_names(names: object) -> str:
-    """Status names in a sentence, each quoted as the checks' messages quote one: "'Code Review' or 'QA'"."""
     items = [f"'{name}'" for name in names] if isinstance(names, (list, tuple)) else [f"'{names}'"]
     if len(items) <= 1:
         return "".join(items)
@@ -349,11 +297,6 @@ def join_names(names: object) -> str:
 
 @dataclass(frozen=True)
 class BoardOptions:
-    """What a custom rule on one board may name: its statuses as Jira lists them (name and category, new first, then in
-    progress, then done, each by name), its issue types (from its issues, by name, the types rules.yaml leaves out by
-    default apart), the stages its workflow maps (in process order), process.yaml's evidence names for it (in process
-    order) and those it records (a source in process.yaml), and its estimate basis."""
-
     project: str
     statuses: tuple[tuple[str, str | None], ...] = ()
     issue_types: tuple[str, ...] = ()
@@ -384,9 +327,7 @@ _CATEGORY_ORDER = {category: n for n, category in enumerate(CATEGORIES)}
 def board_options(
     conn: sqlite3.Connection, process: ProcessConfig, project: str, *, exclude_types: Iterable[str] = ("Epic",)
 ) -> BoardOptions:
-    """The board's options (BoardOptions), through any connection (a read-only one too). Its statuses are the
-    statuses table's (what the last sync read from Jira); a board with none there yet lists the statuses its workflow
-    maps, with no category. A status two of Jira's workflows hold is listed once."""
+    """The board's options (BoardOptions), through any connection (a read-only one too)."""
     config = process.project(project)
     statuses: dict[str, tuple[str, str | None]] = {}
     for row in conn.execute(_STATUSES_SQL, (project,)).fetchall():
@@ -416,7 +357,6 @@ def board_options(
 
 
 def options_of(param: CheckParam, options: BoardOptions) -> list[dict[str, Any]] | None:
-    """A param's choices on the board, each {value, label} (a status also with its category); None for a number."""
     if param.kind == "statuses":
         return [{"value": name, "label": name, "category": category} for name, category in options.statuses]
     if param.kind == "stage":
@@ -429,7 +369,6 @@ def options_of(param: CheckParam, options: BoardOptions) -> list[dict[str, Any]]
 
 
 def param_payload(param: CheckParam, options: BoardOptions) -> dict[str, Any]:
-    """One param as GET /rules/settings' checks list it: {name, label, kind, unit, min, max, step, default, options}."""
     spec = param.spec
     return {
         "name": param.name,
@@ -445,9 +384,6 @@ def param_payload(param: CheckParam, options: BoardOptions) -> dict[str, Any]:
 
 
 def missing_for(spec: CheckSpec, options: BoardOptions) -> list[str]:
-    """What a check needs that the board records nowhere, so no rule of it could run there: an evidence param when
-    the board records none of process.yaml's evidence (each name is then missing), a stage param when its workflow
-    maps no stage. Empty when some choice of its params can run."""
     missing: list[str] = []
     if spec.param("evidence") is not None and not options.recorded:
         missing.extend(options.evidence or ("evidence",))
@@ -457,7 +393,6 @@ def missing_for(spec: CheckSpec, options: BoardOptions) -> list[str]:
 
 
 def checks_payload(options: BoardOptions) -> list[dict[str, Any]]:
-    """The registry for one board (GET /rules/settings' `checks`, and the draft's <checks>), in registry order."""
     found = []
     for spec in CHECK_SPECS.values():
         missing = missing_for(spec, options)
@@ -480,33 +415,20 @@ def checks_payload(options: BoardOptions) -> list[dict[str, Any]]:
 
 @dataclass(frozen=True)
 class Problem:
-    """Why part of a definition cannot be one, on the field it is about: title, description, check, severity, params
-    (not an object), params.<name>, applies_to, applies_to.status_category or applies_to.issue_type."""
-
     field: str
     message: str
 
 
 def requirements(check: str, params: Mapping[str, Any]) -> tuple[list[str], list[str]]:
-    """What a rule of this check with these params needs the board to record (requires_evidence, requires_stages),
-    derived from its params as rules.yaml says them for a catalogue rule: so "not measurable" works for custom rules."""
     evidence = [str(params["evidence"])] if isinstance(params.get("evidence"), str) else []
     stages = [str(params["stage"])] if isinstance(params.get("stage"), str) else []
     return evidence, stages
 
 
-# Characters a title or a description never keeps (unicodedata categories): format characters (zero-width spaces and
-# joiners, soft hyphens, word joiners, byte-order marks, direction marks), which show as nothing, so a name of them
-# reads as blank or as another rule's; surrogates, private-use and unassigned characters. Control characters (Cc) read
-# as spaces.
 _INVISIBLE = frozenset({"Cf", "Cs", "Co", "Cn"})
 
 
 def visible_text(text: str) -> str:
-    """Text as a rule keeps its title and description, as a reader sees it: compatibility forms folded (NFKC: a
-    fullwidth "Ｓ" is "S", a ligature its letters), the characters that show as nothing taken out (_INVISIBLE), control
-    characters as spaces, spaces collapsed. The joiners some scripts write between letters go too: a rule's name is
-    read in every list, and one that looks the same as another must be the same."""
     kept = []
     for char in unicodedata.normalize("NFKC", text):
         category = unicodedata.category(char)
@@ -517,13 +439,10 @@ def visible_text(text: str) -> str:
 
 
 def title_key(title: str) -> str:
-    """A title as a reader tells two apart: its visible text, ignoring case ("Stuck in review" and "ＳTUCK IN REVIEW"
-    are one name)."""
     return visible_text(title).casefold()
 
 
 def check_title(value: object) -> tuple[str | None, list[Problem]]:
-    """The title as kept (visible_text); problems unless it is text of 3 to 80 characters with a letter or a digit."""
     if not isinstance(value, str):
         return None, [Problem("title", "Give the rule a name.")]
     text = visible_text(value)
@@ -535,8 +454,7 @@ def check_title(value: object) -> tuple[str | None, list[Problem]]:
 
 
 def check_description(value: object) -> tuple[str | None, list[Problem]]:
-    """The description as kept (visible_text; None when blank); a problem unless it is text of at most 300
-    characters."""
+    """The description as kept (None when blank), or a problem when it is not valid text."""
     if value is None:
         return None, []
     if not isinstance(value, str):
@@ -550,9 +468,6 @@ def check_description(value: object) -> tuple[str | None, list[Problem]]:
 def check_params(
     spec: CheckSpec, given: object, options: BoardOptions, *, only: Iterable[str] | None = None
 ) -> tuple[dict[str, Any], list[Problem]]:
-    """The check's params, each validated against the registry and the board's options and kept as the board writes
-    it; problems for a param it does not take, a missing one and each value that cannot be. `only`: the names to check
-    (an edit's), the others left out of the answer."""
     if not isinstance(given, Mapping):
         return {}, [Problem("params", "The settings must be an object, by name.")]
     problems: list[Problem] = []
@@ -599,9 +514,6 @@ def _param_value(param: CheckParam, value: object, options: BoardOptions) -> tup
 
 
 def check_applies(spec: CheckSpec, given: object, options: BoardOptions) -> tuple[dict[str, Any], list[Problem]]:
-    """{status_category, issue_type}: the categories (at least one, each one the check allows; none for a sprint
-    check) in their order, and the issue types (None: every type but those rules.yaml leaves out; else at least one of
-    the board's) in the board's order."""
     if not isinstance(given, Mapping):
         return {}, [Problem("applies_to", "Say which work the rule applies to.")]
     problems: list[Problem] = []
@@ -644,11 +556,6 @@ _CATEGORY_WORDS = {"new": "To do", "indeterminate": "In progress", "done": "Done
 def status_problems(
     spec: CheckSpec, params: Mapping[str, Any], applies: Mapping[str, Any], options: BoardOptions
 ) -> list[Problem]:
-    """Each status a rule names (its statuses param) in a category, as the board lists it, that the rule does not
-    apply to: the engine picks a rule's work by category before the check reads its status, so the rule could never
-    flag anything in that status. Said on params.statuses, with what to do: tick the category under Applies to, or,
-    when the check never looks at that category, pick another status. A status whose category the board does not say
-    is left alone."""
     if spec.param("statuses") is None:
         return []
     names = params.get("statuses")
@@ -688,8 +595,6 @@ _DEFINITION_KEYS = ("title", "description", "check", "params", "applies_to", "se
 
 
 def check_definition(given: object, options: BoardOptions) -> tuple[Definition | None, list[Problem]]:
-    """A new rule's definition ({title, description?, check, params, applies_to, severity}) validated against the
-    registry and the board's options: the Definition, or every problem found (see the module docstring)."""
     if not isinstance(given, Mapping):
         return None, [Problem("rule", "The new rule must be an object.")]
     problems: list[Problem] = []
@@ -718,9 +623,6 @@ def check_definition(given: object, options: BoardOptions) -> tuple[Definition |
 
 
 def engine_applies(scope: str, applies: Mapping[str, Any]) -> dict[str, Any] | None:
-    """A custom rule's applies_to as the engine reads it (catalog.AppliesTo): none for a sprint rule, and no category
-    filter when every category is picked, as a catalogue rule that names none (work whose status has no category in
-    Jira is checked then too)."""
     if scope == "sprint":
         return None
     categories = applies.get("status_category")
@@ -732,10 +634,6 @@ def engine_applies(scope: str, applies: Mapping[str, Any]) -> dict[str, Any] | N
 
 
 def explain(check: str, params: Mapping[str, Any], applies: Mapping[str, Any]) -> str | None:
-    """What a rule of this check, with these params, flags, in one plain sentence that starts with "Flags" ("Flags bugs
-    in 'Code Review' for more than 3 days."), written from the rule itself, so it says exactly what the rule does: its
-    limit as the check compares it ("more than", "at least"), the work it looks at by its issue types ("bugs", "stories
-    and tasks"; "work" for every type). None for a check the registry does not hold, or params it does not read."""
     who, many = _who(applies.get("issue_type"))
     its, was = ("their", "they were") if many else ("its", "it was")
     try:
@@ -788,8 +686,6 @@ def explain(check: str, params: Mapping[str, Any], applies: Mapping[str, Any]) -
 
 
 def _who(types: object) -> tuple[str, bool]:
-    """The work a rule looks at, as a sentence names it, and whether that is many: its issue types, each in the
-    plural ("bugs", "stories and tasks"), else "work"."""
     if not isinstance(types, list) or not types or not all(isinstance(name, str) for name in types):
         return "work", False
     return join_words(_lower_first(_plural(name)) for name in types), True
@@ -809,8 +705,6 @@ def _lower_first(text: str) -> str:
 
 
 def _time_words(hours: float) -> str:
-    """A time in hours as a sentence says it: from 48 hours on in days ("3 days", "2.5 days"), else in hours ("36
-    hours", "1 hour")."""
     if hours >= 48:
         return f"{_num(round(hours / 24, 1))} days"
     return f"{_num(round(hours, 1))} {'hour' if hours == 1 else 'hours'}"
@@ -820,8 +714,6 @@ def _time_words(hours: float) -> str:
 
 
 def number(value: object) -> float | None:
-    """A finite number as a float; None for anything else (a boolean, a string, NaN, infinity, an integer too large to
-    be a float)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     try:

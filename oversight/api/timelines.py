@@ -1,38 +1,4 @@
-"""What GET /findings, GET /findings/{finding_id} and GET /issues/{key}/timeline share.
-
-An issue's history as the dashboard contract shows it (docs/API_CONTRACT.md 4.3
-to 4.5 in the jira-oversight-ui repository; its zod schemas in
-src/lib/api/schemas.ts are the source of truth): status intervals, the
-changelog, skipped stages, weekly worklog totals, and the Finding object, which
-turns a rule engine row into the contract's shape:
-
-- the evidence dict (one shape per check, oversight/rules/checks.py) becomes
-  evidence items {kind, label, value, unit, from, to, at, changelog_id}, with
-  the Jira changelog entries the rule turned on looked up in the snapshot;
-- the rule's threshold as a reader says it ("1.5×", "p90 of To Do: 524.8 h");
-- the epic is the issue's, or for a subtask its parent's;
-- a sprint finding (stored under issue_key "sprint:<id>") goes out with scope
-  "sprint", issue_key null and a sprint object;
-- the assignee is the issue's current one, as a person (oversight.api.people:
-  the hashed id, the Jira display name and the stored picture's version), null
-  when nobody is assigned and for every sprint finding;
-- warned_before is the earliest warning linked to it in warning_links;
-- resolved_why is cleared, superseded or settings_changed (JO-15: the board's
-  rule settings changed, which closes a finding without anything being fixed);
-  aged_out goes out as null. The rule's threshold is the one the finding was
-  found under, as its evidence records it (a closed finding says what it
-  crossed, whatever the board's settings say now), else the board's
-  (ctx.rules).
-- the rule is the board's (ctx.rules.find): a custom rule's (JO-20) too, one
-  the board deleted included, so its findings keep their title and their
-  evidence reads as its check's.
-
-People by display name and picture version only, never by an email address,
-Jira's picture URL or an account id: the one account id read here is an issue's
-assignee's, and it leaves only as the person's hashed id. No query reads an
-author or the account behind a worklog, and assignee changes go out as Assigned
-/ Unassigned.
-"""
+"""What GET /findings, GET /findings/{finding_id} and GET /issues/{key}/timeline share."""
 from __future__ import annotations
 
 import json
@@ -60,14 +26,9 @@ CONTRACT_STAGES = frozenset(
     ("backlog", "estimate", "development", "code_review", "dev_signoff", "testing", "test_review", "test_signoff", "done")
 )
 CATEGORIES = frozenset(("new", "indeterminate", "done"))
-# The tracked fields the contract's changelog names besides status. The evidence fields
-# (programmer, code_reviewers, testers, ...) hold people, so they never leave the service.
 CHANGE_FIELDS = ("story_points", "original_estimate", "sprint", "assignee")
 ISSUE_KEY = re.compile(r"[A-Z][A-Z0-9_]{1,19}-[1-9][0-9]{0,8}")
 RULE_ID = re.compile(r"[RW]-[A-Z]+-[0-9]{2,3}")
-# Why a resolved finding resolved, as the contract names it: cleared (the condition stopped), superseded (another
-# rule_version replaced it) and settings_changed (the board's rule settings changed, JO-15: never a fix). aged_out
-# goes out as null, as it always has.
 RESOLVED_WHY = frozenset(("cleared", "superseded", "settings_changed"))
 FINDING_ID = re.compile(r"[0-9a-f]{32}")
 _STORED_TS = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z")
@@ -146,8 +107,7 @@ def evidence_dict(text: object) -> dict[str, Any]:
 
 
 def find_rule(ctx: ApiContext, rule_id: str) -> Rule | None:
-    """The rule a finding names on the board: one it runs, else a custom rule it deleted (JO-20); None for a rule
-    since removed from the catalogue."""
+    """The rule a finding names on the board"""
     return ctx.rules.find(rule_id)
 
 
@@ -155,9 +115,6 @@ def find_rule(ctx: ApiContext, rule_id: str) -> Rule | None:
 
 
 class Categories:
-    """Status name -> new | indeterminate | done for the dashboard's project, as derive reads it
-    (the statuses table, then a done-stage status, then the issue's own current status), and,
-    since the contract needs one for every interval, last of all the stage's place in the process."""
 
     def __init__(self, conn: sqlite3.Connection, ctx: ApiContext) -> None:
         rows = _rows(conn, "SELECT name, category FROM statuses WHERE project_key = ?", (ctx.project,))
@@ -185,9 +142,7 @@ class Categories:
 
 
 def issue_category(issue: Mapping[str, Any] | sqlite3.Row, ctx: ApiContext, categories: Categories) -> str:
-    """The status category the Issue page shows for an issue now: new, indeterminate (in progress) or done (the stored
-    one when it is one of the three, else the status's, as GET /issues/{key}/timeline works it out). GET /people and
-    the scorecards count open and in-progress tickets by it."""
+    """The status category the Issue page shows for an issue now"""
     stored = issue["status_category"]
     if stored in CATEGORIES:
         return str(stored)
@@ -247,8 +202,6 @@ def load_history(conn: sqlite3.Connection, keys: Iterable[str | None]) -> Histor
 def interval_items(
     rows: Sequence[sqlite3.Row], category: Callable[[str | None, str | None], str]
 ) -> list[Item]:
-    """Status intervals as the contract sends them, in timeline order (seq): hours are calendar
-    hours, null while the issue is still in that status."""
     items: list[Item] = []
     for row in rows:
         entered = ts(row["entered_at"])
@@ -590,9 +543,7 @@ def evidence_items(check: str | None, subject: _Subject) -> list[Item]:
 
 
 def threshold_text(check: str | None, subject: _Subject) -> str | None:
-    """The rule's threshold as a reader says it, or None for a rule without one: the one the finding was found under,
-    as its evidence records it, so a finding a later setting closed says what it crossed; the board's (its params) for
-    evidence from before a check recorded it."""
+    """The rule's threshold as a reader says it, or None for a rule without one"""
     ev, params = subject.evidence, subject.params
     if check == "effort_ratio_at_least":
         ratio = num(_found_under(ev, "threshold", params.get("threshold")))
@@ -634,10 +585,6 @@ def _found_under(evidence: Mapping[str, Any], key: str, board: object) -> object
 
 # --- findings ---------------------------------------------------------------------------------
 
-# Every finding of the dashboard's project with its issue (joined_key is NULL when the
-# issue is no longer in the snapshot), its epic (a subtask's is its parent's: catalog's
-# join), the epic's title and the issue's assignee with the display name the last sync
-# saw and the version of their stored picture. Callers append " AND ..." conditions.
 FINDING_SQL = f"""
     SELECT f.finding_id, f.rule_id, f.rule_version, f.issue_key, f.kind, f.severity, f.message, f.evidence_json,
            f.first_seen_at, f.last_seen_at, f.resolved_at, f.resolved_why,
@@ -664,10 +611,6 @@ def _sprint_of(stored_key: str, evidence: Mapping[str, Any]) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class FindingRecord:
-    """One findings row with the values the list filters, searches and sorts on, as the contract
-    names them: a sprint finding has no issue key, no epic and no assignee, and carries its sprint.
-    A finding whose issue has left the snapshot (deleted or moved in Jira since the rules last ran)
-    keeps its key but, like a sprint finding, belongs to no one: no person filter matches it."""
 
     row: sqlite3.Row
     finding_id: str
@@ -690,8 +633,6 @@ class FindingRecord:
         sprint = _sprint_of(stored_key, evidence_dict(row["evidence_json"])) if stored_key.startswith(SPRINT_PREFIX) else None
         epic = row["epic_key"] if sprint is None and ISSUE_KEY.fullmatch(row["epic_key"] or "") else None
         resolved_at = ts(row["resolved_at"])
-        # A sprint finding belongs to no one, and so does one whose issue is no longer in the snapshot
-        # (it is not "unassigned": nobody knows whose it is now), so no person filter ever matches them.
         nobodys = sprint is not None or row["joined_key"] is None
         assignee = None if nobodys else person(row["assignee_id"], row["assignee_name"], row["assignee_avatar"])
         return cls(
@@ -814,8 +755,6 @@ def _id_order(changelog_id: object) -> tuple[int, int, str]:
 
 
 def _field_value(field: str, value: object) -> str | None:
-    """A tracked field's value as the contract shows it: an assignee change reads Assigned or
-    Unassigned, never whom (the issue's current assignee is its `assignee`)."""
     if field == "assignee":
         return "Assigned" if value not in (None, "") else "Unassigned"
     if field in ("story_points", "original_estimate"):
@@ -824,8 +763,6 @@ def _field_value(field: str, value: object) -> str | None:
 
 
 def change_items(history: History, key: str) -> list[Item]:
-    """Status and tracked-field changes, oldest first (a status change before a field change in the
-    same changelog entry); assignee values read Assigned / Unassigned."""
     ordered: list[tuple[tuple[Any, ...], Item]] = []
     for change in history.status_changes.get(key, []):
         at = ts(change["changed_at"])

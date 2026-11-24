@@ -1,99 +1,4 @@
-"""ScriptedProvider: an offline stand-in for the model, so the whole product
-runs with no API key (demos, tests, CI) and every number still comes from code.
-
-structured(system, user, schema, ...):
-- schema is llm.provider.Plan: route the question (the text inside the
-  <question> tag of `user`) to catalogue calls with a small keyword router
-  over the catalogue names and descriptions in the <catalog> tag. The router
-  (ask/router.py, shared with nothing else) is deterministic and documented:
-  "stuck"/"longest"/"time in status" -> oversight_time_in_status;
-  "epic"+"breach"/"hot spot" -> oversight_hot_spots; "estimate before"/
-  "estimated" -> oversight_coverage(field=estimate) and oversight_list_findings
-  (R-EST-02); "straight"/"skipped"/"To Do to Done" -> oversight_list_findings
-  (R-FLOW-02) with the period; "effort"/"estimate" + "trend" -> oversight_trend
-  (median_effort_ratio); "code review"/"testing" -> oversight_list_findings
-  (R-FLOW-01), which the service turns into not_measurable; "who"/"developer"/
-  "person"/"slowest" -> understood=false with the team-level decline; nothing
-  matched -> understood=false. Params are parsed from the question where
-  present (project key, "last sprint"/"this month"/"last 30 days" -> period, a
-  rule id, "top 5" -> n). Without a <catalog> tag the ten catalogue names are
-  assumed; with one, only the tools it lists are planned. A people-level
-  catalogue holds the person tools, and the router then answers questions
-  about people (ask/router.py); the people the question mentions come from the
-  <mentions> tag, and their names are taken out of the question first (and
-  so are the names in <no_tickets>, people mentioned who hold no ticket), so a
-  name never reads as a project key or a topic.
-- schema is insights.Narrative (recognised by its `sentences` field, so this
-  module needs nothing from the insights build): produce the sentences from
-  the <candidates> JSON: one sentence per candidate (top 5), tone from the
-  candidate's severity (breach -> blatantly_bad, warning -> trending_bad, else
-  neutral), quoting the candidate's own numbers verbatim (from its detail
-  entries {key, label, value, unit}) so the validator passes.
-- schema is the rule draft (JO-20: api/rule_draft.RuleDraftReply, recognised by
-  its outcome, check, params and status_categories fields, so this module
-  needs nothing from the API): one custom rule drafted from the words inside
-  the <request> tag, matched against the board's names in the <board> JSON
-  (status names and their categories, issue types) and the checks in <checks>
-  (their default categories). A small keyword script, deterministic and in
-  this order, the first match deciding the check:
-    "reopen" -> reopened;
-    "skip" -> skipped_stage;
-    "effort" / "over the estimate" with "N×", "N x" or "N times" ->
-      effort_ratio_at_least (threshold N);
-    "no assignee" / "unassigned" / "no epic" / "no estimate" / "unestimated" /
-      "not in a sprint" / "no sprint" ("without" or "missing" for "no") ->
-      missing_field (assignee, epic, estimate or sprint);
-    "no update" / "not updated" / "untouched" / "no change" / "nobody has
-      touched" ("no one", "not") -> no_update_for (days: the request's
-      duration, else 7);
-    "open for N" / "open more than N" / "older than N" -> open_longer_than
-      (days: N, else 30);
-    one of the board's status names (whole words, longest first), or "review"
-      (the board's first status holding it), with "N days/hours/weeks" or
-      without -> time_in_status_over (those statuses; hours: the duration,
-      else 72; categories: theirs that the check allows). When every status
-      named is in a category the check never looks at (Done), no rule can do
-      it: not_supported, "None of the checks can do that: 'Time in a status'
-      checks To do and In progress work only.".
-  A duration is "N hours/h", "N days/d" or "N weeks/w" (hours become days for
-  a days param). Issue types: any of the board's names in the request
-  ("bugs" for Bug, "stories" for Story) -> issue_types, else every type.
-  Categories: the check's default_categories unless said above. Severity:
-  "warning" or "early" -> warning, else breach. The title, the description and
-  the explanation are written from what was matched ("Bugs in Code Review over
-  3 days"). Anything else is not_supported, its note naming the closest check:
-  for a duration and "in" before a word (work sitting somewhere for a time:
-  "in Blocked for 2 days", a status the board does not have) 'Time in a
-  status'; otherwise the one whose label and summary share the most words (of
-  four letters A to Z or more, ignoring case, each word as it is: "epics" is
-  not "epic") with the request, the first listed when none does ("None of the
-  checks can do that. The closest is '<label>'.");
-  or not_understood when the request holds no word of three letters or more.
-  tests/eval/rule_drafts.yaml holds each note word for word, and the
-  dashboard's sample drafter is held to the same file. With <problems> after
-  the request (the one repair) it drafts the same rule, the title marked
-  "(custom)" when the title was refused and every issue type when an issue
-  type was.
-compose(system, user, ...): render an answer from the <facts> JSON in `user`:
-one or two sentences per fact set, stating the headline numbers and citing
-issue keys exactly as they appear ("[AIL-552]"), under 120 words. People are
-named only from a person tool's facts (people level), by the name the facts
-hold; a ranking, and the people a question mentions set side by side, add that
-findings follow the ticket's current assignee.
-A user prompt holding "strict" instructions (the retry) produces the same text.
-Returns realistic Usage (len(text)//4) and latency_ms 1; model "scripted".
-
-How the text stays verifiable (ask/validate.py checks every number and key):
-- a number is written only from a fact value: integers verbatim, floats
-  verbatim when they have at most two decimals, else to one decimal; a share
-  column as a whole percentage ("16%"); a row count as the plain count;
-- periods and ranks are written in words ("the last thirty days"), never as
-  digits that are not in the facts;
-- an issue key is cited only from a key column ("[AIL-552]"); ticket text
-  (summaries, epic titles) is untrusted and never echoed; nothing about people;
-- rules are named by title, never by id: "R-FLOW-02" holds "FLOW-02", which the
-  validator's key pattern would take for an unknown issue key.
-"""
+"""ScriptedProvider: an offline, deterministic stand-in for the model, so the product runs without an API key."""
 from __future__ import annotations
 
 import json
@@ -222,8 +127,7 @@ class ScriptedProvider:
 
 
 def _json_in(user: str, tag: str) -> Any:
-    """The JSON value that follows <tag>. raw_decode stops where the value ends,
-    so a closing tag inside a ticket summary cannot end the data early."""
+    """The JSON value after <tag>; raw_decode stops at its end, so a tag inside a summary cannot cut it short."""
     opening = f"<{tag}>"
     start = user.find(opening)
     if start < 0:
@@ -264,8 +168,7 @@ def _plan(user: str, schema: type[T]) -> T:
     if isinstance(catalog, list):
         names = [entry["name"] for entry in catalog if isinstance(entry, dict) and isinstance(entry.get("name"), str)]
     mentions = _mentions_in(user)
-    # Route on the question without the mentioned names, those of people with no tickets too (<no_tickets>, who
-    # are planned for by no one): "@Bug Hunter" is neither a bug nor a project key.
+    # Route without the mentioned names: "@Bug Hunter" is neither a bug nor a project key.
     question = strip_names(question, [name for _person, name in mentions] + _no_tickets_in(user))
     plan = route(question, names if names is not None else list(CATALOG_NAMES), project="",
                  mentions=[person for person, _name in mentions])
@@ -275,8 +178,7 @@ def _plan(user: str, schema: type[T]) -> T:
 
 
 def _mentions_in(user: str) -> list[tuple[str, str]]:
-    """(person id, name) for each person the <mentions> tag lists. Only a tag before the question counts: the
-    question is the reader's text, and could hold a tag of its own."""
+    """(person id, name) per <mentions> entry; only a tag before the reader's question counts."""
     question = user.find("<question>")
     head = user if question < 0 else user[:question]
     start = head.rfind("<mentions>")
@@ -292,8 +194,7 @@ def _mentions_in(user: str) -> list[tuple[str, str]]:
 
 
 def _no_tickets_in(user: str) -> list[str]:
-    """The names the <no_tickets> tag lists (people mentioned who hold no ticket on the board), from a tag before
-    the question only, as _mentions_in reads <mentions>."""
+    """Names in the <no_tickets> tag, read from a tag before the question only."""
     question = user.find("<question>")
     head = user if question < 0 else user[:question]
     start = head.rfind("<no_tickets>")
@@ -335,12 +236,7 @@ def _sentence(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _detail_phrases(detail: Any) -> list[str]:
-    """Up to four "label value" phrases from a candidate's detail entries
-    ({key, label, value, unit}): numbers verbatim (so the validator finds them),
-    a share as a whole percentage, short digit-free words. An entry about one
-    issue of several (key "<issue key>:<metric>") is left to the keys cited
-    after the phrases. A detail dict (the shape before the entries) reads its
-    keys as labels."""
+    """Up to four "label value" phrases from a candidate's detail entries, numbers verbatim for the validator."""
     if isinstance(detail, dict):
         detail = [{"key": str(key), "label": str(key).replace("_", " "), "value": value} for key, value in detail.items()]
     if not isinstance(detail, list):
@@ -380,7 +276,7 @@ def _label_words(label: Any) -> str:
     return text[:1].lower() + text[1:] if text[1:2].islower() else text
 
 
-# --- structured: a rule drafted from an admin's words (JO-20) -------------------------------------------------
+# --- structured: a rule drafted from an admin's words ---------------------------------------------------------
 
 _DRAFT_FIELDS = frozenset({"outcome", "check", "params", "status_categories"})
 _NUMBER = r"(\d+(?:\.\d+)?)"
@@ -534,8 +430,7 @@ def _plural(name: str) -> str:
 
 
 def _statuses_named(request: str, statuses: list[tuple[str, Any]]) -> list[str]:
-    """The board's statuses the request names as whole words, longest names first so "QA Review" is never read as
-    "QA" too; with none named, "review" picks the board's first status holding the word. In the board's order."""
+    """Statuses the request names as whole words, longest first; else "review" picks the first status holding it."""
     text = request
     found: set[str] = set()
     for name, _category in sorted(statuses, key=lambda item: -len(item[0])):
@@ -551,10 +446,7 @@ def _statuses_named(request: str, statuses: list[tuple[str, Any]]) -> list[str]:
 
 
 def _closest(request: str, specs: list[dict[str, Any]]) -> str | None:
-    """The label of the closest check for a request no check matched: 'Time in a status' for a duration and "in"
-    before a word (work sitting somewhere for a time, as in a status the board does not have: "Stories in Blocked for
-    2 days"); otherwise the check whose label and summary share the most words (of four letters or more, ignoring case)
-    with the request, the first listed when none shares one."""
+    """Label of the closest check for a request no check matched, for the not_supported note."""
     if _DURATION.search(request) and _IN_A_PLACE.search(request):
         label = next((spec.get("label") for spec in specs if spec.get("name") == _TIME_IN_STATUS), None)
         if isinstance(label, str):
@@ -601,12 +493,7 @@ class _Fact:
         return _PERIOD_WORDS.get(str(self.params.get("period") or ""), "")
 
     def subject(self, row: dict[str, Any], group_by: str, *, capital: bool = False) -> str:
-        """"Tickets in To Do" / "Bug tickets" / "tickets under epic [AIL-1]".
-
-        A group is cited as a key only when its column is typed issue_key, and
-        a group with digits in its name is described rather than quoted: the
-        validator would read either as a number or key that is not in the facts.
-        """
+        """How a group row is named ("Bug tickets"); names with digits are described, not quoted, for the validator."""
         tickets = "Tickets" if capital else "tickets"
         group = row.get("group")
         if not isinstance(group, str) or not group:
@@ -649,10 +536,7 @@ def _render(raw: dict[str, Any]) -> list[str]:
 
 
 def _shown(tool: str, rows: list[dict[str, Any]]) -> int | None:
-    """How many rows a cut table shows, as its sentence counts them, or None for no sentence. The people comparison
-    names everyone it shows, in order, so it says nothing more, as the comparison answered in code and the dashboard's
-    sample say nothing (the JO-14 review: "the first 3" for two people and the board); the people ranking counts its
-    people, never the row of tickets nobody holds."""
+    """How many rows a cut table shows, as its sentence counts them; None for no sentence."""
     if tool == "oversight_people_compare":
         return None
     if tool == "oversight_people":
@@ -908,11 +792,7 @@ def _figure(column: str, value: str) -> str:
 
 
 def _render_people(fact: _Fact) -> list[str]:
-    """The people ranking: who holds the most of one figure, and who comes next. Names as the facts hold them. A
-    "who" ranking ranks people only (JO-12, G5): the tickets nobody holds (the Unassigned row) are said after it, in
-    one sentence of their own ("Unassigned: 148 open tickets."), never ranked and never as someone's name. With
-    person_ids (the people a question mentions) and no figure named but breaches, each of them side by side instead;
-    with another figure named ("who has more open tickets, @A or @B?"), the ranking by it, those people only."""
+    """The people ranking by one figure; unassigned tickets are said separately, never ranked."""
     rank_by = str(fact.params.get("rank_by") or "open_breaches")
     if fact.params.get("person_ids") and rank_by == "open_breaches":
         return _render_side_by_side(fact)
@@ -946,9 +826,7 @@ def _render_people(fact: _Fact) -> list[str]:
 
 
 def _render_fewest(fact: _Fact, ranked: list[dict[str, Any]], rank_by: str, several: str) -> str:
-    """The people ranking, fewest first (who has the least): whoever has the fewest, and who comes next. Everyone
-    level at the fewest is said, three by name and the rest as others, so no one level with them reads as having
-    more."""
+    """The people ranking, fewest first; everyone tied at the fewest is mentioned."""
     low = ranked[0][rank_by]
     tied = [row for row in ranked if row[rank_by] == low]
     value = fact.num(tied[0], rank_by)
@@ -970,8 +848,7 @@ _EVERYONE_HOLDS = "Everyone on this board holds at least one of its tickets."
 
 
 def _render_board_people(fact: _Fact) -> list[str]:
-    """Everyone on the board by name, and who of them holds no ticket; or only the members who hold none (the
-    no-tickets sentence, word for word). Names as the facts hold them; how many, from the note's "N in all"."""
+    """Everyone on the board by name and who holds no ticket, or only those holding none."""
     people = [row for row in fact.rows if row.get("person_id") and isinstance(row.get("name"), str)
               and row["name"].strip()]
     names = [row["name"].strip() for row in people]
@@ -990,7 +867,7 @@ def _render_board_people(fact: _Fact) -> list[str]:
     who = f"{amount} {'person is' if count == 1 else 'people are'} on this board"
     if not none:
         return [f"{who}: {_join(names)}."]
-    # Each name once (JO-11 check G8): the people who hold its tickets, then how many members hold none, and who.
+    # Each name once: the people who hold its tickets, then how many members hold none, and who.
     holders = [row["name"].strip() for row in people if row.get("tickets") != 0]
     members = (f"{len(none)} {'member who holds' if len(none) == 1 else 'members who hold'} none of its tickets: "
                f"{_join(none)}.")
@@ -1001,9 +878,7 @@ def _render_board_people(fact: _Fact) -> list[str]:
 
 
 def _render_side_by_side(fact: _Fact) -> list[str]:
-    """Each person asked about, in the facts' order (most open breaches first): their open breaches and open
-    warnings, the words written out for the first and the figures alone after it, as the dashboard's sample says
-    them. Every one of them, so a question naming ten people hears about ten."""
+    """Each person asked about, in the facts' order, with their open breaches and warnings."""
     parts: list[str] = []
     for row in fact.rows:
         breaches, warnings = fact.num(row, "open_breaches"), fact.num(row, "open_warnings")
@@ -1037,8 +912,7 @@ _IN_ALL = re.compile(r"\b(\d+) in all\b")
 
 
 def _amount(fact: _Fact) -> tuple[str, int]:
-    """How many there are, as the answer writes it, and the count: the total a person tool's note gives ("70 in
-    all", a figure the validator accepts from the note), else the rows, a lower bound when they were capped."""
+    """The count as the answer writes it: the note's "N in all" total, else the rows (a lower bound if capped)."""
     found = _IN_ALL.search(fact.note)
     if found:
         return found.group(1), int(found.group(1))
@@ -1095,8 +969,7 @@ def _render_person_findings(fact: _Fact) -> list[str]:
 
 
 def _render_scorecard(fact: _Fact) -> list[str]:
-    """A scorecard or the comparison: the answer the service builds in code from the same facts (ask/scorecards.py),
-    a sentence at a time, so the scripted model and the code never say it two ways."""
+    """A scorecard or comparison, built by ask/scorecards.py so the scripted model and the code agree."""
     text = code_built([{"tool": fact.tool, "params": fact.params, "rows": fact.rows}]) or ""
     return [paragraph for paragraph in text.split("\n\n") if paragraph]
 
@@ -1145,8 +1018,7 @@ def _is_number(value: Any) -> bool:
 
 
 def _plain_number(value: int | float) -> str | None:
-    """An integer verbatim; a float verbatim when it has at most two decimals,
-    else to one decimal (both forms the validator accepts)."""
+    """An integer verbatim; a float verbatim up to two decimals, else one decimal (both pass the validator)."""
     if isinstance(value, bool) or not _is_number(value):
         return None
     if isinstance(value, int):
@@ -1193,9 +1065,7 @@ def _epic(key: Any, *, capital: bool = False) -> str:
 
 
 def _rule_name(title: Any, rule_id: str) -> str:
-    """The rule's title, quoted; never its id. "R-FLOW-02" holds "FLOW-02",
-    which the validator's key pattern reads as an issue key, and a title with
-    digits would read as numbers that are not fact values."""
+    """The rule's title, quoted; never its id, which the validator would read as an issue key."""
     if isinstance(title, str) and title.strip() and not _DIGIT.search(title):
         return f"'{title.strip()}'"
     return "one rule"

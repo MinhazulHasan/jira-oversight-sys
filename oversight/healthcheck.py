@@ -1,13 +1,4 @@
-"""The API container's HEALTHCHECK (Dockerfile): `python -m oversight.healthcheck`.
-
-Asks this container's own API for GET /api/v1/health on 127.0.0.1:API_PORT, with the service key, and exits 0 when
-it answers 200 with a status of ok or degraded, else 1. Degraded is healthy here: no snapshot yet, or a failed sync,
-is a data problem the dashboard shows, not a process to restart. Prints one short line and never the key.
-
-The request never goes through a proxy (HTTP_PROXY is often set in a corporate container, and 127.0.0.1 is not
-always in NO_PROXY), and gives up after a few seconds, so a hung API is reported unhealthy instead of holding the
-check open. Standard library only, besides the settings.
-"""
+"""The API container's HEALTHCHECK (Dockerfile): `python -m oversight.healthcheck`."""
 from __future__ import annotations
 
 import json
@@ -21,8 +12,6 @@ from pydantic import ValidationError
 
 from oversight.settings import get_settings
 
-# oversight/api/deps.py's header, not imported from there: the check runs every 30 seconds and should not load the
-# web framework to send one request. tests/test_healthcheck.py keeps the two equal.
 SERVICE_KEY_HEADER = "X-Service-Key"
 TIMEOUT_S = 5.0
 _MAX_BODY = 64 * 1024

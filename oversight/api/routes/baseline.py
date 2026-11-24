@@ -1,29 +1,3 @@
-"""GET /baseline/latest (contract 4.10): the newest baseline report of the board (the Baseline page).
-
-`python -m oversight baseline` (oversight/baseline.py) writes
-reports/baseline_<project>_<as_of>.json as {metadata, figures, comparison}.
-This route serves the newest one for the dashboard's project, mapped field by
-field onto the contract's shape, plus `meta`. baseline.py writes that shape
-already; the mapping is what keeps a report from an older or newer version,
-or a damaged file, from breaking the page, and it never passes on a field the
-contract does not name.
-
-- Candidates: names exactly baseline_<project>_<YYYY-MM-DD>.json (so project
-  AIL never picks up a project AIL_2's reports: baseline.report_paths) whose
-  metadata names the project. The scheduled cycle and each board's "Sync now"
-  write one for every synced board that has none (`baseline --missing`).
-- Newest: the latest metadata.generated_at (when the report was written), then
-  the latest as_of.
-- A file that does not parse, or lacks a value the contract requires, is
-  skipped with a warning and the next newest is served. None left: 404.
-- Timestamps go out in UTC with Z, except the window's local edges, which keep
-  their offsets. Numbers are rounded to 4 decimals. tempo_share is left out
-  when the report has none (the schema makes it optional, not nullable).
-- A comparison row's note is worded by this version (baseline.comparison_note)
-  for every metric it knows, whatever version wrote the file: a report from
-  before the go-live (18 Nov 2026) said "ticket 4" in its notes, and no note
-  leaves this service in those words.
-"""
 from __future__ import annotations
 
 import json
@@ -119,8 +93,6 @@ def _metadata(m: dict[str, Any]) -> dict[str, Any]:
         "metrics_stale": _flag(m, "metrics_stale"),
         "issues_without_metrics": _count(m, "issues_without_metrics"),
         "comparison_status": m["comparison_status"],
-        # The one note a version before the go-live wrote with "ticket 4" in it ("ticket 4 used <zone> and this report
-        # uses <zone>, ..."), worded as this version words it.
         "comparison_note": _text(m, "comparison_note", empty=True).replace(_OLD_ZONE_NOTE, _ZONE_NOTE, 1),
         "run_id": _text(m, "run_id"),
     }
@@ -195,8 +167,6 @@ def _figures(f: dict[str, Any], stages: Sequence[str]) -> dict[str, Any]:
 
 
 def _comparison(rows: Any, figures: dict[str, Any], as_of: date) -> list[dict[str, Any]]:
-    """The rows as the contract sends them, each note worded by this version for a metric it knows (see the module
-    docstring); a metric it does not know keeps the note it was written with."""
     if rows is None:
         return []
     if not isinstance(rows, list):

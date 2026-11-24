@@ -44,7 +44,6 @@ def _derive(store: Store, process: ProcessConfig, projects: list[str] = PROJECTS
 
 
 def _intervals(store: Store, key: str) -> list[dict]:
-    # seq is the timeline order (entered_at alone can't give it, see AIL-113).
     rows = store.query(
         "SELECT status, stage, entered_at, left_at, hours FROM status_intervals "
         "WHERE issue_key = ? ORDER BY seq",
@@ -79,9 +78,6 @@ def _add_issue(store: Store, key: str, created_at: str | None, status: str = "To
     store.upsert("issues", row | extra)
 
 
-# --- the fixtures through the whole pipeline -------------------------------------------
-
-
 def test_fixture_issues_match_the_labels(store: Store, process: ProcessConfig) -> None:
     load_into(store)
     result = _derive(store, process)
@@ -99,9 +95,6 @@ def test_fixture_issues_match_the_labels(store: Store, process: ProcessConfig) -
 
 
 def test_seq_keeps_the_timeline_order_when_entered_at_cannot(store: Store, process: ProcessConfig) -> None:
-    # Regression: status_intervals had no order column. AIL-113's first change is
-    # dated before its creation, so by entered_at its timeline reads backwards, and
-    # insertion order (rowid) is not guaranteed to survive a VACUUM.
     load_into(store)
     _derive(store, process)
     rows = store.query(
@@ -110,7 +103,6 @@ def test_seq_keeps_the_timeline_order_when_entered_at_cannot(store: Store, proce
     assert [(r["seq"], r["status"]) for r in rows] == [(0, "To Do"), (1, "In Progress"), (2, "Done")]
     by_time = sorted(rows, key=lambda r: r["entered_at"])
     assert [r["status"] for r in by_time] == ["In Progress", "To Do", "Done"]
-    # Every timeline is numbered 0..n-1, once.
     gaps = store.query_one(
         "SELECT COUNT(*) FROM (SELECT issue_key, COUNT(*) AS n, MIN(seq) AS lo, MAX(seq) AS hi "
         "FROM status_intervals GROUP BY issue_key) WHERE lo != 0 OR hi != n - 1"
@@ -131,7 +123,6 @@ def test_rerunning_replaces_rather_than_duplicates(store: Store, process: Proces
 def test_rerunning_picks_up_new_history(store: Store, process: ProcessConfig) -> None:
     load_into(store)
     _derive(store, process)
-    # AIL-110 was still In Progress; now it is Done.
     store.upsert(
         "status_changes",
         {
@@ -156,7 +147,6 @@ def test_rerunning_picks_up_new_history(store: Store, process: ProcessConfig) ->
 def test_orphan_rows_are_removed(store: Store, process: ProcessConfig) -> None:
     load_into(store)
     _derive(store, process)
-    # An issue removed without its derived rows, and rows that never had an issue.
     store.delete_rows("issues", {"issue_key": "AIL-101"})
     store.upsert("issue_metrics", {"issue_key": "GONE-1", "reopen_count": 3})
     store.conn.execute(
@@ -189,9 +179,6 @@ def test_other_projects_are_left_alone(store: Store, process: ProcessConfig) -> 
 def test_an_empty_project_succeeds(store: Store, process: ProcessConfig) -> None:
     result = _derive(store, process, ["AIL"])
     assert (result.issues, result.intervals, result.warnings) == ({"AIL": 0}, 0, NO_WARNINGS)
-
-
-# --- runs ------------------------------------------------------------------------------------
 
 
 def test_a_successful_run_is_recorded(store: Store, process: ProcessConfig) -> None:
@@ -241,13 +228,10 @@ def test_an_unknown_project_is_a_config_error_and_changes_nothing(store: Store, 
     assert store.last_run("derive") is None  # nothing succeeded
 
 
-# --- data problems are warnings, never failures --------------------------------------------
-
-
 def test_an_issue_without_created_at_is_skipped_with_a_warning(store: Store, process: ProcessConfig) -> None:
     _add_issue(store, "AIL-1", None)
     _add_issue(store, "AIL-2", "2026-11-04T08:00:00.000Z")
-    store.upsert("issue_metrics", {"issue_key": "AIL-1", "reopen_count": 1})  # from an earlier run
+    store.upsert("issue_metrics", {"issue_key": "AIL-1", "reopen_count": 1})
 
     result = _derive(store, process, ["AIL"])
 
@@ -279,10 +263,7 @@ def test_unmapped_statuses_are_counted_once_per_name(store: Store, process: Proc
     _add_issue(store, "AIL-2", "2026-11-01T08:00:00.000Z", status="In Review")
     _add_issue(store, "AIL-3", "2026-11-01T08:00:00.000Z", status="Blocked")
     result = _derive(store, process, ["AIL"])
-    assert result.warnings["unmapped_statuses"] == 2  # "In Review" in two spellings, and "Blocked"
-
-
-# --- category lookup --------------------------------------------------------------------------
+    assert result.warnings["unmapped_statuses"] == 2
 
 
 def test_category_lookup_prefers_the_statuses_table(process: ProcessConfig) -> None:
@@ -304,9 +285,6 @@ def test_category_lookup_without_a_statuses_table(process: ProcessConfig) -> Non
     assert category_of("Done") == "done"  # maps to the done stage
     assert category_of("In Progress") == "indeterminate"  # the current status
     assert category_of("To Do") is None
-
-
-# --- render and the CLI -------------------------------------------------------------------------
 
 
 def test_render_summarises_the_run() -> None:
@@ -340,10 +318,7 @@ def test_cli_derive_reports_an_unknown_project(settings: Settings, capsys: pytes
     assert "project 'XYZ' is not configured" in capsys.readouterr().err
 
 
-# --- performance ------------------------------------------------------------------------------------
-
 PERF_ISSUES = 2_000
-# Six changes per issue, with a reopen, a step backwards and a skip.
 PERF_CYCLE = [
     ("To Do", "In Progress"),
     ("In Progress", "Done"),
@@ -412,6 +387,4 @@ def test_a_whole_project_rebuilds_well_within_a_minute(
     assert result.intervals == PERF_ISSUES * (len(PERF_CYCLE) + 1)
     sample = _metrics_row(store, "AIL-1")
     assert (sample["reopen_count"], len(sample["skipped_stages"])) == (2, 1)
-    # Planning.md: a whole project in under a minute. AIL has 1,134 issues;
-    # this is nearly twice that and must still take under half the budget.
     assert elapsed < 30

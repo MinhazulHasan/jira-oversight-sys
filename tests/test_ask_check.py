@@ -1,15 +1,3 @@
-"""The JO-11 final check's findings on Ask at people level, each with the test that would have caught it (12 Nov 2026,
-fix round 2).
-
-Nothing about people is turned away when a figure answers it: who is struggling, needs help, is falling behind or is
-the MVP (the overall comparison); who is overloaded, idle or has nothing to do, and who contributes least (a count, most
-or fewest first, and the members who hold no ticket at all); who is on the board, its members, and who has no tickets
-(oversight_board_people, everyone on it). A first name typed in lower case where a name stands is that person when only
-one person goes by it. "Backlog" is one figure for one person, whichever way it is asked. A question about the least
-gets the least first. A count of now states no period ("In progress now", never "now now" or "last 90 days"), and a
-comparison's call carries n only for a question's "top N". The wording check never reads a surname as a label, and
-knows "lazybones". Against the seeded DEMO store (fictional people); nothing calls a model or the network.
-"""
 from __future__ import annotations
 
 import json
@@ -48,12 +36,8 @@ def ask(client: TestClient, question: str, mentions: list[str] | None = None) ->
 
 
 OVERALL = [("oversight_people_compare", {"measure": "overall", "days": 90, "order": "closer"})]
-# Who struggles, needs help or falls behind: the other side of the process, further from it first (the JO-14 review).
 FURTHER_FIRST = [("oversight_people_compare", {"measure": "overall", "days": 90, "order": "fewest"})]
 MEMBERS = ("oversight_board_people", {"holding": "none"})
-
-
-# --- nothing answerable is turned away with the help ---------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -106,9 +90,6 @@ def test_with_comparison_off_a_count_ranking_is_still_the_refusal_and_the_board_
     assert calls(people_plan("Who is on this board?", catalog=OFF)) == [("oversight_board_people", {"holding": "any"})]
 
 
-# --- everyone on the board, and its members with no tickets ----------------------------------------------
-
-
 def test_who_is_on_the_board_names_everyone_on_it_members_with_no_tickets_too(client: TestClient) -> None:
     directory = client.get("/api/v1/people/directory").json()["people"]
     holders = [entry["person"]["name"] for entry in directory if entry["tickets"] > 0]
@@ -119,7 +100,6 @@ def test_who_is_on_the_board_names_everyone_on_it_members_with_no_tickets_too(cl
     assert [column["key"] for column in facts["columns"]] == ["person_id", "name", "tickets"]
     assert [row["name"] for row in facts["rows"]] == holders + members
     assert all(row["tickets"] == 0 for row in facts["rows"][len(holders):])
-    # Each name once (JO-12 G8): the people who hold its tickets, then how many members hold none, and who they are.
     held = ", ".join(holders[:-1]) + f" and {holders[-1]}"
     others = ", ".join(members[:-1]) + f" and {members[-1]}"
     assert body["answer"] == (f"{len(directory)} people are on this board: {held}, and {len(members)} members who "
@@ -134,8 +114,6 @@ def test_who_is_on_the_board_names_everyone_on_it_members_with_no_tickets_too(cl
 
 
 def test_where_every_member_holds_a_ticket_the_answer_says_so() -> None:
-    """Beside a count fewest first ("who is idle?"), the members with no tickets: on a board with none, said so, never
-    "nothing came back" (the dashboard's sample says the same, src/server/sample/ask/people.ts)."""
     empty = {"tool": "oversight_board_people", "params": {"holding": "none"}, "rows": [], "note": "", "columns": []}
     assert _render(empty) == ["Everyone on this board holds at least one of its tickets."]
 
@@ -150,15 +128,11 @@ def test_where_every_member_holds_a_ticket_the_answer_says_so() -> None:
     ],
 )
 def test_who_is_on_the_board_says_each_name_once(tickets: list[int], in_all: int, said: str) -> None:
-    """JO-12 G8: the holders listed once, then how many members hold none and who (the sample says the same)."""
     names = ["Ada Brooks", "Ben Okafor"]
     rows = [{"person_id": f"p{n:012x}", "name": names[n], "tickets": count} for n, count in enumerate(tickets)]
     fact = {"tool": "oversight_board_people", "params": {"holding": "any"}, "rows": rows,
             "note": f"everyone on this board; {in_all} in all", "columns": []}
     assert _render(fact) == [said]
-
-
-# --- a first name typed in lower case ------------------------------------------------------------------
 
 
 def test_a_lower_case_first_name_is_that_person_when_only_one_has_it(client: TestClient, demo: Settings) -> None:
@@ -205,9 +179,6 @@ def test_a_question_with_no_name_keeps_the_true_message(client: TestClient) -> N
     assert (body["outcome"], body["message"]) == ("not_understood", _NOT_UNDERSTOOD_DEFAULT) and body["people"] == []
 
 
-# --- one figure for one person's backlog ------------------------------------------------------------------
-
-
 def test_the_biggest_backlog_and_one_persons_backlog_are_the_same_figure(client: TestClient) -> None:
     ada = board(client)["Ada Brooks"]
     biggest = ask(client, "Who has the biggest backlog?")
@@ -219,13 +190,9 @@ def test_the_biggest_backlog_and_one_persons_backlog_are_the_same_figure(client:
     assert backlog["answer"].startswith(f"Ada Brooks has {count} open tickets")
     scorecard = client.get("/api/v1/people/scorecard", params={"level": "people", "person": ada["id"]}).json()
     assert scorecard["people"][0]["values"]["open_tickets"]["value"] == count
-    # The tickets nobody holds are never ranked: one sentence after the ranking (JO-12 G5).
     nobody = next(row for row in facts["rows"] if row["name"] == "Unassigned")
     ranking, after = biggest["answer"].split(". Unassigned: ")
     assert "Unassigned" not in ranking and after.startswith(f"{nobody['value']} open tickets. The whole board: ")
-
-
-# --- the least, first -----------------------------------------------------------------------------------
 
 
 def test_a_question_about_the_least_is_answered_fewest_first(client: TestClient) -> None:
@@ -256,8 +223,6 @@ def test_a_question_about_the_least_is_answered_fewest_first(client: TestClient)
 
 
 def test_the_order_is_for_every_measure() -> None:
-    # JO-11 refused fewest on a rate ("for a count only"); since JO-14 every measure takes closer, most or fewest, and
-    # closer is the default.
     assert CompareParams(measure="in_progress", order="fewest").order == "fewest"
     assert CompareParams(measure="reopened", order="fewest").order == "fewest"
     assert CompareParams(measure="open_findings_per_10", order="most").order == "most"
@@ -265,9 +230,6 @@ def test_the_order_is_for_every_measure() -> None:
     with pytest.raises(ValidationError):
         CompareParams(measure="reopened", order="worst")
     assert people_plan("Who has at least one open breach?").calls[0].params.get("order") is None
-
-
-# --- a count of now states no period ------------------------------------------------------------------------
 
 
 def test_a_count_of_now_says_now_once_and_states_no_period(client: TestClient) -> None:
@@ -282,7 +244,6 @@ def test_a_count_of_now_says_now_once_and_states_no_period(client: TestClient) -
     assert "by open tickets now, most first" in backlog["facts"][0]["note"]
     assert "days" not in backlog["facts"][0]["params"]
 
-    # A count over a period still says it, with the caveat last.
     done = ask(client, "Who finished the most work this month?")
     assert "days" in done["facts"][0]["params"] and done["answer"].split("\n\n")[-1].startswith(
         "Figures from Jira over the last 30 days")
@@ -296,18 +257,12 @@ def test_an_open_backlog_carries_no_period_in_its_facts(client: TestClient) -> N
     assert done["facts"][0]["params"]["days"] == 30
 
 
-# --- n only for "top N" ---------------------------------------------------------------------------------
-
-
 def test_a_comparison_carries_n_only_for_a_questions_top_n(client: TestClient) -> None:
     everyone = ask(client, "Who is best on the board? Rank the others")
     assert "n" not in everyone["plan"][0]["params"] and "n" not in everyone["facts"][0]["params"]
     top = ask(client, "Rank the top 3 developers")
     assert top["plan"][0]["params"]["n"] == 3 and top["facts"][0]["params"]["n"] == 3
     assert len([row for row in top["facts"][0]["rows"] if row["person_id"]]) == 3
-
-
-# --- the wording check ------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("text", ["Ana Lazić closed 12 tickets.", "Lazic logged time on 9 of 10.",
@@ -320,6 +275,5 @@ def test_a_surname_or_a_place_is_no_label(text: str) -> None:
 def test_lazybones_is_a_label_and_a_board_name_is_not() -> None:
     assert character_labels("Ada Brooks is a lazybones.") == ["lazybones"]
     assert character_labels("Ada Brooks is a lazy-bones.") == ["lazy-bones"]
-    # A person whose surname is a label word: their name is taken out, the word written as a word is not.
     assert character_labels("Ivy Lazy closed 12 tickets; Ms Lazy logged time.", ["Ivy Lazy"]) == []
     assert character_labels("Ivy Lazy is lazy.", ["Ivy Lazy"]) == ["lazy"]

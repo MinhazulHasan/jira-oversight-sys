@@ -19,12 +19,7 @@ def _redact(_logger: Any, _method: str, event: dict[str, Any]) -> dict[str, Any]
 
 
 class _CurrentStderr:
-    """Whatever sys.stderr is when a line is written, not when logging was configured.
-
-    Something may swap sys.stderr after configure_logging() (pytest does, per
-    test, and closes the old stream); writing to the stream captured at
-    configure time would then fail with "I/O operation on closed file".
-    """
+    """Whatever sys.stderr is when a line is written, not when logging was configured."""
 
     def write(self, text: str) -> int:
         return sys.stderr.write(text)
@@ -35,9 +30,6 @@ class _CurrentStderr:
 
 _STDERR = _CurrentStderr()
 
-# Stdlib loggers of the HTTP layer. httpx logs every request as "HTTP Request: POST
-# <full url>" at INFO, and a Teams webhook URL is the channel's credential: whatever
-# configures stdlib logging later (logging.basicConfig, a library), those lines stay out.
 _QUIET_LIBRARIES = ("httpx", "httpcore")
 
 
@@ -67,8 +59,6 @@ def configure_logging(level: str = "INFO", fmt: str = "json") -> None:
 
 
 class StructlogHandler(logging.Handler):
-    """A stdlib record (the web server's own lines: start-up, shut-down, an error) as a structured line, so the API's
-    log is one JSON object per line throughout with LOG_FORMAT=json."""
 
     _LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
 
@@ -84,9 +74,6 @@ class StructlogHandler(logging.Handler):
 
 
 def server_log_config() -> dict[str, Any]:
-    """uvicorn's logging for `python -m oversight api`: its own lines through structlog (StructlogHandler), and its
-    per-request access lines off. Those carried the full query string (Findings' free-text search among it) in plain
-    text; the API logs each request itself as `api_request` (method, route template, status, ms), never the query."""
     return {
         "version": 1,
         "disable_existing_loggers": False,
@@ -100,15 +87,7 @@ def server_log_config() -> dict[str, Any]:
 
 
 class _LazyLogger:
-    """A logger that reads the logging configuration each time it logs.
-
-    structlog's `get_logger().bind(...)` builds a logger from the configuration
-    of that moment. A module-level `log = get_logger("store")` is created at
-    import, before the CLI calls configure_logging(), so it would keep
-    structlog's defaults for good: console text on stdout, debug included, and
-    invisible to structlog.testing.capture_logs(). This proxy builds the real
-    logger on every call instead, so it is safe to create at import time.
-    """
+    """A logger that reads the logging configuration each time it logs."""
 
     __slots__ = ("_values",)
 

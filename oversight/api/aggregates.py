@@ -1,31 +1,4 @@
-"""Weekly series and headline totals shared by GET /overview and GET /trends.
-
-The contract is docs/API_CONTRACT.md (sections 2, 4.2 and 4.8) in the
-jira-oversight-ui repository; its zod schemas in src/lib/api/schemas.ts are the
-source of truth. Two kinds of series:
-
-- Weekly series (trend points `{t, value}`): weeks start on Monday 00:00 UTC,
-  oldest first, and the last is the current week to date; `t` is the Monday.
-  A week with nothing to measure is null, never 0.
-- Window totals (the headline tiles): rolling 7-day windows ending now,
-  now - 7 days, ..., oldest first, so a tile's sparkline and its delta agree.
-
-Timestamps are compared as stored (UTC text, YYYY-MM-DDTHH:MM:SS.mmmZ: text
-order is time order). A finding with no first_seen_at counts as seen from the
-start, so an open finding is always counted as open.
-
-New and resolved count what happened to the work, never what a change of rules
-did to the findings (JO-15), as the weekly insights and the digest count them:
-- new: a condition (a rule on a ticket, by its evidence key: what a finding
-  names, which no board setting changes) first seen in the window, under
-  whichever id. A severity changed in a board's rule settings, or a catalogue
-  version bump, raises the same condition again under a new id, which is not
-  new: once its first sighting is behind the window, it counts nowhere.
-- resolved: findings the rules stopped finding in the window (resolved_why
-  "cleared"). One closed because the board's rule settings changed
-  (settings_changed), replaced under a new rule_version (superseded) or left
-  behind by the look-back (aged_out) was not fixed, so it is never counted.
-"""
+"""Weekly series and headline totals shared by GET /overview and GET /trends."""
 from __future__ import annotations
 
 import sqlite3
@@ -62,8 +35,6 @@ class TrendDefinition:
     note: str
 
 
-# Labels as the sample generator has them (src/server/sample/series.ts). "Finished in the week"
-# counts every issue type, Epics included, as oversight_trend does (contract 4.8), and says so.
 TREND_DEFINITIONS: dict[str, TrendDefinition] = {
     "median_cycle_time_h": TrendDefinition(
         "Median cycle time",
@@ -169,8 +140,7 @@ def rounded(value: float | int | None) -> float | int | None:
 
 
 def weeks(now: datetime, last_n: int = SERIES_WEEKS) -> list[tuple[str, str, str]]:
-    """(Monday as YYYY-MM-DD, start, end) per week in storage format, oldest first. The end is
-    the next Monday, exclusive; for the current week it lies after now, so it reads "open now"."""
+    """(Monday as YYYY-MM-DD, start, end) per week in storage format, oldest first."""
     return [
         (start.date().isoformat(), to_iso(start) or "", to_iso(start + timedelta(weeks=1)) or "")
         for start in _week_starts(now, last_n)
@@ -186,8 +156,6 @@ def _done_value(metric: str, done: list[sqlite3.Row]) -> float | None:
     if metric == "median_cycle_time_h":
         return median(d["cycle_time_h"] for d in done if d["cycle_time_h"] is not None)
     if metric == "median_effort_ratio":
-        # Contract 8.2: estimated work with nothing logged has a ratio of 0. That is
-        # missing data, not effort, so only work with time logged counts.
         return median(
             d["effort_ratio"] for d in done if d["effort_ratio"] is not None and (d["time_spent_s"] or 0) > 0
         )
@@ -254,9 +222,6 @@ def open_at(findings: list[Finding], end_at: str) -> int:
 
 
 def first_sightings(findings: list[Finding]) -> list[str]:
-    """When each condition the findings name was first seen, under whichever id ("" for one seen from the start): a
-    condition raised again under a new id (a severity changed on the board, a catalogue version bump) was first seen
-    when its first finding was."""
     earliest: dict[tuple[str, str, str], str] = {}
     for f in findings:
         seen = earliest.get(f.condition)
@@ -287,8 +252,6 @@ def window_totals(
     ]
     breaches = [f for f in findings if f.severity == "breach"]
     warnings = [f for f in findings if f.severity == "warning"]
-    # New and resolved count what happened to the work (see the module docstring): conditions by their first sighting,
-    # and the findings the rules stopped finding, never those a change of rules closed or raised again.
     sightings = [seen for seen in first_sightings(findings) if seen]
     fixed = [f.resolved_at for f in findings if f.resolved_at and f.resolved_why == FIXED]
     series: dict[str, list[dict[str, Any]]] = {name: [] for name in TOTALS}
@@ -297,8 +260,6 @@ def window_totals(
         values = {
             "open_breaches": open_at(breaches, end_at),
             "open_warnings": open_at(warnings, end_at),
-            # Both edges included, so the current window is the findings filter first_seen=7d, a finding raised again
-            # under a new id apart.
             "new_7d": sum(1 for seen in sightings if start_at <= seen <= end_at),
             "resolved_7d": sum(1 for at in fixed if start_at <= at <= end_at),
             # Work with no created_at exists now: counted, so status_mix adds up to the current total.

@@ -1,42 +1,3 @@
-"""GET /findings and GET /findings/{finding_id} (contract 4.3, 4.4).
-
-The list takes the interface's query parameters (src/lib/api/params.ts in the
-jira-oversight-ui repository) with the same names, bounds and defaults, and
-refuses what the interface refuses: an unknown name, a single-valued name given
-twice, a value out of range (422 here; the interface answers 400 before it
-would ever forward one). An empty value counts as not given, as there.
-
-Filtering, facets, sorting and paging follow the interface's sample mode:
-- every filter narrows: any of the rules, the severity, the state (open by
-  default), any of the epics ("none": no epic, which includes every sprint
-  finding), any of the people (a person id: the issue's current assignee is
-  that person; "unassigned": an issue finding with no assignee; a sprint finding
-  belongs to no one, so it never matches, nor does a finding whose issue is no
-  longer in the snapshot, and an id nobody on the board has matches nothing), q,
-  and the first-seen window counted back from now;
-- q is an exact key (any case), a bare number ("142", "#142") matched against
-  the key's number, or text found in the key, the summary or the sprint's
-  name, any case;
-- each facet's counts apply every filter except its own, and every entry is
-  listed, even at zero, in a fixed order: rules in catalogue order (then the
-  board's custom rules, JO-20, and any other rule its findings name, a deleted
-  custom rule by its title), epics by
-  key then "none", breach then warning, open then resolved, people (everyone
-  assigned a ticket on the board now) by name lower-cased, then id, then
-  "unassigned"; a people entry also carries the person's picture version
-  (avatar, null for "unassigned");
-- the sort column in the chosen order with empty values last either way, ties
-  newest first, then finding_id; key columns sort by issue number;
-- a page past the end is an empty page.
-
-A list filtered by one or more people (a person id; "unassigned" is no one) is
-recorded in the access log (JO-12, oversight/api/access_log.py) as
-person_findings_view, with those person ids, the state and the page, at the
-level the dashboard's server names (level=team|people, team when left out: the
-Person filter is on Findings at both levels). Such a request must name its
-viewer (X-Oversight-Viewer, else 422), and when the entry cannot be written
-nothing is served (500, access_log_unavailable).
-"""
 from __future__ import annotations
 
 import re
@@ -180,8 +141,6 @@ def _predicate(query: FindingsQuery, now: datetime, ignore: Facet | None = None)
             return False
         if ignore != "epic" and epics and (record.epic_key or NO_EPIC) not in epics:
             return False
-        # No one's finding (a sprint finding, a gone issue's) has person None: in no list, so any
-        # person filter leaves it out.
         if ignore != "person" and people and record.person not in people:
             return False
         if since is not None and record.first_seen_at < since:
@@ -235,8 +194,6 @@ def _facets(
 
     rules = [(rule.id, rule.title or rule.id) for rule in ctx.rules.rules]
     catalogued = {rule_id for rule_id, _ in rules}
-    # A rule since removed from the catalogue keeps its findings, so it keeps an entry (after the board's rules), by
-    # its title when the board still knows it (a custom rule it deleted, JO-20), else by its id.
     rules += [(rule_id, ctx.rules.title_of(rule_id))
               for rule_id in sorted({record.rule_id for record in records} - catalogued)]
     return {
@@ -272,8 +229,7 @@ def _sort_value(record: FindingRecord, sort: str) -> str | int | None:
 
 
 def _sorted(records: Sequence[FindingRecord], query: FindingsQuery) -> list[FindingRecord]:
-    """The column in the chosen order, empty values last either way; ties newest first, then finding_id.
-    Python's sort is stable (reverse=True too), so sorting the tie-breaks first keeps them under the column."""
+    """The column in the chosen order, empty values last either way"""
     ordered = sorted(records, key=lambda record: record.finding_id)
     ordered.sort(key=lambda record: record.first_seen_at, reverse=True)
     present = [record for record in ordered if _sort_value(record, query.sort) is not None]
@@ -292,7 +248,6 @@ def list_findings(
     conn: sqlite3.Connection = Depends(read_conn),
 ) -> dict[str, Any]:
     query = parse_query(request)
-    # Findings for a person are person-level data: the read is recorded, so its viewer must be named (JO-12).
     subjects = [value for value in query.person if value != UNASSIGNED]
     viewer = need_viewer(request) if subjects else None
     now = ctx.now()

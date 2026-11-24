@@ -1,4 +1,4 @@
-"""`python -m oversight doctor --production` (oversight/production.py): offline, read-only, never names a secret."""
+"""`python -m oversight doctor --production` (oversight/production.py)"""
 from __future__ import annotations
 
 import sqlite3
@@ -20,7 +20,6 @@ NOW = datetime(2026, 11, 12, 14, 30, tzinfo=UTC)
 KEY = "Qm7xT2vLp9sKd4RzW8nYb3HcJ6gFe1UaX5oIq0Zt"
 SECRET = "7f3a9c1e5b2d8046a1c7e93b5d20f84c6a19e7d3b50c82f4916ad7e30b5c8f21"
 ADDRESS = "https://oversight.example.com"
-# What the dashboard's env file holds when it is right; the dashboard's own checks start from it.
 DASHBOARD = {
     "OVERSIGHT_SERVICE_KEY": KEY, "OVERSIGHT_JIRA_BASE_URL": "https://fake.atlassian.net", "APP_URL": ADDRESS,
     "ATLASSIAN_CLIENT_ID": "client-id-value", "ATLASSIAN_CLIENT_SECRET": "client-secret-value",
@@ -37,7 +36,7 @@ ORDER = [*LOCAL_ORDER, *INFO_ORDER]
 
 @pytest.fixture(autouse=True)
 def app_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The folder the doctor treats as the project's: logs/ in it, and no dashboard env file beside or above it."""
+    """The folder the doctor treats as the project's"""
     folder = tmp_path / "install" / "backend"
     (folder / "logs").mkdir(parents=True)
     monkeypatch.setattr(production, "PROJECT_ROOT", folder)
@@ -47,8 +46,7 @@ def app_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def ready(settings: Settings) -> Settings:
-    """A deployment that passes: a long key, the zone set, JSON logs, the web address, a snapshot and a backup an hour
-    old."""
+    """A deployment that passes"""
     Store.open(settings.db_file).close()
     backups = settings.backups_path
     backups.mkdir(parents=True)
@@ -58,8 +56,6 @@ def ready(settings: Settings) -> Settings:
 
 
 def dashboard_file(tmp_path: Path, **update: str) -> dict[str, str]:
-    """The dashboard's env file with DASHBOARD's values and these changes (a "" removes one), written to tmp_path; the
-    environment that points the doctor at it."""
     values = {key: value for key, value in {**DASHBOARD, **update}.items() if value != ""}
     path = tmp_path / "dashboard.env"
     lines = [f"{key}={value}" for key, value in values.items()]
@@ -79,7 +75,6 @@ def grade(item: Check) -> str:
 
 
 def changed(settings: Settings, **update: Any) -> Settings:
-    """The settings with these values, checked as at start (model_copy would skip that, and leave secrets plain)."""
     return Settings.model_validate({**settings.model_dump(), **update})
 
 
@@ -111,9 +106,6 @@ def test_with_the_dashboards_settings_its_checks_join_in_order_and_pass(ready: S
     assert dashboard.name == "dashboard" and "were read from" in dashboard.detail
 
 
-# --- service key ---------------------------------------------------------------------------------------------------
-
-
 def test_a_blank_key_fails(ready: Settings) -> None:
     item = check(changed(ready, api_service_key=""), "service key")
     assert grade(item) == "fail" and "will not start" in item.detail
@@ -140,9 +132,6 @@ def test_insecure_beside_a_key_is_a_warning(ready: Settings) -> None:
     assert grade(item) == "warn" and "no effect" in item.detail
 
 
-# --- jira, config, model -------------------------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("update", "named"),
     [
@@ -157,7 +146,6 @@ def test_jira_settings_must_be_complete_and_https(ready: Settings, update: dict[
 
 
 def test_a_board_missing_from_process_yaml_is_a_warning(ready: Settings) -> None:
-    # The service maps it from Jira's status categories (JO-17): it runs, so the verdict does not fail on it.
     item = check(changed(ready, jira_projects=["AIL", "NOPE"]), "config")
     assert grade(item) == "warn"
     assert "mapped from Jira's status categories: NOPE" in item.detail and "AIL" not in item.detail.split(": ")[-1]
@@ -188,8 +176,6 @@ def test_a_live_model_needs_its_keys(ready: Settings) -> None:
 
 
 def test_bedrock_names_its_region_and_warns_when_only_a_host_role_can_supply_credentials(ready: Settings) -> None:
-    # Regression: the template's values (live, bedrock, a region, no keys) passed as OK, region unsaid, though every
-    # model call fails on a host with no role, or on EC2 when a container cannot reach the role.
     role_only = check(changed(ready, llm_mode="live", llm_provider="bedrock", aws_region="eu-west-2"), "model")
     assert grade(role_only) == "warn"
     assert "through bedrock in eu-west-2" in role_only.detail and "hop limit to 2" in role_only.detail
@@ -199,9 +185,6 @@ def test_bedrock_names_its_region_and_warns_when_only_a_host_role_can_supply_cre
     profile = check(changed(ready, llm_mode="live", llm_provider="bedrock", aws_region="us-east-1", aws_profile="x"),
                     "model")
     assert grade(profile) == "ok" and "in us-east-1" in profile.detail
-
-
-# --- snapshot and backups ----------------------------------------------------------------------------------------
 
 
 def raw_snapshot(path: Path, version: int) -> None:
@@ -252,7 +235,6 @@ def test_no_backup_is_a_warning(settings: Settings) -> None:
 
 
 @pytest.mark.parametrize(("interval", "hours", "expected", "said"), [
-    # One backup a UTC day, after the day's first cycle: a day, the interval and an hour's margin is never late.
     (60, 0.5, "ok", "under an hour old"), (60, 23, "ok", "23 hours old"), (60, 25.9, "ok", "25 hours old"),
     (60, 26.1, "warn", "26 hours old"), (60, 24 * 3, "warn", "3 days old"),
     (1440, 48.9, "ok", "2 days old"), (1440, 49.1, "warn", "2 days old"),
@@ -263,13 +245,9 @@ def test_a_backup_later_than_the_sync_service_leaves_it_is_a_warning(
     configured = changed(settings, sync_interval_minutes=interval)
     configured.backups_path.mkdir(parents=True)
     (configured.backups_path / backup_name(NOW - timedelta(hours=hours))).write_bytes(b"backup")
-    # A newer copy made by hand under another name is not one of the command's backups.
     (configured.backups_path / "oversight-20261112-140000-by-hand.db").write_bytes(b"copy")
     item = check(configured, "backups")
     assert grade(item) == expected and said in item.detail
-
-
-# --- the Jira account, the folders and the web address ------------------------------------------------------------
 
 
 @pytest.mark.parametrize(("email", "expected"), [
@@ -347,9 +325,6 @@ def test_app_url_must_be_an_https_origin_on_a_real_host(
 def test_app_url_and_cors_origins_must_agree_and_the_callback_is_named(ready: Settings, tmp_path: Path) -> None:
     item = check(ready, "web address", dashboard_file(tmp_path, APP_URL="https://other.example.com"))
     assert grade(item) == "warn" and "https://other.example.com/api/auth/callback" in item.detail
-
-
-# --- the dashboard's settings ---------------------------------------------------------------------------------------
 
 
 def test_the_dashboards_file_is_found_where_each_pack_keeps_it(ready: Settings, app_folder: Path) -> None:
@@ -463,9 +438,6 @@ def test_admins_are_reported_by_the_access_mode(ready: Settings, tmp_path: Path)
     assert grade(check(ready, "admins", dashboard_file(tmp_path, ACCESS_MODE="nobody"))) == "warn"
 
 
-# --- warnings and settings reported as set -------------------------------------------------------------------------
-
-
 def test_docs_a_blank_zone_and_console_logs_are_warnings(ready: Settings) -> None:
     report = run_production_checks(changed(ready, api_docs=True, report_timezone="", log_format="console"),
                                    now=lambda: NOW, environ={})
@@ -491,9 +463,6 @@ def test_the_governance_settings_are_reported_as_set(ready: Settings) -> None:
     for name in ("AUTH_MODE=atlassian", "APP_URL", "AUTH_SECRET", "ADMIN_EMAILS", "docs/DEPLOYMENT.md",
                  production.DASHBOARD_ENV_VARIABLE):
         assert name in defaults["dashboard"]
-
-
-# --- the command ---------------------------------------------------------------------------------------------------
 
 
 def no_jira(_settings: Settings) -> Any:

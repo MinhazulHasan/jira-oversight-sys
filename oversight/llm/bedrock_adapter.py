@@ -1,28 +1,4 @@
-"""BedrockProvider: Claude on Amazon Bedrock through the official `anthropic` SDK.
-
-Same requests as AnthropicProvider (structured outputs through
-`messages.parse(output_format=...)`, plain text through `messages.create`),
-sent to Bedrock's Messages API endpoint with the SDK's Mantle client:
-
-    anthropic.AnthropicBedrockMantle(
-        aws_access_key=..., aws_secret_key=..., aws_session_token=...,
-        aws_region=..., aws_profile=..., timeout=..., max_retries=...)
-
-Requests are signed with SigV4 (botocore, from `anthropic[bedrock]`). With no
-keys and no profile in the settings, the standard AWS credential chain is used
-(environment, shared config, SSO, instance or task role), which is what a
-production host should rely on instead of long-lived keys.
-
-Differences from the Claude API, checked against the installed SDK (2.4.0):
-- Model ids carry an `anthropic.` prefix on Bedrock. Settings keep the
-  first-party ids (claude-sonnet-5-5) and _model() adds the prefix; an id that
-  already has one, or an ARN, is sent as given.
-- Server-side refusal fallbacks are not available on Bedrock, so compose()
-  never sends the fallback beta; a refusal raises LLMRefusal as usual.
-- The SDK sends API version 2026-10-21, which Bedrock accepts for Claude 4.7
-  and later only. Older Bedrock models (Opus 4.1, Sonnet 4) are retired and
-  are not supported here.
-"""
+"""Claude on Amazon Bedrock through the anthropic SDK's Mantle client."""
 from __future__ import annotations
 
 from typing import Any

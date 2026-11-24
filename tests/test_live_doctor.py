@@ -1,9 +1,4 @@
-"""Doctor against the real Jira site: opt-in and read-only.
-
-Runs only with `pytest -m live`, and only when JIRA_BASE_URL, JIRA_EMAIL and
-JIRA_API_TOKEN are set in the environment (tests never read .env). It leaves
-config/fields.yaml alone and uses a temporary database.
-"""
+"""Doctor against the real Jira site: opt-in and read-only."""
 from __future__ import annotations
 
 import os

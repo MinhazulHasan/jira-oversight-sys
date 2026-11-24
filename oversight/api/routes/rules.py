@@ -1,25 +1,3 @@
-"""GET /rules (contract 4.9): the rule catalogue and the process map (the Process page).
-
-Rules: every rule of config/rules.yaml, in catalogue order, as the board runs it
-(JO-15): its rule settings applied (ApiContext.rules), so `severity`,
-`threshold`, `open` and `measurable` are the board's, `enabled` says whether it
-is on there and `customised` whether its settings change anything of
-rules.yaml's. A rule that is off is listed too (the Process page shows it as off
-on this board). Whether the board can measure each one and the evidence it lacks
-are the engine's own test (oversight.ask.catalog.rule_missing), and its open
-findings are counted over every rule_version, as the findings page counts them
-(open_findings_by_rule). What a rule reads from Jira and its threshold, in
-words, come from its check and the board's params (the check registry,
-oversight/rules/registry.py: reads, threshold_words); `version` stays the
-catalogue's. The board's custom rules (JO-20) follow the catalogue's, in the
-order they were added, each with `custom` true (false for every rules.yaml
-rule) and its check's label (`check_label`, every rule has one).
-
-Process: process.yaml's stages in order, the statuses the project maps to each,
-and where Jira records that the stage happened: `status` (a mapped status, or
-an evidence source that is a status), `field` (the estimate field for the
-estimate stage, or a field, label or pull-request link source), or `none`.
-"""
 from __future__ import annotations
 
 import sqlite3
@@ -83,14 +61,12 @@ def _rule(rule: Rule, ctx: ApiContext, estimate: EstimateConfig, open_counts: di
 
 
 def _threshold(rule: Rule) -> str | None:
-    """The rule's threshold in words, with the check's own defaults; None when it has none (registry.threshold_words:
-    a param the engine would reject too says nothing rather than a guess)."""
+    """The rule's threshold in words, with the check's own defaults"""
     return threshold_words(rule.check, rule.params)
 
 
 def _needs(rule: Rule, defaults: RuleDefaults, estimate: EstimateConfig) -> list[str]:
-    """What the rule reads from Jira, in plain words (registry.reads): a check (or params) the registry does not know
-    says what the catalogue says the rule requires."""
+    """What the rule reads from Jira, in plain words (registry.reads)"""
     return reads(rule.check, rule.params, history_days=defaults.history_days, estimate=estimate,
                  requires_evidence=rule.requires_evidence, requires_stages=rule.requires_stages)
 

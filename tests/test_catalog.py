@@ -1,11 +1,4 @@
-"""The query catalogue (Phase 6, ticket 12): parameters are refused before any
-SQL runs, and every spec returns the documented columns with numbers that
-match the hand-computed labels in tests/labels/metrics.yaml.
-
-The snapshot is the derive fixtures (AIL and OPS) derived at the labels' `now`,
-plus an Epic, a few hand-written findings and a sync cursor; build_snapshot()
-is shared with the ask service and injection tests.
-"""
+"""The query catalogue"""
 from __future__ import annotations
 
 import json
@@ -26,10 +19,8 @@ from oversight.timeutil import UTC
 from tests.conftest import CONFIG_FIXTURES
 from tests.fixtures.derive import CASES, load_into, with_ops
 
-# The labels' `now`: 2026-11-04 12:00 UTC, a Wednesday (the current week starts Monday 2 Nov).
 NOW = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
 AS_OF = "2026-11-04T11:00:00.000Z"
-# An Epic in the snapshot (so it has a title) and one that issues name but the sync never stored.
 EPIC = "AIL-100"
 MISSING_EPIC = "AIL-200"
 EPIC_OF = {"AIL-103": EPIC, "AIL-109": EPIC, "AIL-104": MISSING_EPIC, "AIL-111": MISSING_EPIC}
@@ -45,7 +36,6 @@ SPEC_NAMES = [
     "oversight_hot_spots",
     "oversight_rule_status",
 ]
-# One valid call per spec, for tests that sweep the catalogue.
 DEFAULT_CALLS: list[tuple[str, dict[str, Any]]] = [
     ("oversight_count_issues", {}),
     ("oversight_top_issues", {"metric": "cycle_time"}),
@@ -90,7 +80,6 @@ def _finding(
     }
 
 
-# Hand-written findings over the fixture issues. Open: f-1, f-2, f-3, f-4, f-6; resolved: f-5.
 FINDINGS: list[dict[str, Any]] = [
     _finding("f-1", "R-FLOW-02", "AIL-103", "breach", "skip-1031", "2026-11-01T06:00:00.000Z", message="To Do → Done skipped development"),
     _finding("f-2", "R-FLOW-03", "AIL-104", "warning", "reopen-1043", "2026-10-20T06:00:00.000Z"),
@@ -114,8 +103,6 @@ def fixed_now() -> datetime:
 
 
 def build_snapshot(store: Store, process: ProcessConfig, *, summaries: Mapping[str, str] | None = None) -> ProcessConfig:
-    """Load the derive fixtures, add the Epic and epic links (and any summaries), derive at NOW,
-    then add the findings and AIL's sync cursor. Returns the process config with OPS added."""
     load_into(store)
     store.upsert(
         "issues",
@@ -165,9 +152,6 @@ def _kinds(facts: Facts) -> dict[str, str]:
     return {column.key: column.kind for column in facts.columns}
 
 
-# --- the catalogue itself ------------------------------------------------------------------
-
-
 def test_the_ten_specs_in_order() -> None:
     assert list(CATALOG) == SPEC_NAMES
     for spec in CATALOG.values():
@@ -185,11 +169,8 @@ def test_catalog_schema_describes_every_spec() -> None:
     json.dumps(schema)  # it goes into the plan prompt as JSON
 
 
-# --- parameters are refused before any SQL runs ---------------------------------------------
-
-
 class _NoSQL:
-    """A connection stand-in: any use means parameters reached SQL unvalidated."""
+    """A connection stand-in"""
 
     def cursor(self) -> Any:
         raise AssertionError("SQL ran before the parameters were validated")
@@ -256,9 +237,6 @@ def test_keys_are_normalised_and_defaults_apply() -> None:
     assert validate_params("oversight_top_issues", {"metric": "reopens", "n": "5"}).n == 5  # type: ignore[attr-defined]
 
 
-# --- every spec on a read-only connection --------------------------------------------------
-
-
 def test_every_spec_runs_on_a_read_only_connection(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
     store, process = snapshot
     conn = open_readonly(store.path)  # type: ignore[arg-type]
@@ -284,9 +262,6 @@ def test_facts_to_dict_shape(snapshot: tuple[Store, ProcessConfig], rules: Rules
     assert not Facts(ref="F1", tool="t", params={}, columns=[Column("a", "A", "text")], rows=[{"a": 1}]).empty
 
 
-# --- oversight_count_issues ----------------------------------------------------------------
-
-
 def test_count_issues_counts_and_samples(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
     facts = _run(snapshot, rules, "oversight_count_issues", {})
     assert _kinds(facts) == {"count": "count", "sample_keys": "text"}
@@ -306,7 +281,6 @@ def test_count_issues_filters(snapshot: tuple[Store, ProcessConfig], rules: Rule
     assert without["count"] == 4 and set(without["sample_keys"].split(", ")) == {"AIL-109", "AIL-113", "AIL-117", EPIC}
     with_estimate = _run(snapshot, rules, "oversight_count_issues", {"has_estimate": True, "issue_type": "Task"}).rows[0]
     assert with_estimate["count"] == 13  # 16 tasks less AIL-109, AIL-113 and AIL-117
-    # Created in the last 7 days: AIL-113 (exactly 7 days ago, inclusive), 114, 115, 110, 116, 117 and 1140.
     recent = _run(snapshot, rules, "oversight_count_issues", {"period": "7d"})
     assert recent.rows[0]["count"] == 7 and "last 7 days" in (recent.note or "")
     assert _run(snapshot, rules, "oversight_count_issues", {"project": "OPS"}).rows[0]["count"] == 3
@@ -325,9 +299,6 @@ def test_as_of_falls_back_to_the_last_sync_run(store: Store, process: ProcessCon
     assert facts.as_of == "2026-11-04T10:30:00.000Z"
     given = run_query(store.conn, "oversight_count_issues", {}, context(process, rules, last_synced_at="2026-11-04T11:11:00.000Z"), ref="F1")
     assert given.as_of == "2026-11-04T11:11:00.000Z"
-
-
-# --- oversight_top_issues ------------------------------------------------------------------
 
 
 def test_top_issues_by_cycle_time(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
@@ -351,7 +322,6 @@ def test_top_issues_other_metrics(snapshot: tuple[Store, ProcessConfig], rules: 
 
 
 def test_top_issues_leave_epics_out_unless_asked(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
-    # The Epic has sat In Progress since September: it would top status_age, but epics are containers, not work.
     oldest = _run(snapshot, rules, "oversight_top_issues", {"metric": "status_age", "n": 1})
     assert [(r["issue_key"], r["value"]) for r in oldest.rows] == [("AIL-101", 764.0)]
     assert "Epic" in (oldest.note or "")
@@ -359,16 +329,9 @@ def test_top_issues_leave_epics_out_unless_asked(snapshot: tuple[Store, ProcessC
     assert [r["issue_key"] for r in epics.rows] == [EPIC]
 
 
-# --- oversight_time_in_status --------------------------------------------------------------
-
-
 def test_time_in_status_matches_the_labels(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
     facts = _run(snapshot, rules, "oversight_time_in_status", {"period": "all"})
     assert _kinds(facts) == {"group": "text", "n": "count", "median_h": "hours", "p75_h": "hours", "p90_h": "hours"}
-    # Stage order, unmapped statuses last. Hours per closed interval come from tests/labels/metrics.yaml:
-    # To Do: 0.0, 0.0289, 0.5, eight 1.0s, 2.0, 2.0, 4.0, 5.0, 6.5, 23.0 (n 17); p90 rank 14.4 -> 5.0 + 0.4 x 1.5.
-    # In Progress: 0.0, 6, 6, 8, 8, 8, 23.74, five 24s, 29, 32, 54 (n 15); p90 rank 12.6 -> 29 + 0.6 x 3.
-    # Done's closed intervals (the time before a reopen) are not time in the process: left out.
     assert [r["group"] for r in facts.rows] == ["To Do", "In Progress", "In Review"]
     assert "time in the done stage (Done) is left out" in (facts.note or "")
     by_group = {r["group"]: r for r in facts.rows}
@@ -381,7 +344,6 @@ def test_time_in_status_matches_the_labels(snapshot: tuple[Store, ProcessConfig]
 def test_time_in_status_periods_and_groups(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
     week = _run(snapshot, rules, "oversight_time_in_status", {"period": "7d"})
     by_group = {r["group"]: r for r in week.rows}
-    # In Progress intervals that ended since 28 Oct 12:00: AIL-113 (6), 114 (0), 115 (8), 117 (24), 1140 (23.74).
     assert (by_group["In Progress"]["n"], by_group["In Progress"]["median_h"]) == (5, 8.0)
     assert "last 7 days" in (week.note or "")
     by_type = _run(snapshot, rules, "oversight_time_in_status", {"group_by": "issue_type", "period": "all"})
@@ -406,7 +368,6 @@ def test_time_in_status_sprint_period_from_the_active_sprint(snapshot: tuple[Sto
     store.upsert("issues", CASES["AIL-1140"]["issue"] | {"raw_json": raw})
     facts = _run(snapshot, rules, "oversight_time_in_status", {"period": "sprint"})
     assert "Sprint 12" in (facts.note or "") and "30 Oct 2026" in (facts.note or "")
-    # Intervals that ended since 30 Oct 09:00: AIL-115's three, 117's four, 110's To Do, 1140's two.
     assert {r["group"]: r["n"] for r in facts.rows} == {"To Do": 5, "In Progress": 3}  # Done's 2 left out
 
 
@@ -426,13 +387,9 @@ def test_row_cap_sets_truncated(snapshot: tuple[Store, ProcessConfig], rules: Ru
     assert len(exact.rows) == 5 and exact.truncated is False
 
 
-# --- oversight_effort_vs_estimate ----------------------------------------------------------
-
-
 def test_effort_vs_estimate_by_type(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
     facts = _run(snapshot, rules, "oversight_effort_vs_estimate", {"group_by": "issue_type", "period": "all"})
     assert _kinds(facts) == {"group": "text", "n": "count", "median_ratio": "ratio", "share_over_threshold": "share", "threshold": "ratio"}
-    # Done tasks with a ratio: 1.25, 0.5, 0.375, 0.25, 1.0, 0.5, 0.75, 1.5, 1.25, 0.5, 1.0 -> median 0.75; one at 1.5 is over.
     assert [(r["group"], r["n"], r["median_ratio"]) for r in facts.rows] == [("Bug", 1, 1.0), ("Task", 11, 0.75), ("Subtask", 1, 0.125)]
     task = facts.rows[1]
     assert task["share_over_threshold"] == pytest.approx(1 / 11, abs=1e-4) and task["threshold"] == 1.5
@@ -442,8 +399,6 @@ def test_effort_vs_estimate_by_type(snapshot: tuple[Store, ProcessConfig], rules
 def test_effort_vs_estimate_by_sprint_and_period(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
     by_sprint = _run(snapshot, rules, "oversight_effort_vs_estimate", {"group_by": "sprint", "period": "all"})
     assert [(r["group"], r["n"]) for r in by_sprint.rows] == [("Sprint 4427", 1), ("(no sprint)", 12)]
-    # Finished since 28 Oct 12:00 with a ratio: AIL-114 (0.125), 115 (0.5) and, under its real epic, 1140 (1.0);
-    # AIL-113 has no estimate.
     recent = _run(snapshot, rules, "oversight_effort_vs_estimate", {"group_by": "epic", "period": "7d"})
     assert [(r["group"], r["n"], r["median_ratio"]) for r in recent.rows] == [("AIL-1138", 1, 1.0), ("(no epic)", 2, 0.3125)]
     assert "R-EFF-01" in (recent.note or "")
@@ -461,36 +416,26 @@ def test_effort_by_epic_names_the_epic_so_an_answer_can_cite_it(snapshot: tuple[
     assert _kinds(facts) == {
         "group": "issue_key", "epic_title": "text", "n": "count", "median_ratio": "ratio", "share_over_threshold": "share", "threshold": "ratio",
     }
-    # The epic's own summary; an epic the sync never stored has no title; work in no epic is "(no epic)".
     assert [(r["group"], r["epic_title"], r["n"]) for r in facts.rows] == [
         (MISSING_EPIC, None, 2), ("AIL-1138", None, 1), ("(no epic)", "(no epic)", 9), (EPIC, "Billing", 1),
     ]
-    # The validator takes keys from issue_key columns: the answer may now name the epic, cited to its row.
     check = validate("Epic AIL-100 ran at a median of 0.375 of its estimate.", [facts], None)
     assert check.ok, check.problems
     assert [(b.text, b.row_index, b.column) for b in check.bindings] == [("AIL-100", 3, "group"), ("0.375", 3, "median_ratio")]
-    # Grouped any other way there is no epic to name.
     assert "epic_title" not in _kinds(_run(snapshot, rules, "oversight_effort_vs_estimate", {"group_by": "sprint", "period": "all"}))
 
 
 def test_effort_medians_leave_out_estimated_work_with_nothing_logged(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
-    # AIL-115 (done 30 Oct, no epic) keeps its estimate but loses its logged time: derive gives it a ratio of 0.
     store, _ = snapshot
     store.conn.execute("UPDATE issues SET time_spent_s = NULL WHERE issue_key = 'AIL-115'")
     store.conn.execute("UPDATE issue_metrics SET effort_ratio = 0.0 WHERE issue_key = 'AIL-115'")
     by_epic = _run(snapshot, rules, "oversight_effort_vs_estimate", {"group_by": "epic", "period": "all"})
-    # (no epic) without AIL-115: 0.125, 0.25, 0.5, 0.5, 0.75, 1.0, 1.25, 1.25 -> 8 issues, median 0.625
-    # (keeping its 0 would give 9 issues and a median of 0.5).
     no_epic = next(r for r in by_epic.rows if r["group"] == "(no epic)")
     assert (no_epic["n"], no_epic["median_ratio"]) == (8, 0.625)
     assert "both an estimate and logged time" in (by_epic.note or "")
-    # The week of 26 Oct finished AIL-112 (1.25), 114 (0.125) and 115: median 0.6875 without its 0 (0.125 with it).
     trend = _run(snapshot, rules, "oversight_trend", {"metric": "median_effort_ratio", "last_n": 4})
     assert [r["value"] for r in trend.rows] == [0.5, 1.125, 0.6875, 1.0]
     assert "both an estimate and logged time" in (trend.note or "")
-
-
-# --- oversight_list_findings ---------------------------------------------------------------
 
 
 def test_list_findings_open_by_default(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
@@ -531,9 +476,6 @@ def test_list_findings_needs_the_rules_evidence(rules: RulesConfig) -> None:
     assert CATALOG["oversight_count_issues"].needs_evidence(validate_params("oversight_count_issues", {}), rules) == []
 
 
-# --- oversight_issue_timeline --------------------------------------------------------------
-
-
 def test_issue_timeline_rows_and_findings_note(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
     facts = _run(snapshot, rules, "oversight_issue_timeline", {"issue_key": "AIL-104"})
     assert _kinds(facts) == {"seq": "count", "status": "text", "stage": "text", "entered_at": "date", "left_at": "date", "hours": "hours"}
@@ -554,14 +496,10 @@ def test_issue_timeline_for_unknown_and_quiet_issues(snapshot: tuple[Store, Proc
     assert both.note == "Findings for AIL-117: R-EST-01 Work started without an estimate (resolved)"
 
 
-# --- oversight_trend -----------------------------------------------------------------------
-
-
 def test_trend_weeks_start_on_monday(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
     facts = _run(snapshot, rules, "oversight_trend", {"metric": "median_cycle_time_h", "last_n": 4})
     assert _kinds(facts) == {"week_of": "date", "value": "hours"}
     assert [r["week_of"] for r in facts.rows] == ["2026-10-12", "2026-10-19", "2026-10-26", "2026-11-02"]
-    # Finished per week: 105/106/107 (24, 32, 29); 108/109/111 (24, 8, no cycle time); 112/113/114/115 (30, 6, 0, 8); 1140.
     assert [r["value"] for r in facts.rows[:3]] == [29.0, 16.0, 7.0]
     assert facts.rows[3]["value"] == pytest.approx(23.7449, abs=1e-4)
 
@@ -571,10 +509,8 @@ def test_trend_metrics(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig
         facts = _run(snapshot, rules, "oversight_trend", {"metric": metric, "last_n": last_n})
         return [r["value"] for r in facts.rows]
 
-    # Breaches open at each week's end: f-5 (10 Oct to 3 Nov), f-3 (22 Oct), f-1 (1 Nov), f-4 (3 Nov).
     assert values("open_breaches", 4) == [1, 2, 3, 3]
     assert values("open_warnings", 2) == [2, 2]
-    # Week of 5 Oct finished AIL-102, 103 (skipped development) and 104 (reopened).
     assert values("skipped_stage_share", 5) == pytest.approx([1 / 3, 0.0, 0.0, 0.0, 0.0], abs=1e-4)
     assert values("reopen_rate", 5) == pytest.approx([1 / 3, 0.0, 0.0, 0.0, 0.0], abs=1e-4)
     assert values("median_effort_ratio", 4) == [0.5, 1.125, 0.5, 1.0]
@@ -582,9 +518,6 @@ def test_trend_metrics(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig
     assert len(twelve.rows) == 12 and twelve.rows[0] == {"week_of": "2026-08-17", "value": None}
     assert _kinds(_run(snapshot, rules, "oversight_trend", {"metric": "open_breaches"}))["value"] == "count"
     assert _kinds(_run(snapshot, rules, "oversight_trend", {"metric": "reopen_rate"}))["value"] == "share"
-
-
-# --- oversight_coverage --------------------------------------------------------------------
 
 
 def test_coverage_of_estimates_and_time(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
@@ -596,7 +529,7 @@ def test_coverage_of_estimates_and_time(snapshot: tuple[Store, ProcessConfig], r
     time_logged = _run(snapshot, rules, "oversight_coverage", {"field": "time_logged", "period": "all"}).rows[0]
     assert (time_logged["covered"], time_logged["total"]) == (17, 18)  # AIL-116 has no time
     points = _run(snapshot, rules, "oversight_coverage", {"field": "story_points", "period": "30d"}).rows[0]
-    assert (points["covered"], points["total"]) == (13, 16)  # AIL-101 and 102 were created before 5 Oct 12:00
+    assert (points["covered"], points["total"]) == (13, 16)
     assert "last 30 days" in points["note"]
 
 
@@ -618,11 +551,8 @@ def test_coverage_with_a_status_evidence_source(snapshot: tuple[Store, ProcessCo
     with_review = ProcessConfig.model_validate(data)
     facts = run_query(store.conn, "oversight_coverage", {"field": "code_review", "period": "all"}, context(with_review, rules), ref="F1")
     (row,) = facts.rows
-    assert (row["covered"], row["total"], row["measurable"]) == (1, 18, True)  # only AIL-111 passed through In Review
+    assert (row["covered"], row["total"], row["measurable"]) == (1, 18, True)
     assert "status: In Review" in row["note"]
-
-
-# --- oversight_hot_spots -------------------------------------------------------------------
 
 
 def test_hot_spots_rank_epics_by_open_findings(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:
@@ -641,7 +571,6 @@ def test_hot_spots_rank_epics_by_open_findings(snapshot: tuple[Store, ProcessCon
 def test_work_outside_any_epic_is_listed_after_the_epics_however_many_findings_it_holds(
     snapshot: tuple[Store, ProcessConfig], rules: RulesConfig
 ) -> None:
-    # AIL-106 has no epic; three breaches give that group more than any epic holds.
     store, _ = snapshot
     store.upsert_many("findings", [
         _finding(f"f-x{n}", "R-HYG-01", "AIL-106", "breach", f"extra-{n}", "2026-11-02T06:00:00.000Z") for n in range(3)
@@ -652,14 +581,12 @@ def test_work_outside_any_epic_is_listed_after_the_epics_however_many_findings_i
         (MISSING_EPIC, 1, 1, 2),
         (None, 3, 1, 1),
     ]
-    # So "the top hot spot" always names an epic.
     assert _run(snapshot, rules, "oversight_hot_spots", {"n": 1}).rows[0]["epic_key"] == EPIC
 
 
 def test_sprint_findings_are_counted_under_no_epic_but_never_as_issues(
     snapshot: tuple[Store, ProcessConfig], rules: RulesConfig
 ) -> None:
-    # A sprint finding has no issue row, so (no epic) holds it, as the findings filter epic=none does.
     store, _ = snapshot
     store.upsert("findings", _finding("f-s1", "W-SPR-01", "sprint:4427", "warning", "sprint-4427", "2026-11-02T06:00:00.000Z"))
     facts = _run(snapshot, rules, "oversight_hot_spots", {})
@@ -669,13 +596,9 @@ def test_sprint_findings_are_counted_under_no_epic_but_never_as_issues(
         (None, 0, 2, 1),  # f-6 on AIL-106 and the sprint's warning; one issue
     ]
     assert "sprint findings included" in (facts.note or "")
-    # With only the sprint finding left outside the epics, the group is still listed, with no issues.
     store.conn.execute("UPDATE findings SET resolved_at = '2026-11-03T09:00:00.000Z' WHERE finding_id = 'f-6'")
     rows = _run(snapshot, rules, "oversight_hot_spots", {}).rows
     assert (rows[-1]["epic_key"], rows[-1]["epic_title"], rows[-1]["open_warnings"], rows[-1]["issues"]) == (None, "(no epic)", 1, 0)
-
-
-# --- oversight_rule_status -----------------------------------------------------------------
 
 
 def test_rule_status_names_what_cannot_be_measured(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig) -> None:

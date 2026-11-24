@@ -1,81 +1,3 @@
-"""`python -m oversight demo`: a synthetic project in the snapshot, so the whole
-pipeline (derive -> rules -> digest -> ask -> insights -> api) runs with no
-Jira access and no API key. Also the fallback for a client demo.
-
-CONTRACT (stub; the demo build implements it).
-
-seed_demo(store, *, now, seed=20261104, project="DEMO", issues=1150, reset=False) -> DemoStats
-- Deterministic: random.Random(seed); the same inputs give byte-identical rows.
-  Every timestamp is an offset from `now`, so the data is always "recent".
-- Writes through Store.upsert / replace_rows inside one transaction: statuses
-  (To Do / In Progress / Done with categories), issues (with raw_json holding a
-  realistic sprint object list under customfield_10020 and a story-point value
-  under customfield_10016, matching config/fields.yaml), status_changes,
-  field_changes (story_points, assignee), worklogs (all by one app account id
-  "app-tempo"), links (a few issue links of types blocks / relates to), people
-  (each assignee's display name, as a sync stores them; two of them, PICTURED,
-  with a picture as a sync stores a fetched one), board_members (the
-  project's members, as a sync's member fetch stores them: every assignee and
-  three people who hold no ticket, MEMBERS), and sync_state for the project
-  (last_synced_at = now, account_timezone "Europe/London").
-  reset=True deletes the project's rows first.
-- The story (mirrors the UI's sample data so the two agree in spirit):
-  about 14 epics with domain-neutral names ("Onboarding flow", "Reporting
-  exports", ...); types Task 60%, Bug 20%, Subtask 12%, Test 5%, Epic 3%;
-  three-status workflow; story points on about 65% (fibonacci-ish values),
-  original estimates on none; logged time on about 85% of done work; about
-  16% of done issues went straight To Do -> Done; effort ratios with a
-  realistic spread (median about 1.0, long tail to 3×), two epics drifting
-  upwards in the last 5 weeks; a process change about 5 weeks ago after which
-  the skipped-stage share falls; a few reopens; some unassigned in-progress
-  issues; an active sprint ending in 2 days with ~35% not started; about 10%
-  of open issues older than the project's p90 in their status.
-- The people have habits (JO-11), so the person scorecards show every state
-  over their default 90 days: Ada Brooks estimates before she starts and
-  Elif Aydin keeps within the estimate (closer to the process than the
-  board), Finn Gallagher logs time less, Dev Malhotra's work is reopened
-  more and Carmen Ruiz's open work sits longer (further from it), Ben Okafor
-  and Grace Lindqvist take the other side of each, and Hana Mori, part time
-  of late, holds too few recent tickets to compare. Work only changes hands
-  (in pairs, after every draw), so no figure of the board's changes. DEMO's
-  workflow has no stage between In Progress and Done, and Jira records no
-  code review there, so two measures are not measurable; the three members
-  below hold no tickets.
-- Assignee ids are opaque ("acc-01".."acc-08") and carry fictional display
-  names (Ada Brooks to Hana Mori, ASSIGNEE_NAMES), so the dashboard can show
-  people by name; no email address, picture URL or real name anywhere. Two of
-  them (acc-01 and acc-05) have a small abstract picture drawn in code (picture:
-  a pattern, not a photo of anyone), stored directly with no fetch, so the
-  dashboard shows both a picture and the initials the other six get.
-- Three more fictional accounts are the board's members with no tickets
-  (acc-09 Noor Haddad, acc-10 Tomás Ferreira, acc-11 Yuki Tanabe: MEMBER_NAMES,
-  no pictures), so Ask's @ list shows its second group and Ask's answer for
-  someone with no tickets can be tried. They come from user objects shaped as
-  Jira's assignable-user search returns them, through the sync's own mapping
-  (mapping.map_member), with no Jira call; the list also holds the worklogs'
-  app account, which that mapping keeps out, as it keeps out every app,
-  customer and inactive account.
-DemoStats: counts per table and the sprint ids; render() prints them.
-After seeding, the CLI prints the next commands (derive, rules, digest, ask).
-
-Implementation notes
-- The story is planned first (_Story: pure draws from the seed, no I/O), then
-  rendered as Jira-shaped payloads. The `issues` rows come from
-  oversight.jira.mapping.map_issue over the payload kept in raw_json, and the
-  `links` rows from map_issue_links over the same payload, so a row and its
-  audit payload can never disagree and the demo takes the same path as a sync.
-- 14 epics is the story's number; at 1,150 issues that is 1.2% of issues, not
-  the 3% the type mix names, so the other four types share the remainder.
-  Smaller demos get one epic per 20 issues.
-- Issue ids are numeric and unique per project key, so two demo projects can
-  share one database.
-- reset=True removes everything the project left behind: its issues and their
-  child rows (status changes, field changes, worklogs, links, status intervals,
-  metrics), statuses, sync_state, findings, rule_status, warning_links,
-  digests, insights and its board_members rows. Runs, qa_log and llm_calls are
-  audit trails and stay; people are accounts, not the project's, and stay too.
-- Each seeding is recorded as a run of kind "demo", like every other command.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -114,8 +36,6 @@ DEMO_FIELDS = FieldsConfig(
         "sprint": FieldRef(id=SPRINT_FIELD, name="Sprint", custom_type="com.pyxis.greenhopper.jira:gh-sprint"),
     }
 )
-# Opaque account ids, each with a fictional display name: the dashboard names assignees
-# by display name, with their picture beside it, never by account id or email address.
 ASSIGNEES: tuple[str, ...] = tuple(f"acc-{n:02d}" for n in range(1, 9))
 ASSIGNEE_NAMES: dict[str, str] = dict(
     zip(
@@ -125,14 +45,10 @@ ASSIGNEE_NAMES: dict[str, str] = dict(
         strict=True,
     )
 )
-# The board's members who hold none of its tickets (JO-10): fictional too, and with no picture. With the
-# assignees, they are everyone Jira would let DEMO's tickets be assigned to.
 MEMBERS: tuple[str, ...] = ("acc-09", "acc-10", "acc-11")
 MEMBER_NAMES: dict[str, str] = dict(zip(MEMBERS, ("Noor Haddad", "Tomás Ferreira", "Yuki Tanabe"), strict=True))
 # Busier accounts first: a team never shares its work evenly.
 _ASSIGNEE_WEIGHTS = (5, 5, 4, 4, 3, 3, 2, 2)
-# The accounts with a picture: a pattern drawn in code (picture()), so the dashboard shows a picture
-# for these two and initials for the other six. Nothing is fetched.
 PICTURED: tuple[str, ...] = ("acc-01", "acc-05")
 _PICTURE_SIZE = 48  # pixels a side, as Jira's avatarUrls["48x48"]
 _PICTURE_GROUND = (0xEE, 0xF0, 0xF3)
@@ -178,14 +94,10 @@ EPIC_NAMES: tuple[str, ...] = (
 )
 # Days before `now` each epic was created: most at the start, a few added as the work grew.
 _EPIC_AGES_DAYS = (181, 180, 179, 178, 177, 176, 175, 174, 150, 125, 100, 75, 50, 25)
-# Effort in these epics (indices into EPIC_NAMES) drifts upwards in the last five
-# weeks, and recent work concentrates there, as it does on the epics a team is busy with.
 _DRIFTING_EPICS = (2, 5)
 _DRIFT_FACTOR = 1.7
 _DRIFT_WEIGHT = 3
 
-# Summary vocabulary: domain-neutral, lower-case phrases, so nothing reads as a
-# person's name and nothing imitates a real ticket.
 _ACTIONS = ("Add", "Update", "Refactor", "Document", "Migrate", "Simplify", "Implement", "Extend", "Tidy", "Automate")
 _OBJECTS = (
     "export filters",
@@ -359,7 +271,7 @@ def seed_demo(
 
 @dataclass
 class _Issue:
-    """One planned issue. Times are aware UTC datetimes until the rows are rendered."""
+    """One planned issue."""
 
     issue_type: str
     created: datetime
@@ -391,8 +303,6 @@ class _Issue:
         return self.transitions[-1][0]
 
     def work_windows(self, until: datetime) -> list[tuple[datetime, datetime]]:
-        """When work could have been logged: the In Progress intervals, or the
-        whole life of an issue that never went through In Progress."""
         windows: list[tuple[datetime, datetime]] = []
         start: datetime | None = None
         for at, _from, to in self.transitions:
@@ -420,7 +330,7 @@ _Link = tuple[str, int, int]
 
 
 class _Story:
-    """Plans one project's issues from the seed and `now`. Pure draws: no I/O."""
+    """Plans one project's issues from the seed and `now`."""
 
     def __init__(self, rng: random.Random, now: datetime, project: str, count: int) -> None:
         self.rng = rng
@@ -452,15 +362,7 @@ class _Story:
         sprints = self._sprints(issues)
         return issues, sprints, self._links(issues)
 
-    # --- the people's habits (JO-11) -------------------------------------------------------------------
-
     def _habits(self, issues: list[_Issue]) -> None:
-        """Each person's way of working, so the person scorecards show every state over their default period: Ada
-        Brooks estimates before she starts and Elif Aydin keeps within the estimate more than the rest (closer to the
-        process), Finn Gallagher logs time less, Dev Malhotra's work is reopened more and Carmen Ruiz's open work sits
-        longer (further from it), Ben Okafor and Grace Lindqvist take the other side of each, and Hana Mori, part time
-        of late, holds too few recent tickets to compare. Work only changes hands, in pairs, so no figure of the
-        board's changes and no draw is made: only who holds what. No real person's habits: the names are fictional."""
         since = self.now - _HABITS_WINDOW
         work = [issue for issue in issues if issue.issue_type != "Epic" and issue.assignee is not None]
         self._part_time(work, since)
@@ -475,8 +377,6 @@ class _Story:
         _swap(open_now, "acc-03", lambda issue: not issue.stale, closer=False)  # Carmen Ruiz
 
     def _part_time(self, work: list[_Issue], since: datetime) -> None:
-        """Hana Mori keeps her older work and a few recent tickets; the rest of her recent work goes to the two
-        people with no habit of their own, in turn."""
         recent = [issue for issue in work if issue.assignee == _PART_TIMER
                   and (issue.status != DONE or (issue.resolved is not None and issue.resolved >= since)
                        or (issue.started is not None and issue.started >= since))]
@@ -594,7 +494,7 @@ class _Story:
     # --- hierarchy, estimates, people, time --------------------------------------------------------
 
     def _place_in_hierarchy(self, issues: list[_Issue]) -> None:
-        """Epics get children; subtasks hang under earlier tasks. Issues come in creation order."""
+        """Epics get children; subtasks hang under earlier tasks."""
         epics: list[int] = []
         tasks: list[int] = []
         for issue in issues:
@@ -607,8 +507,6 @@ class _Story:
                     continue
                 issue.issue_type = "Task"  # the first work items have nothing to hang under
             if epics and self.rng.random() < _UNDER_EPIC_SHARE:
-                # Work created in the last seven weeks mostly finishes in the last five: that is
-                # where the drifting epics must have the team's attention.
                 recent = issue.created > self.now - _PROCESS_CHANGE - _SPRINT_LENGTH
                 weights = [_DRIFT_WEIGHT if recent and epic in self.drifting else 1 for epic in epics]
                 issue.parent = issue.epic = self.rng.choices(epics, weights=weights)[0]
@@ -621,8 +519,6 @@ class _Story:
             return
         started = issue.started
         end = (issue.resolved or self.now) - HOUR
-        # The window for an estimate made after the start: the first two days of work,
-        # when the issue stayed open that long.
         after_start: tuple[datetime, datetime] | None = None
         if started is not None and started + 2 * HOUR < min(end, started + 48 * HOUR):
             after_start = (started + 2 * HOUR, min(end, started + 48 * HOUR))
@@ -780,8 +676,7 @@ class _Story:
 
 
 def _hand_to(issue: _Issue, account: str) -> None:
-    """The issue changes hands: its last assignment names the new holder. When the holder before that was the new one,
-    the old holder takes that earlier place, so the history still runs from one person to another."""
+    """The issue changes hands: its last assignment names the new holder."""
     if issue.assignee is None or issue.assignee == account or not issue.assignee_changes:
         return
     at, before, _to = issue.assignee_changes[-1]
@@ -794,8 +689,6 @@ def _hand_to(issue: _Issue, account: str) -> None:
 
 
 def _swap(pool: list[_Issue], account: str, keeps_to_process: Callable[[_Issue], bool], *, closer: bool) -> None:
-    """Pairs of issues change hands between `account` and the two people with no habit of their own: closer, its
-    issues that miss the process for theirs that keep to it; otherwise the other way round. Counts stay as they were."""
     mine = [issue for issue in pool if issue.assignee == account and keeps_to_process(issue) != closer]
     theirs = [issue for issue in pool if issue.assignee in _PARTNERS and keeps_to_process(issue) == closer]
     for given, taken in zip(mine, theirs):
@@ -806,9 +699,6 @@ def _swap(pool: list[_Issue], account: str, keeps_to_process: Callable[[_Issue],
 
 
 def _estimated_in_time(issue: _Issue) -> bool:
-    """Its estimate was first set no later than an hour after work started (R-EST-02's grace), as derive works it out:
-    a first change from no estimate is when it was set; a first change from one, or no change at all, means it was
-    set when the issue was created."""
     if issue.points is None or issue.started is None:
         return False
     for at, before, _after in issue.points_changes:
@@ -829,7 +719,6 @@ def _reopened(issue: _Issue) -> bool:
 
 
 def _points_text(points: float) -> str:
-    """Story points as the changelog's toString shows them: "3", or "0.5"."""
     return str(int(points)) if points.is_integer() else str(points)
 
 
@@ -915,8 +804,6 @@ def _render(project: str, now: datetime, issues: list[_Issue], sprints: list[_Sp
 
 
 def _histories(project: str, issues: list[_Issue]) -> dict[int, tuple[list[dict[str, Any]], list[dict[str, Any]]]]:
-    """status_changes and field_changes rows per issue, with changelog ids that grow with time
-    across the project, as Jira's do."""
     events: list[tuple[datetime, int, int, str, str | None, str | None]] = []
     for issue in issues:
         events += [(at, issue.number, 0, "status", f, t) for at, f, t in issue.transitions]
@@ -961,7 +848,6 @@ def _author(number: int, from_status: str | None) -> str:
 
 
 def _worklog_rows(project: str, now: datetime, issues: list[_Issue]) -> dict[int, list[dict[str, Any]]]:
-    """worklogs rows per issue, ids growing with time; "_updated" carries the datetime for updated_at."""
     entries = sorted((started, issue.number, seconds) for issue in issues for started, seconds in issue.worklogs)
     out: dict[int, list[dict[str, Any]]] = {}
     for worklog_id, (started, number, seconds) in enumerate(entries, start=_WORKLOG_ID_BASE):
@@ -1102,8 +988,6 @@ def _account(account_id: str) -> dict[str, Any]:
 
 
 def _assignable_users() -> list[dict[str, Any]]:
-    """The board's assignable users as Jira's user/assignable/search would list them: every assignee, the three
-    members with no tickets, and the worklogs' app account (which is no member: map_member keeps it out)."""
     app = {"self": f"{_SITE}/rest/api/3/user?accountId={WORKLOG_AUTHOR}", "accountId": WORKLOG_AUTHOR,
            "accountType": "app", "displayName": "Timesheets app", "active": True}
     return [*(_account(account) for account in (*ASSIGNEES, *MEMBERS)), app]
@@ -1152,8 +1036,6 @@ def _write(store: Store, project: str, tables: _Tables) -> None:
 
 
 def _store_members(store: Store, project: str, seen_at: str) -> None:
-    """The board's members, stored as a sync's member fetch stores them (oversight/ingest/sync.py, step 6): the
-    board's board_members rows replaced, and each member's people row upserted, through the same mapping."""
     found = [row for user in _assignable_users() if (row := map_member(user, seen_at)) is not None]
     members = [{"project_key": project, "account_id": row["account_id"], "seen_at": seen_at} for row in found]
     store.replace_rows("board_members", {"project_key": project}, members)
@@ -1162,8 +1044,7 @@ def _store_members(store: Store, project: str, seen_at: str) -> None:
 
 
 def _store_pictures(store: Store, stored_at: str) -> None:
-    """The PICTURED accounts' pictures, kept as a sync keeps a fetched one but with no source URL. Only for an
-    account the demo has written (one with a ticket), and only when its picture is not already this one."""
+    """The PICTURED accounts' pictures, kept as a sync keeps a fetched one but with no source URL."""
     for account in PICTURED:
         data = picture(account)
         store.conn.execute(
@@ -1174,8 +1055,6 @@ def _store_pictures(store: Store, stored_at: str) -> None:
 
 
 def picture(account: str) -> bytes:
-    """A 48x48 PNG of an abstract pattern drawn from the account id: a 5x5 grid of squares, mirrored left to
-    right, in one colour on a pale ground, as code hosts draw for accounts without a photo. Nobody's likeness."""
     bits = hashlib.sha256(f"demo picture {account}".encode()).digest()
     ink = _PICTURE_INKS[bits[0] % len(_PICTURE_INKS)]
     # Columns 0..4 read bits for 0, 1, 2, 1, 0: the right half mirrors the left.

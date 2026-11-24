@@ -1,19 +1,3 @@
-"""`python -m oversight backup`: a consistent copy of the snapshot, taken while the API and a sync may be using it.
-
-SQLite's online backup API copies the database inside one read transaction, so the copy is the snapshot as it stood
-at one moment, whatever else is reading or writing it (in WAL mode a reader never blocks a writer). The source is
-opened read-only and never migrated: a backup is the snapshot exactly as it was, at its own schema version.
-
-The copy goes to the backups folder beside the snapshot (data/backups with the default DB_PATH) as
-oversight-YYYYMMDD-HHMMSS.db, the time in UTC. It is written under a hidden temporary name first, checked
-(PRAGMA quick_check) and only then renamed, so a file with a backup's name is always whole and readable. It is one
-self-contained file (journal mode DELETE, no -wal or -shm beside it), so copying that file copies everything.
-
-Then only the BACKUP_KEEP newest backups this command made are kept: files named exactly as above, ordered by the
-time in their name. Anything else in the folder (a copy someone made by hand, under another name) is never deleted.
-
-Prints the path and the size. The log line carries counts and sizes only.
-"""
 from __future__ import annotations
 
 import os
@@ -63,8 +47,7 @@ def backup_name(at: datetime) -> str:
 
 
 def list_backups(folder: Path) -> list[Backup]:
-    """The backups this command made in `folder`, oldest first. Other files, and names whose time is no real time,
-    are not ours and are left out. No folder: none."""
+    """The backups this command made in `folder`, oldest first."""
     found: list[Backup] = []
     try:
         entries = list(folder.iterdir())
@@ -88,7 +71,7 @@ def newest_backup(folder: Path) -> Backup | None:
 
 
 def run_backup(db_file: Path, folder: Path, *, keep: int, now: Callable[[], datetime] = utcnow) -> BackupResult:
-    """Copy the snapshot at `db_file` into `folder`, then keep the `keep` newest backups. See the module docstring."""
+    """Copy the snapshot at `db_file` into `folder`, then keep the `keep` newest backups."""
     if keep < 1:
         raise ConfigError(f"BACKUP_KEEP must be at least 1, not {keep}")
     db_file = Path(db_file)

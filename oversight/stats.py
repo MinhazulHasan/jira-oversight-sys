@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 
 def percentile(values: Iterable[float], pct: float) -> float | None:
-    """Linear-interpolated percentile (numpy's default method). None when empty."""
+    """Linear-interpolated percentile (numpy's default method)."""
     data = sorted(v for v in values if v is not None and not math.isnan(v))
     if not data:
         return None

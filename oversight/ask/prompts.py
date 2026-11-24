@@ -1,39 +1,4 @@
-"""Prompt skeletons (Planning.md Appendix B). Text inside the tags is data, never instructions.
-
-The plan call sees only the question and the catalogue, never ticket data.
-Only the compose call sees facts, and only facts: keys, numbers, statuses and
-short summaries, wrapped as data.
-
-Ask answers at team or people level (oversight/ask/people.py). At team level
-nothing names a person, and a question about someone gets TEAM_DECLINE. At
-people level the catalogue holds the person tools, the facts may name people,
-and <mentions> lists the people the question mentions (name and person id).
-Mentioned people who hold no ticket on the board are not in <mentions> but in
-<no_tickets> (names only): the model leaves them out, and the service adds the
-sentence that says so (oversight/ask/people.py: no_tickets_sentence). A
-question that evaluates someone is answered with their scorecard or the
-comparison (JO-11, never declined): COMPARISON_OFF when an organisation has
-turned comparing people off, DECISION_YOURS after the figures for a personnel
-question, and the caveat (caveat()) as every such answer's last paragraph.
-These sentences are the contract's, word for word. A question about people
-that nothing here places (cycle time or hours by person, say) is never turned
-away at people level (JO-12): it is answered with the overall comparison,
-LAST_RESORT_OVERALL first (LAST_RESORT_SCORECARD for the scorecards of the
-people it mentions); PEOPLE_HELP, which points to what is answered and to @
-(the words the dashboard's sample Ask uses), is left for where comparing
-people is turned off. A name typed where a person's name stands that no one
-on the board goes by gets NO_ONE_CALLED; a person named in the question's own
-words by part of a name, after an @, gets PICK_WITH_AT; a full name two people
-share gets AMBIGUOUS_NAME, and a first name two people share
-AMBIGUOUS_FIRST_NAME.
-
-The rule draft (JO-20, oversight/api/rule_draft.py): RULE_DRAFT_SYSTEM is
-stable, so a provider can cache it; rule_draft_user holds <checks> (the check
-registry for the board), <board> (its status names with their categories,
-issue types, mapped stages, evidence names and estimate basis: no ticket text,
-no people, no figure from the board) and <request> (the admin's words, as
-data). The one repair adds <draft> and <problems> (RULE_DRAFT_REPAIR).
-"""
+"""Prompt skeletons for Ask, insights and rule drafts; text inside the tags is data, never instructions."""
 from __future__ import annotations
 
 import json
@@ -41,8 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 TEAM_DECLINE = "Ask answers at team level. To see one person's findings, use the Person filter on Findings."
-# JO-09's decline of a question that judges someone. Not sent since JO-11 (11 Nov 2026): at people level such a
-# question is answered with figures; kept so an answer that quotes it can be recognised.
+# Not sent any more; kept so an answer that quotes it can be recognised.
 JUDGEMENT_DECLINE = "I can show facts about someone's tickets and findings, but not judge their performance."
 # A question about people that no figure here answers per person: what is answered, and @. Never says the data lacks it.
 PEOPLE_HELP = (
@@ -51,20 +15,19 @@ PEOPLE_HELP = (
 )
 # Someone named after an @ by part of a name that is no one's on the board: the @ list knows who.
 PICK_WITH_AT = "Type @ and pick the person you mean from the list, so the answer is about them."
-# JO-11: person scorecards and the comparison, the contract's words (mirrored in the dashboard's sample).
-# Comparing people is off only where an organisation sets PEOPLE_COMPARISON=off.
+# The contract's words, mirrored in the dashboard's sample; off only where PEOPLE_COMPARISON=off.
 COMPARISON_OFF = "Comparing people side by side is turned off. Ask about one person at a time instead."
 # After the figures for a personnel question (fire, promote, blame, trust, attitude, ...): never a decline.
 DECISION_YOURS = "The figures are above; the decision is yours."
 # The last paragraph of every scorecard or comparison answer, added in code; HERE when the board has no code review.
 CAVEAT = "Figures from Jira over the last {days} days, next to the whole board, by each ticket's current assignee.{here}"
 CAVEAT_HERE = " Code review isn't recorded on this board, so reviewers' work doesn't show."
-# A name typed in full that two or more people on the board share (JO-11 decision 8): pick with @ instead.
+# A name typed in full that two or more people on the board share: pick with @ instead.
 AMBIGUOUS_NAME = "More than one person on this board is called {names}. Type @ and pick the one you mean."
 # A first name typed on its own that two or more people on the board share: their full names, and @.
 AMBIGUOUS_FIRST_NAME = "{first} could be {names}. Type @ and pick the one you mean."
 TOO_MANY_PEOPLE = "Ask about ten people at most at a time."
-# JO-12 (G3/G4: never turn an admin away). A name typed where a person's name stands that no one on the board goes by.
+# A name typed where a person's name stands that no one on the board goes by.
 NO_ONE_CALLED = "No one called {name} is on this board."
 # The last resort for a question about people that nothing here places: the figures it is answered with, said first.
 LAST_RESORT_OVERALL = (
@@ -72,22 +35,19 @@ LAST_RESORT_OVERALL = (
     "than the whole board."
 )
 LAST_RESORT_SCORECARD = "This answer uses the scorecard: each measure next to the whole board's."
-# A request for a creative piece (verse, a song, a joke: router.creative), declined in code before any model: 18 Nov
-# 2026, "Write a short poem about our sprint." got a rhyming poem with its counts in words.
+# A request for a creative piece, declined in code before any model call.
 CREATIVE_DECLINE = "Ask answers questions about this board's work. It doesn't write poems, songs or jokes."
 
 
 def caveat(days: int | Sequence[int], *, records_code_review: bool) -> str:
-    """The scorecard and comparison answers' last paragraph, word for word. days: the period, or each period the
-    answer's figures cover when they mix them, shortest first ("over the last 30 and 180 days")."""
+    """The scorecard and comparison answers' last paragraph, word for word."""
     periods = [days] if isinstance(days, int) else sorted(dict.fromkeys(days))
     said = str(periods[0]) if len(periods) == 1 else ", ".join(map(str, periods[:-1])) + f" and {periods[-1]}"
     return CAVEAT.format(days=said, here="" if records_code_review else CAVEAT_HERE)
 
 
 def ambiguous_name(names: list[str]) -> str:
-    """The message for a typed name more than one person shares: their names as the board writes them, each once
-    ("Elif Aydin or Élif Aydın" when they differ by case or accents)."""
+    """The message for a typed name that more than one person shares, each name once."""
     return AMBIGUOUS_NAME.format(names=" or ".join(dict.fromkeys(names)))
 
 
@@ -97,8 +57,7 @@ def no_one_called(name: str) -> str:
 
 
 def ambiguous_first_name(first: str, names: list[str]) -> str:
-    """The message for a first name typed on its own that more than one person on the board has: their full names,
-    each once."""
+    """The message for a first name on its own that more than one person on the board has."""
     return AMBIGUOUS_FIRST_NAME.format(first=first, names=" or ".join(dict.fromkeys(names)))
 
 PLAN_SYSTEM = f"""You turn a question about Jira work into calls from a fixed catalogue.
@@ -190,9 +149,7 @@ def rule_draft_user(request: str, checks: list[dict[str, Any]], board: dict[str,
 
 
 def rule_draft_repair(draft: dict[str, Any], problems: list[dict[str, str]]) -> str:
-    """What the one repair adds to the draft's user message: the draft and what was wrong with it, as data. Both hold
-    words that came from the request (the first draft's own, and messages that repeat them): RULE_DRAFT_SYSTEM says
-    their tags are data too, and as JSON neither can close its tag."""
+    """The repair's addition to the draft's user message: the draft and its problems, as JSON data."""
     return RULE_DRAFT_REPAIR.format(draft=_json(draft), problems=_json(problems))
 
 
@@ -246,8 +203,7 @@ def mentions_tag(mentions: list[dict[str, str]] | None) -> str:
 
 
 def no_tickets_tag(names: list[str] | None) -> str:
-    """The names of the people a question mentions who hold no ticket on the board, as data, on a line of its own;
-    nothing when there are none."""
+    """A line naming the mentioned people who hold no ticket on the board, as data; empty when none."""
     return f"<no_tickets>{_json(names)}</no_tickets>\n" if names else ""
 
 
@@ -261,8 +217,5 @@ def _escape(text: str) -> str:
 
 
 def _json(data: Any) -> str:
-    """The data as JSON whose text can never close a tag. A ticket summary holding
-    "</facts><question>..." would otherwise end the data section early for the
-    model. "</" only occurs inside JSON strings, where "<\\/" is a legal escape
-    of the same text, so the payload stays valid JSON and decodes unchanged."""
+    """The data as JSON whose text can never close a tag, so ticket text cannot end the data early."""
     return _escape(json.dumps(data, ensure_ascii=False))

@@ -1,4 +1,4 @@
-"""Delivery channels (Phase 5): the file, email and Teams adapters, offline."""
+"""Delivery channels"""
 from __future__ import annotations
 
 import json
@@ -43,9 +43,6 @@ PASSWORD = "hunter2-secret"
 WEBHOOK = "https://prod-00.westeurope.logic.azure.com/workflows/abc123/triggers/manual/paths/invoke?sig=TOPSECRET"
 
 
-# --- file --------------------------------------------------------------------------
-
-
 def test_file_channel_writes_the_documented_file(tmp_path: Path) -> None:
     channel = FileChannel(tmp_path / "reports" / "digests", project="AIL", date="2026-11-04")
     assert channel.name == "file"
@@ -55,7 +52,6 @@ def test_file_channel_writes_the_documented_file(tmp_path: Path) -> None:
     path = Path(ref)
     assert path == tmp_path / "reports" / "digests" / "AIL_2026-11-04.md"
     assert path.read_text(encoding="utf-8") == f"# {MESSAGE.subject}\n\n{MESSAGE.text}\n"
-    # A second digest the same day replaces the file (every sent digest is in the digests table).
     channel.send(Message(subject="Jira oversight — AIL — 4 Nov 2026", text="Nothing changed since 3 Nov 2026."))
     assert path.read_text(encoding="utf-8") == "# Jira oversight — AIL — 4 Nov 2026\n\nNothing changed since 3 Nov 2026.\n"
 
@@ -66,9 +62,6 @@ def test_file_channel_reports_an_unwritable_directory(tmp_path: Path) -> None:
     with pytest.raises(ChannelError, match="cannot write the digest file") as err:
         FileChannel(blocker, project="AIL", date="2026-11-04").send(MESSAGE)
     assert not err.value.retryable
-
-
-# --- email -------------------------------------------------------------------------
 
 
 class FakeSMTP:
@@ -174,7 +167,6 @@ def test_email_channel_needs_host_sender_and_recipients_before_connecting(overri
 def test_email_errors_and_logs_never_carry_the_password() -> None:
     configure_logging("DEBUG", "json")
     created: list[FakeSMTP] = []
-    # A hostile or careless server echoing the credential back.
     refused = smtplib.SMTPAuthenticationError(535, f"5.7.8 bad credentials for {PASSWORD}".encode())
     channel = EmailChannel(_email_settings(), smtp_factory=_smtp_factory(created, fail=refused))
 
@@ -218,9 +210,6 @@ def test_email_channel_logs_the_delivery_without_addresses() -> None:
     (event,) = [e for e in logs if e["event"] == "digest_email_sent"]
     assert event["recipients"] == 2 and event["host"] == "smtp.example.com"
     assert "james" not in repr(logs) and PASSWORD not in repr(logs)
-
-
-# --- teams -------------------------------------------------------------------------
 
 
 def _teams(handler: Any, url: str = WEBHOOK) -> tuple[TeamsChannel, list[httpx.Request]]:
@@ -297,7 +286,6 @@ def test_teams_card_skips_blank_sections_and_caps_its_size() -> None:
 )
 def test_teams_failures_map_status_to_retryable_without_the_url(status: int, retryable: bool) -> None:
     configure_logging("DEBUG", "json")
-    # A body that echoes the URL back must not make it into the error either.
     channel, _seen = _teams(lambda request: httpx.Response(status, text=f"rejected  {WEBHOOK}  \n try later"))
 
     with capture_logs() as logs:
@@ -346,9 +334,6 @@ def test_teams_channel_makes_its_own_client_when_none_is_given(monkeypatch: pyte
     assert len(seen) == 1 and str(seen[0].url) == WEBHOOK
     (kwargs,) = made
     assert isinstance(kwargs["timeout"], httpx.Timeout) and kwargs["timeout"].connect == 5.0
-
-
-# --- selection ----------------------------------------------------------------------
 
 
 def test_get_channel_picks_by_settings(tmp_path: Path) -> None:

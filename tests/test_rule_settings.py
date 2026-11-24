@@ -1,9 +1,3 @@
-"""Rule settings for admins (JO-15, oversight/rules/settings.py): what may change on a board and within which bounds,
-the cross-rule rule, a board's rules with its settings applied, and how a change is validated and written, all or
-nothing, with its audit trail.
-
-The test catalogue (tests/fixtures/config/rules.yaml) and temporary stores only; the viewer is the local one.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -58,13 +52,9 @@ def problems(*changes: Change, current: BoardSettings | None = None) -> list[tup
 
 
 def save(store: Store, *changes: Change, revision: int | None = None, **options: Any) -> SavedChange:
-    """Save as the API saves, from the board's revision unless told otherwise."""
     current = load_board_settings(store.conn, "AIL").revision if revision is None else revision
     return save_board_settings(store, CATALOGUE, "AIL", revision=current, changes=list(changes), now=NOW, **LOCAL,
                                **options)
-
-
-# --- what may change, and within which bounds -------------------------------------------------------------------
 
 
 def test_the_editable_params_and_their_bounds_are_the_specs() -> None:
@@ -98,7 +88,6 @@ def test_a_param_rules_yaml_leaves_out_starts_from_the_checks_default() -> None:
     bare = RulesConfig.model_validate(data)
     defaults = {rule.id: {spec.name: default_value(rule, spec) for spec in editable_params(rule)}
                 for rule in bare.rules if editable_params(rule)}
-    # R-EFF-01's check has no default threshold: with none in rules.yaml there is nothing to start from.
     assert defaults == {
         "R-EST-02": {"grace_hours": 1.0}, "W-EFF-01": {"threshold": 0.8}, "W-AGE-01": {"pct": 90.0},
         "W-REV-01": {"pct": 75.0}, "W-SPR-01": {"days_left": 2.0, "not_started_share": 0.3},
@@ -155,8 +144,8 @@ def test_a_change_set_is_refused_whole_with_every_problem_named() -> None:
         Change("R-HYG-01", severity="warning"),
         Change("R-EST-01", reset=True, enabled=False),
         Change("R-FLOW-02"),
-        Change("R-FLOW-03", severity="warning"),  # already its severity
-        Change("R-EFF-01", reset=True),  # nothing to reset
+        Change("R-FLOW-03", severity="warning"),
+        Change("R-EFF-01", reset=True),
         Change("W-SPR-01", severity="critical", enabled="yes"),  # type: ignore[arg-type]
     ) == [
         ("R-NOPE-01", None, "R-NOPE-01 is not a rule in the catalogue."),
@@ -172,24 +161,17 @@ def test_a_change_set_is_refused_whole_with_every_problem_named() -> None:
         plan()
 
 
-# --- the cross-rule rule ----------------------------------------------------------------------------------------
-
-
 def test_a_warning_keeps_its_threshold_strictly_below_its_breach_rules() -> None:
-    # Said on the field the change set moved, with the other rule's value in its unit, as the dashboard says it.
     assert problems(Change("W-EFF-01", params={"threshold": 1.5})) == [
         ("W-EFF-01", "params.threshold", "Must stay below R-EFF-01's 1.5× while both are on: the warning comes first.")]
     assert problems(Change("R-EFF-01", params={"threshold": 0.7})) == [
         ("R-EFF-01", "params.threshold", "Must stay above W-EFF-01's 0.8× while both are on.")]
-    # Both changed: the warning is the one named.
     assert problems(Change("R-EFF-01", params={"threshold": 2}), Change("W-EFF-01", params={"threshold": 3})) == [
         ("W-EFF-01", "params.threshold", "Must stay below R-EFF-01's 2× while both are on: the warning comes first.")]
-    # Moved together, or with the warning off (now or already): no conflict.
     assert plan(Change("R-EFF-01", params={"threshold": 0.7}), Change("W-EFF-01", params={"threshold": 0.5})).changes
     assert plan(Change("R-EFF-01", params={"threshold": 0.7}), Change("W-EFF-01", enabled=False)).changes
     off = plan(Change("W-EFF-01", enabled=False)).settings
     assert plan(Change("R-EFF-01", params={"threshold": 0.5}), current=off).changes
-    # Turning the warning back on under a breach threshold below it is refused.
     lowered = plan(Change("R-EFF-01", params={"threshold": 0.5}), current=off).settings
     assert problems(Change("W-EFF-01", enabled=True), current=lowered) == [
         ("W-EFF-01", "params.threshold", "Must stay below R-EFF-01's 0.5× while both are on: the warning comes first.")]
@@ -212,12 +194,9 @@ def test_an_unrelated_change_is_never_refused_for_a_pair_rules_yaml_got_wrong() 
     data = CATALOGUE.model_dump()
     for entry in data["rules"]:
         if entry["id"] == "W-EFF-01":
-            entry["params"]["threshold"] = 2.0  # above R-EFF-01's 1.5 in rules.yaml itself
+            entry["params"]["threshold"] = 2.0
     wrong = RulesConfig.model_validate(data)
     assert plan_changes(wrong, BoardSettings("AIL"), [Change("R-HYG-01", enabled=False)]).changes
-
-
-# --- what a plan holds -------------------------------------------------------------------------------------------
 
 
 def test_a_plan_names_each_field_it_changes_with_its_effective_values_before_and_after() -> None:
@@ -228,7 +207,6 @@ def test_a_plan_names_each_field_it_changes_with_its_effective_values_before_and
         Change("R-EST-02", params={"grace_hours": 4.5}),
         current=current,
     )
-    # Catalogue order; not_started_share is already 0.3, so it is no change.
     assert [change.as_dict() for change in changed.changes] == [
         {"rule_id": "R-EST-02", "field": "params.grace_hours", "from": 1.0, "to": 4.5},
         {"rule_id": "R-EFF-01", "field": "params.threshold", "from": 2.0, "to": 1.5},
@@ -236,7 +214,6 @@ def test_a_plan_names_each_field_it_changes_with_its_effective_values_before_and
         {"rule_id": "W-SPR-01", "field": "params.days_left", "from": 2.0, "to": 3.0},
     ]
     assert changed.rule_ids == ["R-EST-02", "R-EFF-01", "W-SPR-01"]
-    # Only what differs from rules.yaml is kept: R-EFF-01, reset, keeps nothing.
     assert changed.settings.rules == (
         RuleSetting("R-EST-02", params=(("grace_hours", 4.5),)),
         RuleSetting("W-AGE-01", enabled=False),
@@ -252,9 +229,6 @@ def test_a_field_set_back_to_rules_yaml_is_kept_as_nothing() -> None:
     assert gone.settings.rules == ()
     assert [change.as_dict() for change in gone.changes] == [
         {"rule_id": "R-HYG-01", "field": "severity", "from": "warning", "to": "breach"}]
-
-
-# --- a board's rules ----------------------------------------------------------------------------------------------
 
 
 def test_with_no_settings_a_board_runs_the_catalogue_itself() -> None:
@@ -278,8 +252,8 @@ def test_a_boards_rules_carry_what_its_settings_made_of_each_rule() -> None:
     assert (stuck.enabled, board.rule_version(stuck), stuck.settings_hash) == (False, "0.1.0", None)
     assert [rule.id for rule in board.rules if rule.customised] == ["R-EFF-01", "R-HYG-01", "W-AGE-01"]
     assert [rule.id for rule in board.enabled_rules] == [rule.id for rule in CATALOGUE.rules if rule.id != "W-AGE-01"]
-    assert CATALOGUE.by_id("R-EFF-01").params == {"threshold": 1.5}  # the catalogue as it was
-    assert effective_rules(CATALOGUE, settings) is board  # worked out once for each set of rows
+    assert CATALOGUE.by_id("R-EFF-01").params == {"threshold": 1.5}
+    assert effective_rules(CATALOGUE, settings) is board
     with pytest.raises(ValueError, match="not one board's rules"):
         effective_rules(board, settings)
 
@@ -312,9 +286,6 @@ def test_a_stored_setting_that_can_no_longer_apply_is_left_out_with_a_warning() 
     assert ignored == [("R-EFF-01", "params.stage"), ("R-EFF-01", "params.threshold"), ("R-GONE-01", "rule")]
 
 
-# --- reading a board's settings ---------------------------------------------------------------------------------
-
-
 def test_a_boards_settings_are_read_through_a_read_only_connection(store: Store, tmp_path: Path) -> None:
     save(store, Change("R-EFF-01", params={"threshold": 2.0}), Change("W-AGE-01", enabled=False))
     save(store, Change("R-HYG-01", severity="warning"))
@@ -333,7 +304,7 @@ def test_a_boards_settings_are_read_through_a_read_only_connection(store: Store,
     assert other == BoardSettings("DEMO")
     assert board_rules(store.path, CATALOGUE, "AIL").by_id("W-AGE-01").enabled is False
     assert board_rules(store.path, CATALOGUE, "DEMO") is CATALOGUE
-    assert board_rules(tmp_path / "none.db", CATALOGUE, "AIL") is CATALOGUE  # no snapshot yet
+    assert board_rules(tmp_path / "none.db", CATALOGUE, "AIL") is CATALOGUE
     assert not (tmp_path / "none.db").exists()
 
 
@@ -341,7 +312,7 @@ def test_a_snapshot_from_before_version_9_has_no_settings(tmp_path: Path) -> Non
     path = tmp_path / "v8.sqlite"
     with Store.open(path) as store:
         store.conn.executescript(VERSION_8)
-    conn = open_readonly(path)  # read-only: it never migrates
+    conn = open_readonly(path)
     try:
         assert load_board_settings(conn, "AIL") == BoardSettings("AIL")
         assert read_history(conn, "AIL") == []
@@ -357,9 +328,6 @@ def test_a_row_edited_by_hand_reads_as_rules_yaml_wherever_it_cannot_be_read(sto
     )
     assert load_board_settings(store.conn, "AIL") == BoardSettings(
         "AIL", 0, (RuleSetting("W-AGE-01", enabled=False, params=(("x", 95.0),)),))
-
-
-# --- writing a change ---------------------------------------------------------------------------------------------
 
 
 def _rows(store: Store, sql: str) -> list[tuple[Any, ...]]:
@@ -435,9 +403,6 @@ def test_an_undo_restores_rules_yaml_and_names_the_change_it_undid(store: Store)
 
 
 def test_an_undo_must_put_back_exactly_what_the_boards_latest_change_set(store: Store) -> None:
-    """A save that names the change it undoes is refused unless it undoes the board's latest change exactly (each field
-    it set, back to its value before it, and nothing else): the history then says a change was undone only when it no
-    longer applies."""
     first = save(store, Change("R-HYG-01", enabled=False))
     second = save(store, Change("W-SPR-01", severity="breach", params={"days_left": 3}),
                   Change("R-EFF-01", params={"threshold": 2.5}))
@@ -450,28 +415,22 @@ def test_an_undo_must_put_back_exactly_what_the_boards_latest_change_set(store: 
 
     not_an_undo = (None, "undo_of", "This change does not undo that one: an undo sets each field it changed back to"
                                     " what it was, and nothing else.")
-    # Something else altogether, named as the undo of revision 2.
     assert refused(Change("W-AGE-01", params={"pct": 80})) == [not_an_undo]
-    # Part of it, too much of it, or another value than the one before.
     assert refused(Change("W-SPR-01", severity="warning", params={"days_left": 2})) == [not_an_undo]
     assert refused(Change("W-SPR-01", severity="warning", params={"days_left": 2}),
                    Change("R-EFF-01", params={"threshold": 1.5}), Change("R-HYG-01", enabled=True)) == [not_an_undo]
     assert refused(Change("W-SPR-01", severity="warning", params={"days_left": 2}),
                    Change("R-EFF-01", params={"threshold": 1.8})) == [not_an_undo]
-    # Only the latest change can be undone, as the page offers it.
     assert refused(Change("R-HYG-01", enabled=True), undo_of=first.change_id) == [
         (None, "undo_of", "Only the board's latest change can be undone.")]
-    # The change set's own problems come with it.
     assert refused(Change("R-EFF-01", params={"threshold": 11})) == [
         ("R-EFF-01", "params.threshold", "Effort ratio must be from 0.1 to 10.")]
     assert (store.count("rule_settings_changes"), load_board_settings(store.conn, "AIL").revision) == (2, 2)
 
-    # The exact inverse is taken, whatever order the change set names the rules in.
     undone = save(store, Change("W-SPR-01", severity="warning", params={"days_left": 2}),
                   Change("R-EFF-01", params={"threshold": 1.5}), **undoes)
     assert [(entry["revision"], entry["undo_of"]) for entry in read_history(store.conn, "AIL")][:1] == [
         (3, second.change_id)]
-    # An undo of an undo puts the change back.
     again = save(store, Change("W-SPR-01", severity="breach", params={"days_left": 3}),
                  Change("R-EFF-01", params={"threshold": 2.5}), undo_of=undone.change_id)
     assert again.revision == 4 and load_board_settings(store.conn, "AIL").of("R-EFF-01") == RuleSetting(
@@ -481,20 +440,18 @@ def test_an_undo_must_put_back_exactly_what_the_boards_latest_change_set(store: 
 def test_the_rules_a_board_turned_off_are_read_from_its_history(store: Store, tmp_path: Path) -> None:
     assert turned_off(store.conn, "AIL") == frozenset()
     save(store, Change("R-HYG-01", enabled=False), Change("W-AGE-01", enabled=False))
-    save(store, Change("W-AGE-01", enabled=True))  # back on: no longer off
-    save(store, Change("R-EFF-01", params={"threshold": 2.0}))  # no change of on or off
+    save(store, Change("W-AGE-01", enabled=True))
+    save(store, Change("R-EFF-01", params={"threshold": 2.0}))
     save(store, Change("W-REV-01", enabled=False))
-    save(store, Change("W-REV-01", reset=True))  # a reset that turns it back on says so too
+    save(store, Change("W-REV-01", reset=True))
     assert turned_off(store.conn, "AIL") == frozenset({"R-HYG-01"})
     assert turned_off(store.conn, "DEMO") == frozenset()
-    # A rule rules.yaml has off that the board turned on and off again is one of them.
     stingy = catalogue(enabled=[rule.id for rule in CATALOGUE.rules if rule.id != "W-SPR-01"])
     for enabled in (True, False):
         revision = load_board_settings(store.conn, "AIL").revision
         save_board_settings(store, stingy, "AIL", revision=revision, changes=[Change("W-SPR-01", enabled=enabled)],
                             now=NOW, **LOCAL)
     assert turned_off(store.conn, "AIL") == frozenset({"R-HYG-01", "W-SPR-01"})
-    # A snapshot from before version 9 has no history: nothing was turned off.
     path = tmp_path / "v8.sqlite"
     with Store.open(path) as old:
         old.conn.executescript(VERSION_8)

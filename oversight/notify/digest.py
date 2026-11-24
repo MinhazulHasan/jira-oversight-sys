@@ -1,75 +1,4 @@
-"""The daily digest (Phase 5): "notify us when things were not as they should be", without flooding anyone.
-
-build_digest(store, process, rules, *, project, now, jira_base_url=None) -> DigestContent
-- since = the sent_at of the project's last digest row (any channel), else None
-  (first digest: everything open counts as new, capped at the 25 most recent
-  per section with "and N more").
-- new_breaches / new_warnings: open findings with first_seen_at > since (or
-  reopened since), excluding finding ids that an earlier digest already carried
-  (digests.finding_ids_json), so the same finding never appears as new twice.
-  The findings table keeps no trace of a reopen (the engine clears resolved_at),
-  so "new" is implemented as "open and never carried by a digest": that covers
-  both cases and makes the guarantee hold by construction. A digest carries
-  every finding it counted, including those beyond the cap (listed only as
-  "and N more"): Planning.md's "only send what changed since the last digest",
-  so old findings never come back as new and an unchanged day stays one line.
-  A finding is the condition it names (its rule, issue and evidence key), so
-  one whose condition a digest carried under another id is not new either: a
-  severity changed in the board's rule settings (JO-15), changed back, or a
-  catalogue version bump raises the same conditions again under new ids, and
-  none of them is a new problem.
-- resolved: findings with resolved_at > since and resolved_why "cleared"
-  (superseded findings are a catalogue version bump or a severity change,
-  aged_out ones left the look-back, and settings_changed ones closed because an
-  admin changed the board's rule settings, JO-15: none of them is a fix). The
-  first digest has no window, so it lists nothing as resolved.
-- hot_spots: the top 5 epics by open findings (epic_key, epic_title from the
-  epic issue's summary, open_breaches, open_warnings); issues with no epic
-  group under "(no epic)", listed after the epics and outside the top 5: a hot
-  spot is an epic (as in Ask's oversight_hot_spots and the weekly insights).
-  Sprint-scoped findings are not issues and stay out.
-- not_measurable: rules recorded as not measurable in the latest rules run,
-  with the missing sources (a standing section, one line each).
-- stale: True when the last successful sync is older than 2 hours, or when no
-  sync is recorded at all (the digest says so at the top).
-- unchanged: True when there is nothing new and nothing resolved.
-Each item: finding_id, rule_id, rule title, issue_key, issue summary (plain,
-untrusted text shown as-is but never interpreted), message, first_seen_at, and
-url = f"{jira_base_url}/browse/{issue_key}" when a base URL is known. The rule
-title is the board's (`rules` is the catalogue; the project's rule settings and
-custom rules, JO-20, are applied to it), so a custom rule's findings, and a
-deleted one's, carry its title.
-
-render_digest(content, *, tz_name) -> Message
-- Subject: "Jira oversight — <PROJECT> — <4 Nov 2026>" (dates in tz_name).
-- Plain text first (f-strings, no template engine): a one-line summary, then
-  sections "New breaches", "New warnings", "Resolved since <date>", "Hot spots",
-  "Not measurable", each with counts; an item is "<KEY> · <rule title> · <message>"
-  plus the issue summary and the URL on the next lines. Unchanged: one line,
-  "Nothing changed since <date>." (after the stale warning, when the data is
-  stale: a quiet day and a broken sync must never look the same). Team and
-  process level: no person names, no account ids.
-- html: the same content as simple semantic HTML (no CSS framework; links on keys).
-
-run_digest(store, process, rules, settings, *, projects, now=utcnow, channel=None,
-           channel_factory=None, tz_name=None, extra=None) -> list[DigestResult]
-- One run record (kind "digest"). Per project: build, render, send through
-  `channel` (tests inject one), `channel_factory(settings, project=, date=)` or
-  get_channel(settings, project, date); insert a digests row (sent_at = now,
-  since, subject, body, finding_ids_json = new + resolved ids (beyond the cap
-  too), delivery_ref,
-  run_id). An unchanged digest is still sent (one line), so a silent day is
-  distinguishable from a broken scheduler. tz_name falls back to
-  REPORT_TIMEZONE, then UTC; never the Jira account's zone.
-- `extra` appends standing sections to every digest (heading -> text, or a
-  list of lines), e.g. the weekly insights delivered with the Monday digest.
-- A ChannelError marks the run failed for that project, records nothing in
-  digests, and re-raises after the loop finishes other projects (so one bad
-  channel never loses the others' digests).
-
-Done when (Planning.md Phase 5): the same finding never appears as "new" twice
-(test); Tazbir has reviewed one real digest (process, not code).
-"""
+"""The daily digest (Phase 5)"""
 from __future__ import annotations
 
 import html
@@ -128,8 +57,6 @@ WHERE f.project_key = ? AND f.resolved_at IS NOT NULL AND f.resolved_why = 'clea
 ORDER BY f.resolved_at DESC, f.finding_id
 """
 
-# Open findings per epic of the issues they are about. e.summary is constant
-# within a group (one epic row per key), so the bare column is well defined.
 _HOT_SPOTS_SQL = """
 SELECT COALESCE(i.epic_key, p.epic_key) AS epic_key, e.summary AS epic_title,
        SUM(CASE WHEN f.severity = 'breach' THEN 1 ELSE 0 END) AS open_breaches,
@@ -257,8 +184,6 @@ def build_digest(
     until = to_iso(now)
     if until is None:
         raise ValueError("build_digest needs an aware datetime for now")
-    # The board's own rules (rules.yaml with its rule settings and its custom rules, JO-20), so a custom rule's findings
-    # carry its title, a deleted one's too.
     rules = rules if rules.is_board_rules else effective_rules(rules, load_board_settings(store.conn, project))
     titles = rules.title_of
 
@@ -297,8 +222,6 @@ def build_digest(
 
 
 def _carried(store: Store, project: str) -> tuple[set[str], set[tuple[str, str, str]]]:
-    """Every finding id an earlier digest of this project already showed, and the conditions they name (_condition):
-    the same condition raised again under another id is not new either."""
     carried: set[str] = set()
     for row in store.query("SELECT finding_ids_json FROM digests WHERE project_key = ?", (project,)):
         carried.update(_json_list(row["finding_ids_json"]))

@@ -1,14 +1,3 @@
-"""Ask's person scorecards and comparison (JO-11, the product owner's decision of 11 Nov 2026): at people level every
-question about people is answered with data, judgements included, and nothing is declined.
-
-The routing of each kind of question (the two word families, the scorecard of one person, several side by side,
-everyone compared, a personnel question, the backlog, a raw-count ranking that stays JO-09's, the period), the
-sentences word for word (comparing people turned off, the decision, the caveat with and without its last sentence,
-a shared name), the answer built in code, the wording check with its one rewrite and the answer built in code after
-it (in the catalogue's compose and in the analyst), names and never ids in the facts, the analyst's scorecard view,
-qa_log, and comparing people turned off on every path. Against the seeded DEMO store (fictional people) and the
-hand-made boards of test_scorecard; nothing calls a model or the network.
-"""
 from __future__ import annotations
 
 import json
@@ -146,9 +135,6 @@ def _ask(settings: Settings, provider: Any, question: str, **kw: Any) -> Any:
                    now=lambda: NOW, **kw)
 
 
-# --- the two word families -------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "words",
     [
@@ -163,7 +149,6 @@ def _ask(settings: Settings, provider: Any, question: str, **kw: Any) -> Any:
     ],
 )
 def test_every_scorecard_word_family_is_answered_with_figures(words: str) -> None:
-    """The words leave a gap where a mention stood (the router reads a question without the names it mentions)."""
     assert evaluates(words) and not personnel(words) and SCORECARD_WORDS.search(words.lower()), words
     assert judging(words, [ADA, BEN] if " and " in words else [ADA]) == "scorecard"
 
@@ -188,7 +173,7 @@ def test_every_personnel_word_family_ends_with_the_decision(words: str) -> None:
         "Which epics are worst?",  # about no one: the routing table answers it, as before
         "Top 5 tickets by cycle time",
         "Who has the most open breaches?",  # a count, not an evaluation
-        "Top 5 people by breaches",  # ranking words alone over one of GET /people's counts: JO-09's ranking
+        "Top 5 people by breaches",
         "Rank people by open tickets",
         "Who holds the hardware tickets?",  # "hard" in another word
         "Who mentioned it on Slack?",
@@ -197,9 +182,6 @@ def test_every_personnel_word_family_ends_with_the_decision(words: str) -> None:
 )
 def test_a_question_that_evaluates_no_one_is_not_judging(question: str) -> None:
     assert judging(question) is None
-
-
-# --- the routing ---------------------------------------------------------------------------------
 
 
 def people_plan(question: str, mentions: tuple[str, ...] = (), names: list[str] = PEOPLE) -> Any:
@@ -226,8 +208,6 @@ def people_plan(question: str, mentions: tuple[str, ...] = (), names: list[str] 
          [("oversight_people_compare", {"measure": "estimated_before_start", "days": 90, "order": "closer"})]),
         ("Who keeps best within the effort limit?", (),
          [("oversight_people_compare", {"measure": "within_estimate", "days": 90, "order": "closer"})]),
-        # Worst: further from the process first (the JO-14 review), the lowest share where higher is closer and the
-        # highest where lower is; the answer says "lowest first" or "highest first", never worst.
         ("Who is worst at logging time?", (),
          [("oversight_people_compare", {"measure": "time_logged", "days": 90, "order": "fewest"})]),
         ("Whose tickets are worst for getting stuck?", (),
@@ -245,7 +225,6 @@ def people_plan(question: str, mentions: tuple[str, ...] = (), names: list[str] 
         ("Should we fire ?", (ADA,), [("oversight_person_scorecard", {"person_ids": [ADA], "days": 90})]),
         ("Who should be promoted?", (),
          [("oversight_people_compare", {"measure": "overall", "days": 90, "order": "closer"})]),
-        # A backlog is the whole list, up to the facts' row limit (found by the JO-11 review: it stopped at 20).
         ("What is 's backlog?", (ADA,), [("oversight_person_tickets", {"person": ADA, "state": "open", "n": 200})]),
         ("What does  have to do?", (ADA,), [("oversight_person_tickets", {"person": ADA, "state": "open", "n": 200})]),
         ("Show 's open work", (ADA,), [("oversight_person_tickets", {"person": ADA, "state": "open", "n": 200})]),
@@ -254,8 +233,6 @@ def people_plan(question: str, mentions: tuple[str, ...] = (), names: list[str] 
         ("Rank people by open tickets", (), [("oversight_people", {"rank_by": "open_tickets"})]),
         ("Who has the most open warnings?", (), [("oversight_people", {"rank_by": "open_warnings"})]),
         ("Rank everyone by open findings", (), [("oversight_people", {"rank_by": "open_findings"})]),
-        # A ranking that names a compared measure is that measure's comparison, whatever ticket words come with it
-        # (found by the JO-11 integration: these were ranked by open tickets).
         ("Rank people by reopened tickets", (),
          [("oversight_people_compare", {"measure": "reopened", "days": 90, "order": "closer"})]),
         ("Rank everyone by stuck tickets", (),
@@ -281,7 +258,6 @@ def test_comparing_people_turned_off_is_the_sentence(question: str, mentions: tu
     planned = people_plan(question, mentions, OFF)
     assert (planned.understood, planned.calls, planned.reason) == (False, [], COMPARISON_OFF_REASON)
     assert COMPARISON_OFF == "Comparing people side by side is turned off. Ask about one person at a time instead."
-    # One person is no comparison: still their scorecard.
     one = people_plan("Is  doing well?", (ADA,), OFF)
     assert [(call.name, call.params) for call in one.calls] == [("oversight_person_scorecard",
                                                                  {"person_ids": [ADA], "days": 90})]
@@ -307,9 +283,6 @@ def test_the_tools_are_people_levels_only_and_the_comparison_only_when_on() -> N
             validate_params(name, {"person_ids": [ADA]})  # the team catalogue does not know them
 
 
-# --- the catalogue's answers, built in code -----------------------------------------------------------
-
-
 def labels_where(rows: list[dict[str, Any]], where: str) -> list[str]:
     return [row["label"] for row in rows if row["vs_board"] == where]
 
@@ -319,7 +292,6 @@ def joined(items: list[str]) -> str:
 
 
 def expected_scorecard_paragraph(name: str, rows: list[dict[str, Any]], *, alone: bool) -> str:
-    """The code-built answer for one person, from the contract's template, worked out here from the facts."""
     clauses = [f"{words} {joined(labels_where(rows, where))}" for where, words in
                (("closer", "closer to the process on"), ("further", "further from it on"), ("level", "level on"))
                if labels_where(rows, where)]
@@ -328,7 +300,7 @@ def expected_scorecard_paragraph(name: str, rows: list[dict[str, Any]], *, alone
     if few:
         text += f" Too few tickets to compare: {joined(few)}."
     if alone:
-        text += " Not measurable on this board: Code review recorded."  # R-FLOW-02 is measured on DEMO (JO-12 G11)
+        text += " Not measurable on this board: Code review recorded."
     return text
 
 
@@ -340,7 +312,6 @@ def test_one_person_judged_gets_their_scorecard_word_for_word(client: TestClient
     (facts,) = body["facts"]
     assert [column["key"] for column in facts["columns"]] == [column.key for column in SCORECARD_COLUMNS]
     assert [row["measure"] for row in facts["rows"]] == [measure.key for measure in MEASURES]
-    # Names beside ids, never an id alone; the answer names people only by name.
     assert {(row["person_id"], row["name"]) for row in facts["rows"]} == {(ada["id"], "Ada Brooks")}
     paragraphs = body["answer"].split("\n\n")
     assert paragraphs == [expected_scorecard_paragraph("Ada Brooks", facts["rows"], alone=True), DEMO_CAVEAT]
@@ -422,8 +393,6 @@ def test_the_backlog_of_someone_is_their_open_tickets(client: TestClient) -> Non
                              "params": {"person": ada["id"], "state": "open", "n": 200}}]
     assert body["answer"].startswith("Ada Brooks has ") and "open ticket" in body["answer"]
     assert DEMO_CAVEAT not in body["answer"]  # not a scorecard: no caveat
-    # The whole backlog, Epics left out as the scorecard's Open tickets leaves them out: the figure and the list its
-    # link opens are one number (found by the JO-11 review: 58 against 60, and the list stopped at 20).
     card = client.get("/api/v1/people/scorecard", params={"level": "people", "person": ada["id"]}).json()
     (facts,) = body["facts"]
     assert len(facts["rows"]) == card["people"][0]["values"]["open_tickets"]["value"] and not facts["truncated"]
@@ -441,9 +410,6 @@ def test_a_member_with_no_tickets_beside_someone_judged(client: TestClient) -> N
     assert body["people"] == [ada, noor]
 
 
-# --- comparing people turned off -------------------------------------------------------------------
-
-
 def test_comparing_people_turned_off_on_every_path(off: TestClient, demo: Settings) -> None:
     people = board(off)
     ada, ben = people["Ada Brooks"], people["Ben Okafor"]
@@ -458,12 +424,10 @@ def test_comparing_people_turned_off_on_every_path(off: TestClient, demo: Settin
         assert llm_calls(demo, answer["qa_id"]) == 0
     one = post(off, {"question": "Is @Ada Brooks doing well?", "level": "people", "mentions": [ada["id"]]})
     assert one["outcome"] == "answered" and one["answer"].endswith(DEMO_CAVEAT)
-    # The analyst is refused it before any model is asked, and never offered the comparison.
     off_settings = demo.model_copy(update={"people_comparison": "off"})
     refused = _ask(off_settings, NoModel(), "Who is best on the board?", level="people",
                    people=replace(scope_of(demo), comparison=False))
     assert (refused.outcome, refused.message) == ("not_understood", COMPARISON_OFF)
-    # A tool asked for two people anyway refuses with the sentence.
     scope = replace(scope_of(demo), comparison=False)
     from oversight.ask.catalog import CatalogContext
 
@@ -490,15 +454,11 @@ class NoModel:
     compose = converse = structured
 
 
-# --- the caveat -------------------------------------------------------------------------------------
-
-
 def test_the_caveat_with_and_without_its_last_sentence(tmp_path: Path) -> None:
     assert caveat(30, records_code_review=True) == (
         "Figures from Jira over the last 30 days, next to the whole board, by each ticket's current assignee.")
     assert caveat(90, records_code_review=False) == DEMO_CAVEAT
     assert CAVEAT_HERE == " Code review isn't recorded on this board, so reviewers' work doesn't show."
-    # A board that records code review (test_scorecard's REV): no last sentence.
     from tests.test_scorecard import build as build_boards
     from tests.test_scorecard import pid as board_pid
     from tests.test_scorecard import serve, write_config
@@ -509,9 +469,6 @@ def test_the_caveat_with_and_without_its_last_sentence(tmp_path: Path) -> None:
                           "mentions": [board_pid("alpha")]})
     assert body["answer"].split("\n\n")[-1] == caveat(30, records_code_review=True)
     assert "Not measurable" not in body["answer"]
-
-
-# --- the wording check -------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -585,9 +542,6 @@ def test_the_analyst_answers_a_personnel_question_with_the_decision_and_the_cave
     assert JUDGEMENT_DECLINE not in system and "Never insult anyone or label their character" in system
 
 
-# --- typed names ------------------------------------------------------------------------------------
-
-
 def test_named_in_finds_full_names_folded_longest_first(demo: Settings) -> None:
     scope = scope_of(demo)
     everyone = [*scope.people, *scope.members]
@@ -611,15 +565,11 @@ def test_a_name_two_people_share_asks_for_at(tmp_path: Path) -> None:
             "not_understood", "More than one person on this board is called Whiskey Tester. Type @ and pick the one "
                               "you mean.")
         assert body["plan"] == body["facts"] == body["people"] == []
-        # Picked from the @ list, the same name is no question: that one person.
         whiskey = next(row["person"] for row in shared.get("/api/v1/people").json()["people"]
                        if row["person"] and row["person"]["name"] == "Whiskey Tester")
         picked = post(shared, {"question": "Is @Whiskey Tester doing well?", "level": "people",
                                "mentions": [whiskey["id"]]})
         assert picked["outcome"] == "answered" and picked["people"] == [whiskey]
-
-
-# --- the analyst's scorecard view --------------------------------------------------------------------
 
 
 def test_the_scorecard_view_holds_everyone_with_tickets_and_the_board(demo: Settings) -> None:

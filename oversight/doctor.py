@@ -1,45 +1,4 @@
-"""`python -m oversight doctor` (Phase 0): access, fields and config, read-only.
-
-CONTRACT (ticket 1). Done when: doctor passes and makes
-zero write calls; every status in each in-scope project maps to a stage;
-missing evidence sources are listed by name (they become "not measurable").
-
-run_doctor(client, store, projects=..., process_path=..., fields_path=..., site=...)
-Checks, in this order (a failing check doesn't stop the later ones unless
-they can't run):
-1. "jira auth": client.myself(); detail gives the account zone (timeZone).
-   On JiraAuthError, fail it and skip every other Jira check (report them
-   as failed: "skipped: auth failed").
-2. "process config": ProcessConfig.load(process_path). An in-scope project it
-   does not configure is a warning, not a failure (JO-17): the service maps it
-   from Jira's status categories (oversight/boards.py).
-3. Per project "project <KEY> visible": client.project(key) (a 404 JiraError
-   means not visible); detail says team-managed (simplified/next-gen) or
-   company-managed.
-4. Per project "statuses <KEY> mapped": client.project_statuses(key) gives the
-   status names; every one must map to a stage (case-insensitive). Unmapped
-   names fail the check and are listed. A project process.yaml does not
-   configure is a warning that shows the mapping its status categories give
-   (To Do to backlog, In Progress to development, Done to done), listing any
-   status in no category as unmapped.
-5. "fields": client.fields(), resolved by config.FIELD_CANDIDATES (exact name,
-   case-insensitive; candidates in preference order). When several fields
-   match a logical name (one name repeated, or several candidate names
-   present), prefer the one populated in the in-scope projects: probe with
-   client.search_jql(f'project in ({keys}) AND cf[<n>] is not EMPTY', ["id"],
-   page_size=1) and take the first non-empty result; ties go to preference
-   order. `story_points` is required when any in-scope project's estimate
-   basis is "points"; everything else is optional (missing gives a warning).
-   Build a FieldsConfig (generated_at = to_iso(now), site) and, if
-   write_fields, dump it to fields_path. Not when a required field is
-   missing: sync trusts fields.yaml, so the last good file stays.
-6. "evidence": per project, process.missing_evidence(project). A warning, not a
-   failure: these become "not measurable". Also report which candidate
-   evidence fields (programmer, code_reviewers, testers, test_reviewers) exist
-   and whether any in-scope issue has them set (same one-result probe).
-7. "database": store.query_one("SELECT 1") and the schema version.
-Only allowlisted read calls; tests check that every recorded request is in ALLOWED.
-"""
+"""`python -m oversight doctor` (Phase 0): access, fields and config, read-only."""
 from __future__ import annotations
 
 import re
@@ -97,7 +56,6 @@ class DoctorReport:
         return all(check.ok for check in self.checks if not check.warning)
 
     def render(self) -> str:
-        """One line per check ("[ OK ]", "[WARN]", "[FAIL]" + name + detail), then a verdict line."""
         lines = []
         for check in self.checks:
             # Details built here are one line already; this also holds for hand-made checks.
@@ -119,7 +77,7 @@ def run_doctor(
     write_fields: bool = True,
     now: Callable[[], datetime] = utcnow,
 ) -> DoctorReport:
-    """Run every check and return the report. See the module docstring."""
+    """Run every check and return the report."""
     doctor = _Doctor(client, store, _project_keys(projects), Path(process_path), now)
     doctor.check_auth()
     doctor.check_process()
@@ -154,8 +112,6 @@ class _Doctor:
         self.process: ProcessConfig | None = None
         # Why the remaining Jira checks are skipped, once /myself has failed.
         self.jira_skipped: str | None = None
-        # Projects this account can see: the only keys safe to put in a probe,
-        # since JQL naming an unknown project fails the whole query.
         self.visible: list[str] = []
         # Field id -> whether an in-scope issue has it set; each field is probed once.
         self.populated: dict[str, bool] = {}
@@ -198,9 +154,6 @@ class _Doctor:
             self.failed(name, f"{_error(exc)} (check JIRA_EMAIL, JIRA_API_TOKEN and the account's access)")
             return
         except JiraError as exc:
-            # The contract names only auth errors. Any other failure here (Jira down,
-            # a wrong site, a proxy's login page) would repeat on every later call,
-            # each after its own retries, so those calls are skipped too.
             self.jira_skipped = "Jira unavailable" if isinstance(exc, JiraUnavailable) else "jira auth failed"
             self.failed(name, _error(exc))
             return
@@ -231,15 +184,12 @@ class _Doctor:
             self.failed(name, _error(exc))
             return
         except (OSError, UnicodeDecodeError) as exc:
-            # ProcessConfig.load only translates a missing file; a directory, a
-            # locked file or a UTF-16 save from Notepad lands here.
             self.failed(name, f"cannot read {path}: {_error(exc)}")
             return
         self.process = process
         summary = f"{path.name} version {_clean(process.process_version)}"
         missing = [key for key in self.keys if key not in process.projects]
         if missing:
-            # Not a failure (JO-17): the service maps them from Jira's status categories.
             self.warned(name, f"{summary}; not configured for {', '.join(missing)}: mapped from Jira's status "
                               "categories, with no evidence sources (add them under projects to map them yourself)")
         else:
@@ -289,7 +239,6 @@ class _Doctor:
             return
         project = self.process.projects.get(key)
         if project is None:
-            # Mapped from Jira's status categories (JO-17): shown, so the user can check it or write their own.
             stages = category_stages(self.process)
             categories = _status_categories(payload)
             pairs = [(status, stages.get(categories.get(status.casefold(), ""))) for status in statuses]
@@ -349,8 +298,6 @@ class _Doctor:
         if not write:
             parts.append(f"{path.name} not written")
         elif required:
-            # sync trusts fields.yaml: a required field written as missing would be
-            # blanked on every issue at the next sync, so the last good file stays.
             parts.append(f"{path.name} left unchanged")
         else:
             try:
@@ -408,12 +355,7 @@ class _Doctor:
         return chosen, f"{logical}: {len(matches)} fields match ({listed}); using {used}, {reason}"
 
     def _is_populated(self, field_id: str) -> bool | None:
-        """Whether any issue in the visible in-scope projects has the field set.
-
-        One search returning at most one issue. None when the field can't be
-        probed (not a custom field, or no visible project). A JiraError other
-        than HTTP 400 propagates.
-        """
+        """Whether any issue in the visible in-scope projects has the field set."""
         number = _CUSTOM_FIELD_ID.fullmatch(field_id)
         if number is None or not self.visible:
             return None
@@ -450,7 +392,6 @@ class _Doctor:
         parts: list[str] = []
         for key in self.keys:
             if key not in self.process.projects:
-                # Mapped from Jira's status categories (JO-17): no evidence source at all.
                 missing = self.process.work_stages()[1:]
                 self.report.missing_evidence[key] = missing
                 stages = ", ".join(_clean(stage) for stage in missing)
@@ -655,8 +596,6 @@ def _error(exc: BaseException) -> str:
 
 
 def _printable(text: str) -> str:
-    """Newlines, escape codes and other control characters become spaces, so
-    Jira's text can neither break a report line nor fake one."""
     return "".join(char if char.isprintable() else " " for char in text)
 
 

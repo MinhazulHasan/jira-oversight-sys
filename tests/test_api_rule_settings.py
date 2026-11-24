@@ -1,13 +1,3 @@
-"""Rule settings for admins through the API (JO-15; contract 4.20 to 4.22, and 4.9's GET /rules): a board's settings
-as GET /rules/settings reads them, the preview of a change, which writes nothing, and the save, all three at people
-level only and with the viewer named; the re-check a save starts and the apply state it leaves, read from the runs
-table too, so an API restart keeps it; the board's settings wherever a board-scoped route reads its rules; and every
-body, in every state, against the dashboard's schemas (assert_settings_contract and the others mirror them).
-
-The seeded DEMO board (tests/test_api_ask_insights._seed), a fresh copy for each test, served beside AIL (which has
-synced and holds no data), and a fictional admin as the viewer. The re-check's step runs the rules in this process,
-on the test's copy, as `rules --project KEY` would: no process is started and nothing talks to Jira.
-"""
 from __future__ import annotations
 
 import json
@@ -50,7 +40,7 @@ from tests.test_api_ask_insights import _seed
 from tests.test_api_overview import KEY, is_count, is_number, is_text, is_timestamp, make_settings
 
 NOW = datetime(2026, 11, 4, 14, 30, tzinfo=UTC)  # the seed's clock: its rules run
-SAVED = NOW + timedelta(minutes=5)  # when the tests change the settings, preview them and re-check the board
+SAVED = NOW + timedelta(minutes=5)
 ADMIN = "0123456789abcdef0123456789abcdef"  # a viewer hash, as the dashboard's server makes one
 ADMIN_NAME = "Morgan Reyes"  # a fictional admin
 SETTINGS = "/api/v1/rules/settings?level=people"
@@ -58,11 +48,9 @@ PREVIEW = "/api/v1/rules/settings/preview?level=people"
 CATALOGUE = RulesConfig.load(CONFIG_FIXTURES / "rules.yaml")
 BODY_KEYS = {
     "meta", "project", "revision", "catalogue_version", "updated_at", "updated_by", "apply", "rules", "history",
-    # JO-20: the check registry for the board, custom rules' limit and count, the board's issue types and the AI draft.
     "checks", "custom_limit", "custom_count", "issue_types", "ai_draft",
 }
 INVALID = "rule_settings_invalid"
-# How long a test waits for this process's jobs: they take a second or two, so this only bounds a very busy machine.
 WAIT_S = 120
 
 
@@ -77,8 +65,6 @@ class Clock:
 
 
 def run_the_rules(settings: Settings, projects: Sequence[str], at: datetime) -> None:
-    """The rules step on the settings' snapshot, as the CLI's `rules` runs it (the catalogue, each board's settings
-    read by the engine)."""
     process, fields = ProcessConfig.load(settings.process_file), FieldsConfig.load(settings.fields_file)
     catalogue = RulesConfig.load(settings.rules_file)
     with Store.open(settings.db_file) as store:
@@ -86,9 +72,6 @@ def run_the_rules(settings: Settings, projects: Sequence[str], at: datetime) -> 
 
 
 class Steps:
-    """The steps "Sync now" and the re-check run, here in this process: a rules step runs the rules (on the board
-    `--project` names, else every board) at the clock's time; any other step does nothing. Every call is recorded.
-    hold: each step waits until released; fail: every step fails."""
 
     def __init__(self, settings: Settings, clock: Clock, *, hold: bool = False, fail: bool = False) -> None:
         self.settings = settings
@@ -111,7 +94,6 @@ class Steps:
 
 
 def settle(refresher: Refresher) -> None:
-    """Wait for the jobs this process's refresher runs (a sync, the re-checks) to end, and make sure they did."""
     refresher.wait(WAIT_S)
     for project in ("DEMO", "AIL"):
         assert refresher.status(project)["state"] not in ("queued", "running"), f"{project}'s sync did not end in time"
@@ -131,7 +113,6 @@ def headers(viewer: str | None = ADMIN, name: str | None = ADMIN_NAME) -> dict[s
 def serve(
     settings: Settings, *, clock: Clock | None = None, steps: Steps | None = None
 ) -> tuple[TestClient, Refresher]:
-    """The API over the settings' snapshot, as the admin, with its refresher (a fresh one: as after a restart)."""
     clock = clock or Clock(SAVED)
     refresher = Refresher(runner=steps or Steps(settings, clock), now=clock)
     app = create_app(settings, provider=ScriptedProvider(), now=clock, refresher=refresher)
@@ -143,7 +124,6 @@ def seeded(tmp_path_factory: pytest.TempPathFactory) -> Path:
     settings = make_settings(tmp_path_factory.mktemp("rule_settings_seed"))
     _seed(settings, briefing=False)
     with Store.open(settings.db_file) as store:
-        # AIL has synced and holds nothing: a board-scoped route on a board that never synced is a 409 (JO-17).
         store.set_cursor("AIL", last_synced_at=to_iso(SAVED - timedelta(days=1)), run_id="r-ail",
                          account_timezone=None)
     return settings.db_file
@@ -203,12 +183,8 @@ def rules_of(body: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {rule["rule_id"]: rule for rule in body["rules"]}
 
 
-# --- the dashboard's schemas (src/lib/api/schemas.ts), as assertions -------------------------------------------------
-# ruleSettingsSchema and ruleSettingsPreviewSchema, their refinements included: the dashboard parses every body the
-# service sends against them, so one that fails here would be its 502 upstream_invalid.
-
 PROJECT_KEY = re.compile(r"^[A-Z][A-Z0-9_]{1,19}$")
-RULE_ID = re.compile(r"^[RW]-[A-Z]+-\d{2,3}$")  # JO-20: a custom rule's id too (R-CUS-01, W-CUS-104)
+RULE_ID = re.compile(r"^[RW]-[A-Z]+-\d{2,3}$")
 CHANGE_ID = re.compile(r"^[0-9a-f]{32}$")
 VIEWER_HASH = re.compile(r"^(?:[0-9a-f]{32}|local)$")
 PARAM_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
@@ -227,7 +203,6 @@ DEFINITION_KEYS = {"title", "description", "check", "params", "applies_to", "sev
 SEVERITIES = ("breach", "warning")
 NAME_MAX = 128  # PERSON_NAME_MAX
 SHOWN_MAX = 300  # the longest message of the service's the dashboard passes on
-# A new rule's problem's field (JO-20): its create's place in the body, then the rule's field (live.ts CHANGE_PLACE).
 NEW_RULE_PLACE = re.compile(r"^changes\.\d{1,3}\.rule(?:\.[a-z_]{1,40}(?:\.[a-z][a-z0-9_]{0,39})?)?$")
 
 
@@ -247,7 +222,6 @@ def assert_settings_contract(body: dict[str, Any], project: str = "DEMO") -> Non
     assert is_count(body["revision"]) and is_text(body["catalogue_version"])
     assert body["updated_at"] is None or is_timestamp(body["updated_at"])
     assert body["updated_by"] is None or (is_text(body["updated_by"]) and len(body["updated_by"]) <= NAME_MAX)
-    # When and by whom exactly when the settings were changed.
     assert (body["revision"] == 0) == (body["updated_at"] is None) == (body["updated_by"] is None)
     apply = body["apply"]
     assert set(apply) == {"state", "applied_revision", "started_at", "finished_at", "message", "result"}
@@ -256,7 +230,6 @@ def assert_settings_contract(body: dict[str, Any], project: str = "DEMO") -> Non
     assert apply["message"] is None or is_text(apply["message"])
     result = apply["result"]
     assert result is None or (set(result) == {"opened", "closed"} and all(is_count(n) for n in result.values()))
-    # Applied only once the revision has been reached, pending only before.
     assert not (apply["state"] == "applied" and apply["applied_revision"] < body["revision"])
     assert not (apply["state"] == "pending" and apply["applied_revision"] >= body["revision"])
     ids = [rule["rule_id"] for rule in body["rules"]]
@@ -274,7 +247,6 @@ def assert_settings_contract(body: dict[str, Any], project: str = "DEMO") -> Non
         categories, types = rule["applies_to"]["status_category"], rule["applies_to"]["issue_type"]
         assert all(category in CATEGORIES for category in categories) and (rule["scope"] == "sprint") == (not categories)
         assert types is None or (types and all(is_text(name) for name in types))
-        # When and by whom exactly for a custom rule.
         assert (rule["created_at"] is not None) == (rule["created_by"] is not None) == rule["custom"]
         assert rule["created_at"] is None or is_timestamp(rule["created_at"])
         assert rule["created_by"] is None or (is_text(rule["created_by"]) and len(rule["created_by"]) <= NAME_MAX)
@@ -287,12 +259,11 @@ def assert_settings_contract(body: dict[str, Any], project: str = "DEMO") -> Non
                 assert param["unit"] in ("ratio", "hours", "percentile", "days", "share") and param["options"] is None
                 assert all(is_number(param[key]) for key in ("value", "default", "min", "max", "step"))
                 assert param["step"] > 0 and param["min"] <= param["max"]
-            else:  # a custom rule's statuses, stage, evidence or field: one of the board's options
+            else:
                 assert rule["custom"] and all(param[key] is None for key in ("unit", "min", "max", "step"))
                 values = [option["value"] for option in param["options"]]
                 chosen = param["value"] if param["kind"] == "statuses" else [param["value"]]
                 assert chosen and set(chosen) <= set(values) and param["default"] == param["value"]
-        # Customised says exactly whether anything of it differs from the catalogue's (a custom rule's: as created).
         differs = (rule["enabled"] != rule["default_enabled"] or rule["severity"] != rule["default_severity"]
                    or any(param["value"] != param["default"] for param in rule["params"]))
         assert rule["customised"] == differs, rule["rule_id"]
@@ -331,14 +302,12 @@ def assert_settings_contract(body: dict[str, Any], project: str = "DEMO") -> Non
                     assert value is None or is_text(value)
                 elif change["field"] == "applies_to":
                     assert set(value) == {"status_category", "issue_type"}
-                else:  # a param: a number, a custom rule's statuses (names), stage, evidence or field
+                else:
                     assert is_number(value) or is_text(value) or (
                         isinstance(value, list) and value and all(is_text(name) for name in value))
 
 
 def assert_checks(checks: list[dict[str, Any]]) -> None:
-    """The check registry as the dashboard parses it: each check once, its params with their kinds and the board's
-    options, its categories within the three and its default ones among them."""
     names = [check["name"] for check in checks]
     assert names and len(names) == len(set(names))
     for check in checks:
@@ -359,7 +328,6 @@ def assert_checks(checks: list[dict[str, Any]]) -> None:
 
 
 def assert_preview_contract(body: dict[str, Any], project: str = "DEMO") -> None:
-    """ruleSettingsPreviewSchema: POST /rules/settings/preview."""
     assert set(body) == {"meta", "project", "revision", "impact", "totals"} and body["project"] == project
     assert_meta(body["meta"])
     assert is_count(body["revision"])
@@ -380,9 +348,6 @@ def assert_preview_contract(body: dict[str, Any], project: str = "DEMO") -> None
 
 
 def assert_refusal_contract(response: Any, status: int, code: str) -> None:
-    """A refusal: {detail, code}, and for a 422 each problem {rule_id, field, message}, its message plain enough for the
-    dashboard to pass on (one line, at most 300 characters). A field is at most 40 characters, or (a new rule's, JO-20:
-    it has no id yet) its place in the body, "changes.<index>.rule" and the rule's field (live.ts maps it)."""
     assert response.status_code == status and response.headers["cache-control"] == "no-store"
     body = response.json()
     assert body["code"] == code and is_text(body["detail"])
@@ -399,9 +364,6 @@ def assert_refusal_contract(response: Any, status: int, code: str) -> None:
         assert is_text(error["message"]) and "\n" not in error["message"] and len(error["message"]) <= SHOWN_MAX
 
 
-# --- reading a board's settings ---------------------------------------------------------------------------------
-
-
 def test_a_board_nobody_changed_lists_every_rule_as_rules_yaml_has_it(board: Settings) -> None:
     client, _ = serve(board)
     response = client.get(SETTINGS)
@@ -411,7 +373,6 @@ def test_a_board_nobody_changed_lists_every_rule_as_rules_yaml_has_it(board: Set
     assert (body["project"], body["revision"], body["catalogue_version"], body["updated_at"], body["updated_by"]) == (
         "DEMO", 0, "0.1.0", None, None)
     assert body["history"] == [] and body["meta"]["rules_version"] == "0.1.0" and body["meta"]["projects"] == ["DEMO"]
-    # The seed's rules run applied revision 0: the board had no settings, and still has none.
     assert body["apply"] == {"state": "applied", "applied_revision": 0, "started_at": None, "finished_at": None,
                              "message": None, "result": None}
     assert [rule["rule_id"] for rule in body["rules"]] == [rule.id for rule in CATALOGUE.rules]  # off or on, in order
@@ -424,7 +385,6 @@ def test_a_board_nobody_changed_lists_every_rule_as_rules_yaml_has_it(board: Set
         "params": [{"name": "threshold", "label": "Effort ratio", "kind": "number", "unit": "ratio", "value": 1.5,
                     "default": 1.5, "min": 0.1, "max": 10.0, "step": 0.05, "options": None}],
         "customised": False, "measurable": True, "missing_evidence": [], "open": open_now["R-EFF-01"],
-        # JO-20: every rule says whether an admin added it, its check's label and what it applies to.
         "custom": False, "check_label": "Effort over estimate",
         "applies_to": {"status_category": ["done"], "issue_type": None}, "created_at": None, "created_by": None,
     }
@@ -485,9 +445,6 @@ def test_a_body_is_read_in_one_snapshot_so_a_save_landing_part_way_never_shows_h
         conn.close()
 
 
-# --- the preview --------------------------------------------------------------------------------------------------
-
-
 def test_a_preview_says_what_a_change_would_do_and_writes_nothing(board: Settings) -> None:
     client, _ = serve(board)
     before, open_now = everything(board), open_by_rule(board)
@@ -507,20 +464,16 @@ def test_a_preview_says_what_a_change_would_do_and_writes_nothing(board: Setting
     assert (body["project"], body["revision"], body["meta"]["rules_version"]) == ("DEMO", 0, "0.1.0")
     assert [item["rule_id"] for item in body["impact"]] == ["R-EFF-01", "R-FLOW-01", "R-FLOW-03", "R-HYG-01"]
     effort, flow, reopened, hygiene = body["impact"]
-    # A threshold raised: the findings under it close (settings_changed), the rest stay, the same ids.
     assert effort == {
         "rule_id": "R-EFF-01", "measurable": True, "open_now": open_now["R-EFF-01"], "would_open": 0,
         "would_close": len(closing), "would_stay": open_now["R-EFF-01"] - len(closing),
         "examples": {"open": [], "close": closing[:5]}, "note": None,
     }
-    # Not measurable on DEMO: nothing to change until it can run.
     assert flow == {"rule_id": "R-FLOW-01", "measurable": False, "open_now": 0, "would_open": 0, "would_close": 0,
                     "would_stay": 0, "examples": {"open": [], "close": []}, "note": NOT_MEASURABLE_NOTE}
-    # A severity change: every open finding closes (superseded) and each current hit opens under a new id.
     assert (reopened["open_now"], reopened["would_open"], reopened["would_close"], reopened["would_stay"]) == (
         open_now["R-FLOW-03"], open_now["R-FLOW-03"], open_now["R-FLOW-03"], 0)
     assert reopened["examples"]["open"] == reopened["examples"]["close"] and len(reopened["examples"]["open"]) == 5
-    # Turned off: every open finding closes.
     assert (hygiene["open_now"], hygiene["would_open"], hygiene["would_close"], hygiene["would_stay"]) == (
         open_now["R-HYG-01"], 0, open_now["R-HYG-01"], 0)
     assert body["totals"] == {
@@ -535,25 +488,21 @@ def test_a_preview_reads_the_change_as_a_save_would_and_refuses_it_the_same_way(
     steps = Steps(board, clock, hold=True)
     client, refresher = serve(board, clock=clock, steps=steps)
     save(client, {"rule_id": "R-EFF-01", "params": {"threshold": 2.0}})
-    # Against the board's settings now: the threshold is 2 already, so this changes nothing.
     response = client.post(PREVIEW, json={"changes": [{"rule_id": "R-EFF-01", "params": {"threshold": 2}}]})
     assert (response.status_code, response.json()["code"]) == (422, INVALID)
     assert response.json()["errors"] == [
         {"rule_id": "R-EFF-01", "field": None, "message": "R-EFF-01 already has these settings on this board."}]
-    # Back to rules.yaml's, before the re-check has run: every open finding is still a hit, under its own id.
     reset = client.post(PREVIEW, json={"changes": [{"rule_id": "R-EFF-01", "reset": True}], "revision": 1})
     assert reset.status_code == 200 and reset.json()["revision"] == 1
     [effort] = reset.json()["impact"]
     assert (effort["rule_id"], effort["would_open"], effort["would_close"], effort["would_stay"]) == (
         "R-EFF-01", 0, 0, open_by_rule(board)["R-EFF-01"])
-    # Once the re-check has closed those under 2, going back would reopen exactly them, under their own ids.
     steps.release.set()
     settle(refresher)
     [back] = client.post(PREVIEW, json={"changes": [{"rule_id": "R-EFF-01", "reset": True}]}).json()["impact"]
     assert (back["would_open"], back["would_close"]) == (len(query(
         board, "SELECT 1 FROM findings WHERE rule_id = 'R-EFF-01' AND resolved_why = 'settings_changed'")), 0)
     assert back["examples"]["open"] and back["examples"]["close"] == []
-    # A body's shape is checked first; its changes once it is one.
     assert client.post(PREVIEW, json={"changes": [], "reason": "x"}).json()["errors"] == [
         {"rule_id": None, "field": "reason", "message": "reason is not something this request takes."}]
     assert client.post(PREVIEW, json={"changes": []}).json()["errors"] == [
@@ -561,9 +510,6 @@ def test_a_preview_reads_the_change_as_a_save_would_and_refuses_it_the_same_way(
 
 
 def test_a_preview_after_a_failed_recheck_says_what_the_next_recheck_does(board: Settings) -> None:
-    """A save whose re-check failed (or never ran: the API restarted) leaves the findings on the earlier settings, and
-    the re-check after the next save applies every saved setting: the preview of an unrelated change says so, the
-    earlier change's rule with its note, and the chip's result then matches it."""
     clock = Clock(SAVED)
     client, refresher = serve(board, clock=clock, steps=Steps(board, clock, fail=True))
     save(client, {"rule_id": "R-EFF-01", "params": {"threshold": 2}})
@@ -586,9 +532,6 @@ def test_a_preview_after_a_failed_recheck_says_what_the_next_recheck_does(board:
     assert result["closed"] == len(closing) + open_now["R-HYG-01"]
 
 
-# --- saving -----------------------------------------------------------------------------------------------------
-
-
 def test_a_save_records_the_change_rechecks_the_board_as_previewed_and_answers_with_its_settings(
     board: Settings,
 ) -> None:
@@ -607,7 +550,6 @@ def test_a_save_records_the_change_rechecks_the_board_as_previewed_and_answers_w
     body, at = response.json(), to_iso(SAVED)
     assert set(body) == BODY_KEYS
     assert (body["revision"], body["updated_at"], body["updated_by"]) == (1, at, ADMIN_NAME)
-    # The re-check is queued or running in this process, so the board's findings are not yet the new settings'.
     assert body["apply"] == {"state": "running", "applied_revision": 0, "started_at": at, "finished_at": None,
                              "message": None, "result": None}
     [change] = body["history"]
@@ -623,7 +565,6 @@ def test_a_save_records_the_change_rechecks_the_board_as_previewed_and_answers_w
     assert [rule_id for rule_id, rule in found.items() if rule["customised"]] == ["R-EFF-01", "W-AGE-01"]
     assert query(board, "SELECT rule_id, enabled, severity, params_json FROM rule_settings ORDER BY rule_id") == [
         ("R-EFF-01", None, None, '{"threshold":2.0}'), ("W-AGE-01", 0, None, None)]
-    # One line in the app log: the board, the revision, the rules and the fields; no name, no reason, no value.
     assert [event for event in events if event["event"] == "rule_settings_saved"] == [{
         "event": "rule_settings_saved", "project": "DEMO", "revision": 1, "rules": ["R-EFF-01", "W-AGE-01"],
         "fields": ["enabled", "params.threshold"], "logger": "api", "log_level": "info",
@@ -635,7 +576,6 @@ def test_a_save_records_the_change_rechecks_the_board_as_previewed_and_answers_w
     settle(refresher)
     assert steps.calls == [("rules", "--project", "DEMO")]  # the one board's rules, and no sync
     after = client.get(SETTINGS).json()
-    # The re-check did what the preview said.
     assert after["apply"] == {"state": "applied", "applied_revision": 1, "started_at": at, "finished_at": at,
                               "message": None, "result": {"opened": previewed["would_open"],
                                                           "closed": previewed["would_close"]}}
@@ -733,7 +673,6 @@ def test_a_bad_body_or_change_set_is_refused_whole_naming_each_problem(
     refused = response.json()
     assert refused["code"] == INVALID
     assert [(error["rule_id"], error["field"], error["message"]) for error in refused["errors"]] == errors
-    # The detail says each problem in plain words, naming the rule where the message does not.
     for rule_id, _field, message in errors:
         assert message in refused["detail"]
         if rule_id is not None:
@@ -757,7 +696,6 @@ def test_a_save_while_a_rules_run_holds_the_write_lock_is_busy_and_writes_nothin
 ) -> None:
     monkeypatch.setattr(rule_settings_module, "WRITE_WAIT_MS", 50)
     client, _ = serve(board)
-    # The access log's daily purge rides on the first request (and would wait for the lock too): it is done now.
     assert client.get(SETTINGS).status_code == 200
     holder = sqlite3.connect(board.db_file, isolation_level=None)
     try:
@@ -794,8 +732,6 @@ def test_an_undo_puts_the_settings_back_and_names_the_change_it_undid(board: Set
 
 
 def test_an_undo_must_undo_the_boards_latest_change_exactly(board: Settings) -> None:
-    """The history says a change was undone only when it no longer applies: an undo naming another board's change, or
-    putting back something else than the change it names, is refused and nothing is written."""
     client, refresher = serve(board)
     elsewhere = client.post(f"{SETTINGS}&project=AIL", json={"revision": 0, "changes": [
         {"rule_id": "R-HYG-01", "enabled": False}]})
@@ -821,9 +757,6 @@ def test_an_undo_must_undo_the_boards_latest_change_exactly(board: Settings) -> 
     settle(refresher)
 
 
-# --- the apply state ------------------------------------------------------------------------------------------
-
-
 def test_the_apply_state_follows_the_recheck_and_survives_a_restart(board: Settings) -> None:
     clock = Clock(SAVED)
     client, refresher = serve(board, clock=clock)
@@ -834,11 +767,9 @@ def test_the_apply_state_follows_the_recheck_and_survives_a_restart(board: Setti
     assert (applied["state"], applied["applied_revision"], applied["result"]) == (
         "applied", 1, {"opened": 0, "closed": unassigned})
 
-    # After a restart the state comes from the runs table: the same answer.
     restarted, _ = serve(board, clock=clock)
     assert restarted.get(SETTINGS).json()["apply"] == applied
 
-    # A re-check that fails says so, and that the next sync applies the settings.
     clock.at = SAVED + timedelta(minutes=10)
     failing = Steps(board, clock, fail=True)
     client, refresher = serve(board, clock=clock, steps=failing)
@@ -848,18 +779,15 @@ def test_the_apply_state_follows_the_recheck_and_survives_a_restart(board: Setti
     at = to_iso(clock())
     assert failed == {
         "state": "failed", "applied_revision": 1, "started_at": at, "finished_at": at,
-        # The board by its name, as the page names it, never its key (18 Nov 2026).
         "message": "Couldn't re-check Demo project's findings with the new settings: the rules run failed. "
                    "They will apply at the next sync.",
         "result": None,
     }
-    # Another API process (or this one, restarted) knows nothing of that re-check: the settings wait for a run.
     restarted, _ = serve(board, clock=clock)
     assert restarted.get(SETTINGS).json()["apply"] == {
         "state": "pending", "applied_revision": 1, "started_at": None, "finished_at": None,
         "message": PENDING_MESSAGE, "result": None}
 
-    # The next sync's rules step (the scheduled cycle, another process) applies them.
     clock.at = SAVED + timedelta(minutes=20)
     run_the_rules(board, ["DEMO", "AIL"], clock())
     for reader in (client, restarted):
@@ -880,8 +808,6 @@ def record_run(
 
 
 def applied_state(settings: Settings, revision: int, saved_at: datetime = SAVED) -> dict[str, Any]:
-    """The board's apply state, read as GET /rules/settings reads it, for its settings at `revision` saved at
-    `saved_at`, with no re-check in this process."""
     conn = open_readonly(settings.db_file)
     try:
         return apply_state(conn, "DEMO", revision, None, saved_at=to_iso(saved_at))
@@ -890,14 +816,10 @@ def applied_state(settings: Settings, revision: int, saved_at: datetime = SAVED)
 
 
 def test_the_applied_revision_is_the_highest_the_boards_latest_runs_applied(board: Settings) -> None:
-    """A run reads the board's settings inside its write transaction for the board, and revisions only grow, so the
-    findings show the highest revision a run applied, whichever run started last: a cycle that started first but
-    reached the board after a re-check did, or two runs started at the same moment."""
     record_run(board, SAVED + timedelta(minutes=1), 3, minutes=30)  # the cycle: it reached DEMO after the save of 3
     record_run(board, SAVED + timedelta(minutes=2), 2)  # a re-check of revision 2, started later, done sooner
     found = applied_state(board, 3)
     assert (found["state"], found["applied_revision"]) == ("applied", 3)
-    # The first run that applied revision 3 says when, and what it did.
     assert (found["started_at"], found["result"]) == (to_iso(SAVED + timedelta(minutes=1)), {"opened": 3, "closed": 1})
 
     for revision in (5, 4):  # two runs started at the same moment
@@ -910,7 +832,6 @@ def test_the_applied_revision_is_the_highest_the_boards_latest_runs_applied(boar
 
 
 def vm_steps(settings: Settings, read: Callable[[sqlite3.Connection], object]) -> int:
-    """How much work SQLite does for `read` on a read-only connection, in hundreds of its virtual machine's steps."""
     conn = open_readonly(settings.db_file)
     steps = 0
 
@@ -928,15 +849,11 @@ def vm_steps(settings: Settings, read: Callable[[sqlite3.Connection], object]) -
 
 
 def test_the_apply_state_reads_the_boards_latest_runs_alone_however_long_its_history(board: Settings) -> None:
-    """GET /rules/settings, and every save's answer, read the board's latest RECENT_RUNS succeeded rules runs and no
-    more, so a year of a 15-minute cycle costs what a day does. The run that first applied the revision is said while
-    it is among them; once every run read applied it, what the first one did is no longer known (null), never another
-    run's figures in its place."""
     def read(conn: sqlite3.Connection) -> None:
         apply_state(conn, "DEMO", 1, None, saved_at=to_iso(SAVED))
 
     record_run(board, SAVED + timedelta(minutes=1), 1)  # the re-check after the save of revision 1
-    for minutes in range(2, RECENT_RUNS):  # the next cycles: the seed's run is the oldest read, the re-check the next
+    for minutes in range(2, RECENT_RUNS):
         record_run(board, SAVED + timedelta(minutes=minutes), 1)
     found = applied_state(board, 1)
     assert (found["state"], found["started_at"], found["result"]) == (
@@ -947,7 +864,6 @@ def test_the_apply_state_reads_the_boards_latest_runs_alone_however_long_its_his
             unknown["result"]) == ("applied", 1, None, None, None)
     a_day = vm_steps(board, read)
 
-    # A year of runs more before them: the answer, and the work done for it, stay the same.
     first = NOW - timedelta(minutes=15)
     with Store.open(board.db_file) as store, store.transaction():
         store.conn.executemany(
@@ -973,16 +889,11 @@ def test_a_recheck_asked_for_during_a_sync_runs_right_after_it(board: Settings) 
     assert set(sync) == {"project", "state", "started_at", "finished_at", "message"} and sync["state"] == "running"
     steps.release.set()
     settle(refresher)
-    # Never two jobs at once: the board's sync (its steps, JO-18, and its baseline when it has none), then the board's
-    # re-check.
     assert steps.calls == [("sync", "--incremental", "--project", "DEMO"), ("derive", "--project", "DEMO"),
                            ("rules", "--project", "DEMO"), ("baseline", "--missing", "--project", "DEMO"),
                            ("rules", "--project", "DEMO")]
     assert client.get("/api/v1/refresh").json()["state"] == "succeeded"
     assert client.get(SETTINGS).json()["apply"]["state"] == "applied"
-
-
-# --- the board's settings everywhere --------------------------------------------------------------------------
 
 
 def test_get_rules_lists_every_rule_on_or_off_as_the_board_has_it(board: Settings) -> None:
@@ -1004,7 +915,6 @@ def test_get_rules_lists_every_rule_on_or_off_as_the_board_has_it(board: Setting
     unchanged = [rule for rule_id, rule in found.items() if rule_id not in changed]
     assert all(rule["enabled"] and not rule["customised"] for rule in unchanged)
     assert {rule["version"] for rule in body["rules"]} == {"0.1.0"} and body["meta"]["rules_version"] == "0.1.0"
-    # Another board keeps rules.yaml's settings.
     other = rules_of(client.get("/api/v1/rules?project=AIL").json())
     assert all(rule["enabled"] and not rule["customised"] for rule in other.values())
     assert other["R-EFF-01"]["threshold"] == "1.5×"
@@ -1019,7 +929,6 @@ def test_the_boards_settings_reach_every_route_that_reads_its_rules(board: Setti
     save(client, {"rule_id": "R-EFF-01", "params": {"threshold": 2}}, {"rule_id": "W-AGE-01", "enabled": False})
     settle(refresher)
 
-    # Findings: a finding the new threshold closed says why; one still over it carries the board's threshold.
     resolved = client.get("/api/v1/findings?state=resolved&rule=R-EFF-01&page_size=100").json()["items"]
     assert {finding["resolved_why"] for finding in resolved} == {"settings_changed"}
     assert {finding["issue_key"] for finding in resolved} == set(closing)
@@ -1028,11 +937,9 @@ def test_the_boards_settings_reach_every_route_that_reads_its_rules(board: Setti
     assert {finding["threshold"] for finding in still} == {"2×"}
     drawer = client.get(f"/api/v1/findings/{resolved[0]['finding_id']}").json()["finding"]
     assert (drawer["state"], drawer["resolved_why"]) == ("resolved", "settings_changed")
-    # The Issue page's effort threshold, and the Overview's rules: W-AGE-01 is off on the board.
     assert client.get(f"/api/v1/issues/{kept[0]}/timeline").json()["issue"]["effort_threshold"] == 2.0
     overview = client.get("/api/v1/overview").json()
     assert "W-AGE-01" not in {rule["rule_id"] for rule in overview["by_rule"]}
-    # Ask's rule status, at the board's settings too.
     asked = client.post("/api/v1/ask", json={"question": "Which rules can't be measured in Jira today?"}).json()
     status = [fact for fact in asked["facts"] if fact["tool"] == "oversight_rule_status"]
     listed = {row["rule_id"] for fact in status for row in fact["rows"]}
@@ -1042,10 +949,6 @@ def test_the_boards_settings_reach_every_route_that_reads_its_rules(board: Setti
 def test_a_change_of_rule_settings_is_neither_new_nor_resolved_work_on_the_overview_or_the_portfolio(
     board: Settings,
 ) -> None:
-    """The Overview's "New this week" and "Resolved this week", and the Portfolio's figures (the same totals), count
-    what happened to the work. A severity changed on the board raises the rule's findings again under new ids, a rule
-    turned off and a threshold raised close findings as settings_changed: none of it is new work, and none of it a
-    fix."""
     clock = Clock(NOW + timedelta(days=8))  # the seed's findings were first seen more than a week ago
     run_the_rules(board, ["DEMO"], clock())  # the board as of then, its settings untouched
     client, refresher = serve(board, clock=clock)
@@ -1067,7 +970,6 @@ def test_a_change_of_rule_settings_is_neither_new_nor_resolved_work_on_the_overv
 
     after = tiles()
     assert (after["new_7d"], after["resolved_7d"]) == (before["new_7d"], before["resolved_7d"])
-    # The findings did change: R-FLOW-03's are breaches now, and R-FLOW-02's and some of R-EFF-01's are closed.
     assert after["open_warnings"] == before["open_warnings"] - open_now["R-FLOW-03"]
     assert after["open_breaches"] == (before["open_breaches"] + open_now["R-FLOW-03"] - open_now["R-FLOW-02"]
                                       - open_now["R-EFF-01"] + raised)
@@ -1077,8 +979,6 @@ def test_a_change_of_rule_settings_is_neither_new_nor_resolved_work_on_the_overv
 
 
 def test_a_closed_finding_says_the_threshold_it_was_found_under(board: Settings) -> None:
-    """A finding the board's settings closed still says the threshold it crossed, whatever the board's is now: the
-    evidence records it. One still open says the board's new threshold."""
     client, refresher = serve(board)
     save(client, {"rule_id": "R-EST-02", "params": {"grace_hours": 24}},
          {"rule_id": "W-SPR-01", "params": {"days_left": 0, "not_started_share": 0.95}})
@@ -1099,9 +999,6 @@ def test_a_closed_finding_says_the_threshold_it_was_found_under(board: Settings)
 def test_a_rule_rules_yaml_has_off_holds_no_findings_once_the_board_turns_it_on_and_off_again(
     board: Settings, tmp_path: Path
 ) -> None:
-    """rules.yaml with R-HYG-01 off: its findings from before are left as they were while the board never touched it.
-    Turned on by the board, it is customised; turned off again it is rules.yaml's once more (no row is kept), and its
-    findings, the board's doing, close as settings_changed: a rule that is off holds no open findings (contract 4.9)."""
     config = tmp_path / "config"
     shutil.copytree(CONFIG_FIXTURES, config)
     rules_yaml = config / "rules.yaml"
@@ -1135,16 +1032,9 @@ def test_a_rule_rules_yaml_has_off_holds_no_findings_once_the_board_turns_it_on_
     assert (listed["enabled"], listed["customised"], listed["open"]) == (False, False, 0)
 
 
-# --- the dashboard's contract, in every state -------------------------------------------------------------------
-
-
 def test_every_body_keeps_the_dashboards_contract_in_every_state(
     board: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every body the service sends for contract 4.20 to 4.22, as the dashboard parses it (assert_settings_contract and
-    assert_preview_contract mirror its schemas, refinements included): a board never changed and one with no data;
-    previews; a save while its re-check runs, applied by it, failed, pending after a restart and applied by a cycle
-    run; an undo; and each refusal (422, 409, 503), a board that never synced (409 board_not_synced, JO-17) too."""
     clock = Clock(SAVED)
     steps = Steps(board, clock, hold=True)
     client, refresher = serve(board, clock=clock, steps=steps)

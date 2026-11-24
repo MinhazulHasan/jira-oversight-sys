@@ -1,4 +1,4 @@
-"""`python -m oversight backup` (oversight/backup.py): a consistent, self-contained copy; only its own backups pruned."""
+"""`python -m oversight backup` (oversight/backup.py)"""
 from __future__ import annotations
 
 import sqlite3
@@ -24,7 +24,7 @@ NOW = datetime(2026, 11, 12, 14, 30, 5, tzinfo=UTC)
 
 
 def seed(db_file: Path, rows: int = 250) -> Store:
-    """A snapshot at this version's schema with rows still in its WAL; the store is left open, as the API's is."""
+    """A snapshot at this version's schema with rows still in its WAL"""
     store = Store.open(db_file)
     store.conn.execute("CREATE TABLE extra (n INTEGER NOT NULL)")
     store.conn.executemany("INSERT INTO extra (n) VALUES (?)", [(n,) for n in range(rows)])
@@ -60,14 +60,11 @@ def test_the_copy_is_the_whole_snapshot_in_one_self_contained_file(settings: Set
     assert result.removed == ()
     assert count(result.path, "SELECT COUNT(*) FROM extra") == 250
     assert count(result.path, "PRAGMA user_version") == SCHEMA_VERSION
-    # Journal mode DELETE in the header (bytes 18 and 19 are 2 in WAL mode), and nothing beside the file.
     assert result.path.read_bytes()[18:20] == b"\x01\x01"
     assert sorted(p.name for p in settings.backups_path.iterdir()) == [result.path.name]
 
 
 def test_a_backup_holds_each_boards_rule_settings_and_their_history(settings: Settings) -> None:
-    """JO-15: rule settings live only in the snapshot, so the backup is what keeps them (docs/DEPLOYMENT.md, section
-    8): the board's rows and every change, with who made it, restored as they were."""
     store = seed(settings.db_file, rows=1)
     try:
         catalogue = RulesConfig.load(CONFIG_FIXTURES / "rules.yaml")
@@ -91,14 +88,10 @@ def test_a_backup_holds_each_boards_rule_settings_and_their_history(settings: Se
 
 
 GUIDE = Path(__file__).resolve().parent.parent / "docs" / "DEPLOYMENT.md"
-# The guide is kept out of git (.gitignore): a fresh clone has none, and its steps are then not checked.
 NO_GUIDE = "docs/DEPLOYMENT.md is local only, not on this machine"
 
 
 def test_the_guides_restore_keeps_the_chosen_backup_and_the_live_snapshot_until_the_swap(settings: Settings) -> None:
-    # Regression: the guide's step 2 (a safety backup) pruned the oldest backup, which step 3 then could not copy,
-    # after it had already deleted the live snapshot: no snapshot at all. The steps, in the guide's order, here.
-    # Where this machine has the guide, its text is checked too; the steps themselves always run.
     if GUIDE.exists():
         text = GUIDE.read_text(encoding="utf-8")
         restore = text[text.index("4. **Restore.**"):text.index("5. Test a restore")]
@@ -125,8 +118,6 @@ def test_the_guides_restore_keeps_the_chosen_backup_and_the_live_snapshot_until_
 
 @pytest.mark.skipif(not GUIDE.exists(), reason=NO_GUIDE)
 def test_the_guides_rollback_puts_back_the_config_the_old_release_reads() -> None:
-    # Regression: the rollback changed only the images, while the backend reads config/ from the folder, which the
-    # upgrade had replaced with settings the older release refuses.
     text = GUIDE.read_text(encoding="utf-8")
     upgrades = text[text.index("## 9. Upgrades"):text.index("## 10. Monitoring")]
     assert upgrades.index('cp -a config "config.') < upgrades.index("dc build")

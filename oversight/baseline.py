@@ -1,95 +1,4 @@
-"""`python -m oversight baseline` (Phase 2): a board's baseline report, from code.
-
-How the board's work went over a window (by default the 90 days to today):
-what was resolved and how it was estimated, time in each status, cycle time,
-reopens, worklogs, evidence and links. With --compare it also reproduces the
-reference audit (config/baseline_expected.yaml: the read-only audit of AIL to
-2 Nov 2026) and explains each difference. With --missing it writes a report
-only for the boards that have none yet: the scheduled cycle and each board's
-"Sync now" run it, so every synced board has a baseline (18 Nov 2026).
-
-Every note the report writes is plain words for its readers: the reference is
-"the reference audit", never a ticket number or a prototype phase (go-live,
-18 Nov 2026). comparison_note() words a comparison row's note, for this module
-and for the API, which words a report an older version wrote the same way.
-
-run_baseline(store, process, project=..., as_of=..., window_days=..., tz_name=..., out_dir=...)
-Window: [local_midnight(as_of - window_days), local_midnight(as_of)) in tz_name.
-For the reference audit that is 2026-08-04 to 2026-11-02 in America/Chicago;
-read-only JQL on 4 Nov reproduced 291 / 192 / 0 / 46 with exactly that window.
-Reads only the database (issues, status_changes, worklogs, links,
-status_intervals, issue_metrics, sync_state). Needs `derive` to have run: if
-the project has issues but no issue_metrics rows, raise ConfigError telling
-the user to run `python -m oversight derive`.
-
-Figures (the JSON "figures" object; Markdown sections in the same order):
-- snapshot: last_synced_at, total_issues, created_before_window_end, by_type,
-  by_status, by_status_category.
-- resolved (resolved_at in the window): in_window; with_original_estimate,
-  with_story_points (story_points > 0), each with count and share;
-  with_logged_time as variants {timespent: time_spent_s > 0, aggregate:
-  aggregate_time_spent_s > 0, worklog_rows: has at least one worklog row};
-  straight_todo_to_done: issues with at least one status change straight from
-  a status in the first ordered stage (process.ordered_stages(project)[0];
-  AIL: To Do) to a done_stage status. This matches JQL `status CHANGED FROM
-  "To Do" TO "Done"`. Also created_in_done: no status changes, created in a
-  done status. Also done_entered_in_window: issue_metrics.done_at in the window
-  (an alternative to resolutiondate).
-- estimates (resolved in the window): hours per point (time_spent_s / 3600 /
-  story_points) median, p25 and p75 over issues with both values; the share
-  within ±25% of hours_per_point; estimate_set_after_start: count and share of
-  issues with an estimate and started_at where estimate_set_at > started_at
-  (a preview of the R-EST-02 pattern, not a finding).
-- time_in_status: per status, n, median, p75 and p90 hours over closed
-  intervals (left_at set) that ended in the window.
-- cycle_time (resolved in the window, cycle_time_h set): n, median, p75, p90.
-- reopens: resolved-in-window issues with reopen_count > 0.
-- worklogs on resolved-in-window issues: count, total_hours, and the share of
-  seconds by the single most common author account. Print no account ids or
-  names: team and process level only. If expected.tempo_account_id is given,
-  also tempo_share (seconds and count).
-- evidence: process.missing_evidence(project), reported as "not measurable".
-- issue_links: issues with at least one issue link, counts by link title
-  (direction text), remote link count, and remote links by host (domain only).
-
-Comparison (only when `expected` is given and its project, as_of and
-window_days match this run): one row per key in expected.expected:
-total_issues vs created_before_window_end; resolved_in_window;
-with_original_estimate; with_story_points; with_logged_time vs the timespent
-variant (the note lists the other variants); straight_todo_to_done. Each row
-has metric, expected, actual, match and a note. For a mismatch, the note gives
-known reasons; for total_issues: "the reference audit counted during 2 Nov;
-this window ends at midnight before it".
-
-Outputs: out_dir/baseline_{project}_{as_of}.md (readable by Tazbir and James:
-plain headings, tables, team-level only) and .json (figures, comparison,
-metadata: generated_at, window, zone, process_version, last sync). Record a
-run (kind "baseline") with the output paths.
-
-Where the contract leaves a choice:
-- Shares are fractions (0.25, not 25%), and None when the whole is 0. In
-  `resolved` and `reopens` the whole is the issues resolved in the window;
-  elsewhere it is given beside the share ("n" or "of"), or it is the worklogs
-  and their seconds. Figures built on derived rows (status intervals,
-  issue_metrics) leave out issues that derive skipped.
-- with_original_estimate counts original_estimate_s > 0: as with story
-  points, 0 is no estimate (oversight.derive.metrics.has_estimate_value).
-- Hours per point uses the issues with story_points > 0 and time_spent_s > 0;
-  "within ±25%" includes both edges (6 and 10 hours at 8 hours per point).
-- estimate_set_after_start counts, among the resolved-in-window issues whose
-  metrics have both estimate_set_at and started_at, those whose estimate came
-  later; "of" is how many have both.
-- The most common author account is the one with the most worklogs (ties: more
-  seconds). Its share is given of seconds and of worklogs, like tempo_share.
-  tempo_share is reported whenever `expected` names the account, compared or not.
-- Several issue links to the same issue share one `links` row, their titles
-  joined with "; " (oversight.jira.mapping), so titles are split and each counted.
-- An unknown metric in a hand-built `expected` gets a row with no actual value;
-  load_expected rejects one, so a typo in the YAML fails early.
-- The metadata also gives the comparison status, how many issues have no
-  derived metrics, and when the metrics were derived (the oldest row); a sync
-  newer than that is flagged in the report.
-"""
+"""`python -m oversight baseline` (Phase 2): a board's baseline report, from code."""
 from __future__ import annotations
 
 import html
@@ -527,8 +436,6 @@ def _resolved_figures(
     def created_in_done(issue: dict[str, Any]) -> bool:
         if snapshot.changes.get(issue["issue_key"]):
             return False
-        # Never moved, so the current status is the one it was created in.
-        # Unmapped statuses fall back to their category, as in derive.
         stage = stage_of(issue["status"])
         if stage is not None:
             return stage == process.done_stage
@@ -654,7 +561,6 @@ def _link_figures(links: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def _link_titles(title: str | None) -> list[str]:
-    """One links row's direction texts: links to the same issue share a row (titles joined with "; ")."""
     parts = [part.strip() for part in (title or "").split(";")]
     return [part for part in parts if part] or [_NONE]
 
@@ -674,7 +580,6 @@ def _host(url: str | None) -> str:
 def _comparison_scope(
     expected: BaselineExpected | None, project: str, as_of: date, window_days: int, zone_name: str
 ) -> tuple[str, str]:
-    """("compared" | "skipped" | "not requested", a note for the report)."""
     if expected is None:
         return "not requested", ""
     if (expected.project, expected.as_of, expected.window_days) != (project, as_of, window_days):
@@ -702,9 +607,6 @@ def _compare(expected: BaselineExpected, figures: Mapping[str, Any], as_of: date
 
 
 def comparison_note(metric: str, figures: Mapping[str, Any], as_of: date, *, match: bool) -> str:
-    """A comparison row's note as this version words it: for a difference, its known reasons (the day being as_of, "2
-    Nov"); for with_logged_time, the other ways of counting it too; "not a baseline figure" for a metric this module
-    does not know. `figures` as the report holds them (the API's contract shape is the same there)."""
     spec = _COMPARED.get(metric)
     if spec is None:
         return "not a baseline figure"
@@ -778,8 +680,6 @@ def _log_data_warnings(project: str, meta: Mapping[str, Any]) -> None:
 
 
 def report_paths(out_dir: Path, project: str) -> list[Path]:
-    """The board's JSON reports as run_baseline names them, exactly baseline_<project>_<YYYY-MM-DD>.json (so project
-    AIL never picks up a project AIL_2's), by name; [] when the folder is missing or cannot be read."""
     pattern = re.compile(rf"baseline_{re.escape(project)}_\d{{4}}-\d{{2}}-\d{{2}}\.json")
     folder = Path(out_dir)
     try:
@@ -1161,13 +1061,12 @@ def _spread(values: Sequence[float]) -> dict[str, Any]:
 
 
 def _counts(values: Iterable[str | None]) -> dict[str, int]:
-    """Counts by value, the largest first (ties by name); a missing value counts as "(none)"."""
     counter = Counter(value if value else _NONE for value in values)
     return dict(sorted(counter.items(), key=lambda item: (-item[1], item[0])))
 
 
 def _positive(value: object) -> bool:
-    """A number above 0. None (and anything that isn't a number) is no value."""
+    """A number above 0."""
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 

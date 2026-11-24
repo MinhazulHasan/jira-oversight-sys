@@ -1,6 +1,3 @@
-"""ask() end to end with a scripted provider: each of the five outcomes, the
-audit rows, the degradations and the response shape (Planning.md Phase 6).
-"""
 from __future__ import annotations
 
 import json
@@ -24,7 +21,6 @@ from tests.fakes.fake_llm import FakeProvider, audit_shim, cut_off, plan  # noqa
 from tests.test_catalog import AS_OF, build_snapshot, fixed_now, rules  # noqa: F401  (rules is a fixture)
 
 STUCK = "Where do tickets get stuck most?"
-# An answer whose every number is in oversight_time_in_status(period=all) on the snapshot.
 STUCK_ANSWER = "Tickets sit longest in In Progress: a median of 24.0 h over 15 intervals; To Do is 1.0 h at the median."
 TIME_IN_STATUS = ("oversight_time_in_status", {"period": "all"})
 
@@ -50,9 +46,6 @@ def _qa_row(store: Store, qa_id: str) -> dict[str, Any]:
     return dict(row)
 
 
-# --- the five outcomes ---------------------------------------------------------------------
-
-
 @pytest.mark.usefixtures("audit_shim")
 def test_answered_with_citations_and_audit_rows(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig, settings: Settings) -> None:
     store, _ = snapshot
@@ -70,11 +63,9 @@ def test_answered_with_citations_and_audit_rows(snapshot: tuple[Store, ProcessCo
     assert [f.ref for f in response.facts] == ["F1"] and response.facts[0].as_of == AS_OF
     assert response.project == "AIL" and response.asked_at == "2026-11-04T12:00:00.000Z" and response.model == "fake-model"
     assert response.missing_evidence == [] and response.suggestions == []
-    # The provider saw the two documented calls, with the settings' model and efforts.
     assert [(c.kind, c.model, c.effort) for c in provider.calls] == [("structured", settings.llm_model_qa, "low"), ("compose", settings.llm_model_qa, "medium")]
     assert provider.compose_calls[0].max_tokens == 600 and provider.compose_calls[0].system == COMPOSE_SYSTEM
     assert provider.structured_calls[0].system == PLAN_SYSTEM
-    # Audit: one llm_calls row per call, and the qa_log row.
     assert _llm_calls(store, response.qa_id) == [("plan", "ok", "fake", "fake-model", None), ("compose", "ok", "fake", "fake-model", None)]
     row = _qa_row(store, response.qa_id)
     assert (row["outcome"], row["asked_by"], row["project_key"], row["question"], row["answer"]) == ("answered", "james", "AIL", STUCK, STUCK_ANSWER)
@@ -155,7 +146,7 @@ def test_not_verified_after_a_failed_strict_retry(snapshot: tuple[Store, Process
     response = _ask(snapshot, rules, settings, provider)
     assert response.outcome == "not_verified" and response.answer is None
     assert response.message == NOT_VERIFIED_MESSAGE and response.citations == []
-    assert [f.ref for f in response.facts] == ["F1"] and len(response.facts[0].rows) == 3  # the facts are kept (To Do, In Progress, In Review)
+    assert [f.ref for f in response.facts] == ["F1"] and len(response.facts[0].rows) == 3
     assert response.extra["problems"] == ["unverified number 999"]
     first, strict = provider.compose_calls
     assert "failed verification" not in first.user
@@ -179,9 +170,6 @@ def test_the_strict_retry_can_succeed(snapshot: tuple[Store, ProcessConfig], rul
     assert [c[0] for c in _llm_calls(store, response.qa_id)] == ["plan", "compose", "compose_strict"]
 
 
-# --- no provider call for questions that cannot be questions ----------------------------------
-
-
 @pytest.mark.usefixtures("audit_shim")
 @pytest.mark.parametrize("question", ["", "   \n ", "x" * (MAX_QUESTION_CHARS + 1)])
 def test_blank_and_over_long_questions_never_call_the_provider(snapshot: tuple[Store, ProcessConfig], rules: RulesConfig, settings: Settings, question: str) -> None:
@@ -203,8 +191,6 @@ def test_blank_and_over_long_questions_never_call_the_provider(snapshot: tuple[S
 def test_a_request_for_a_poem_song_or_joke_is_declined_before_any_model(
     snapshot: tuple[Store, ProcessConfig], rules: RulesConfig, settings: Settings, question: str
 ) -> None:
-    """18 Nov 2026, live: "Write a short poem about our sprint." got a 16-line rhyming poem marked "Numbers verified".
-    Ask answers questions about the work: a creative piece is declined in code, with the suggestions."""
     store, _ = snapshot
     provider = FakeProvider()  # nothing scripted: any call would fail
     response = _ask(snapshot, rules, settings, provider, question)
@@ -226,9 +212,6 @@ def test_a_question_of_exactly_the_limit_is_asked(snapshot: tuple[Store, Process
     provider = FakeProvider(plans=[plan(understood=False, reason="no")])
     response = _ask(snapshot, rules, settings, provider, "y" * MAX_QUESTION_CHARS)
     assert len(provider.structured_calls) == 1 and response.message == "no"
-
-
-# --- the model fails ------------------------------------------------------------------------
 
 
 @pytest.mark.usefixtures("audit_shim")
@@ -269,7 +252,6 @@ def test_a_refusal_is_a_failed_composition(snapshot: tuple[Store, ProcessConfig]
 def test_a_refused_call_is_recorded_with_the_tokens_it_was_billed_for(
     snapshot: tuple[Store, ProcessConfig], rules: RulesConfig, settings: Settings
 ) -> None:
-    """A refusal comes with a response: its tokens count toward the day's budget, as an answer's do."""
     store, _ = snapshot
     billed = FakeProvider(plans=[plan(TIME_IN_STATUS)], answers=[LLMRefusal(usage=Usage(2400, 30)), STUCK_ANSWER])
     response = _ask(snapshot, rules, settings, billed)
@@ -286,9 +268,6 @@ def test_a_cut_off_answer_is_a_failed_composition(snapshot: tuple[Store, Process
     assert "cut off" in provider.compose_calls[1].user
     only_cut = FakeProvider(plans=[plan(TIME_IN_STATUS)], answers=[cut_off(STUCK_ANSWER), cut_off(STUCK_ANSWER)])
     assert _ask(snapshot, rules, settings, only_cut).outcome == "not_verified"
-
-
-# --- settings, stores and the response shape ------------------------------------------------
 
 
 @pytest.mark.usefixtures("audit_shim")
@@ -333,7 +312,6 @@ def test_a_file_store_is_read_through_a_read_only_connection(
 
     monkeypatch.setattr(service, "open_readonly", spy)
     response = _ask(snapshot, rules, settings, FakeProvider(plans=[plan(TIME_IN_STATUS)], answers=[STUCK_ANSWER]))
-    # Twice, read-only both times: the board's names for the check of the question's own words, then the facts.
     assert response.outcome == "answered" and opened == [store.path, store.path]
 
 
@@ -412,9 +390,6 @@ def test_latency_is_measured_for_every_outcome(snapshot: tuple[Store, ProcessCon
 def test_the_audit_shim_stands_in_while_the_real_audit_is_a_stub(
     snapshot: tuple[Store, ProcessConfig], rules: RulesConfig, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The fallback path of tests/fakes/fake_llm.py: when oversight.llm.audit raises
-    NotImplementedError the shim records the same llm_calls rows, so these tests
-    stay green whichever lands first."""
     from oversight.llm import audit as llm_audit
 
     from tests.fakes import fake_llm
@@ -434,7 +409,6 @@ def test_the_audit_shim_stands_in_while_the_real_audit_is_a_stub(
 
 
 def provider_prompt(response: AskResponse, store: Store) -> str:
-    """The compose prompt ask() built for this response, rebuilt the same way, so the recorded hash can be checked."""
     from oversight.ask.prompts import compose_user
 
     return compose_user(response.question, [facts.to_dict() for facts in response.facts])
@@ -450,9 +424,6 @@ def test_the_question_is_stripped_and_the_plan_prompt_carries_it(snapshot: tuple
     assert prompt.endswith(f"<question>{STUCK}</question>") and prompt.startswith("<catalog>")
     assert "oversight_rule_status" in prompt and "input_schema" in prompt
     assert provider.structured_calls[0].schema.__name__ == "Plan"
-
-
-# --- a plan with a bad parameter gets one more try ------------------------------------------
 
 
 @pytest.mark.usefixtures("audit_shim")
@@ -484,15 +455,11 @@ def test_a_plan_that_is_still_invalid_after_the_retry_is_not_understood(
     assert len(provider.structured_calls) == 2 and provider.compose_calls == []
 
 
-# --- the answer is plain prose ---------------------------------------------------------------
-
-
 def test_plain_prose_takes_out_markdown_and_key_brackets() -> None:
     text = "## Summary\n**Effort is flat.** See [AIL-575] and __[AIL-62]__.\n\n- R-FLOW-01 needs review\n2. W-REV-01 too"
     assert service.plain_prose(text) == (
         "Summary\nEffort is flat. See AIL-575 and AIL-62.\n\nR-FLOW-01 needs review\nW-REV-01 too"
     )
-    # Numbers, ranges and ordinary brackets are left alone.
     assert service.plain_prose("12 of 65 (49.2%) [see facts] 3-4 h") == "12 of 65 (49.2%) [see facts] 3-4 h"
 
 

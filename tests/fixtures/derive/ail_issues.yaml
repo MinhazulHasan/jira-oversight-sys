@@ -1,17 +1,3 @@
-# Hand-built AIL issues for the derive tests (tickets 5 and 6), as `sync`
-# stores them: rows of `issues`, `status_changes`, `field_changes` and
-# `statuses`, with UTC timestamps in the storage format. Only the columns
-# derive reads are filled in, except for AIL-1140, which is the sanitised real
-# sample in tests/fixtures/jira/ converted by hand.
-#
-# AIL's process (tests/fixtures/config/process.yaml): To Do -> backlog,
-# In Progress -> development, Done -> done; story points at 8 hours each.
-# Deliberately unmapped: "In Review" (a workflow status process.yaml lacks) and
-# "Closed" (not even in `statuses`, as after a rename or a move).
-#
-# Every expected interval and metric, worked out by hand, is in
-# tests/labels/metrics.yaml.
-
 statuses:
   - {project_key: AIL, status_id: "10084", name: To Do, category: new}
   - {project_key: AIL, status_id: "10085", name: In Progress, category: indeterminate}
@@ -168,10 +154,6 @@ cases:
       - {issue_key: AIL-117, changelog_id: "1173", changed_at: "2026-11-03T08:00:00.000Z", from_status: Done, to_status: To Do}
       - {issue_key: AIL-117, changelog_id: "1174", changed_at: "2026-11-03T10:00:00.000Z", from_status: To Do, to_status: In Progress}
 
-  # The real sample (tests/fixtures/jira/issue_sample.json and changelog_sample.json),
-  # converted by hand: Jira's -0600 times plus 6 hours give UTC. The changelog's
-  # assignee and sprint items are tracked fields too, so they are here as well;
-  # timespent, description, Rank and the links are not tracked.
   - about: "Real AIL sample: To Do -> In Progress -> Done within a day; 0.5 points, 4 h logged"
     issue: {issue_key: AIL-1140, issue_id: "52507", project_key: AIL, issue_type: Task,
             summary: Sample task (sanitised), status: Done, status_category: done,

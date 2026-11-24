@@ -1,9 +1,4 @@
-"""The demo project: deterministic, quick, consistent with a real sync, and its
-story holds in the derived data (derive sees no anomaly at all).
-
-The default demo (1,150 issues) is seeded and derived once per module; the
-story tests only read it. Everything is offline and runs from a fixed `now`.
-"""
+"""The demo project"""
 from __future__ import annotations
 
 import hashlib
@@ -48,7 +43,6 @@ from tests.conftest import CONFIG_FIXTURES, VIEWER_HEADERS
 NOW = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
 PROJECT = "DEMO"
 ISSUES = 1150
-# Every table the demo writes, with the order that makes a row dump comparable.
 DEMO_TABLES: dict[str, str] = {
     "statuses": "project_key, status_id",
     "issues": "issue_key",
@@ -60,8 +54,6 @@ DEMO_TABLES: dict[str, str] = {
     "sync_state": "scope",
 }
 ACCOUNT_ID = re.compile(r"^acc-\d{2}$")
-# Two capitalised words in a row read like a person's name; only the workflow's status names and the
-# accounts' fictional display names (ASSIGNEE_NAMES, MEMBER_NAMES) look like that.
 NAME_LIKE = re.compile(r"\b[A-Z][a-z]+ [A-Z][a-z]+\b")
 NOT_NAMES = {"To Do", "In Progress"}
 
@@ -75,7 +67,7 @@ def load_process() -> ProcessConfig:
 
 
 def dump(store: Store, project: str = PROJECT) -> dict[str, list[tuple]]:
-    """Every demo table's rows for the project, in a fixed order; sync_state without its run id."""
+    """Every demo table's rows for the project, in a fixed order"""
     out: dict[str, list[tuple]] = {}
     for table, order in DEMO_TABLES.items():
         if table == "sync_state":
@@ -112,15 +104,12 @@ def share(part: int, whole: int) -> float:
 
 @pytest.fixture(scope="module")
 def seeded(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Store, DemoStats, DeriveResult]]:
-    """The default demo, seeded once and derived once; the story tests only read it."""
+    """The default demo, seeded once and derived once"""
     store = Store.open(tmp_path_factory.mktemp("demo") / "oversight.db")
     stats = seed_demo(store, now=NOW)
     result = run_derive(store, load_process(), projects=[PROJECT], now=fixed_now)
     yield store, stats, result
     store.close()
-
-
-# --- deterministic, quick, idempotent ---------------------------------------------------------------
 
 
 def test_the_same_now_and_seed_give_byte_identical_tables(tmp_path: Path) -> None:
@@ -130,7 +119,6 @@ def test_the_same_now_and_seed_give_byte_identical_tables(tmp_path: Path) -> Non
         assert dump(first) == dump(second)
         assert dump(first)["issues"]  # the comparison was not between two empty dumps
 
-        # A different seed tells a different story in the same shape.
         with Store.open(tmp_path / "c.db") as other:
             seed_demo(other, now=NOW, seed=7)
             assert other.count("issues") == first.count("issues")
@@ -155,11 +143,8 @@ def test_seeding_the_default_demo_takes_under_ten_seconds(store: Store, capsys: 
     assert elapsed < 10
 
 
-# --- reset --------------------------------------------------------------------------------------------
-
-
 def _unrelated_project(store: Store) -> None:
-    """An AIL issue with child, derived and findings rows: a reset of DEMO must not touch it."""
+    """An AIL issue with child, derived and findings rows"""
     with store.transaction():
         store.upsert(
             "issues",
@@ -214,16 +199,13 @@ def test_reset_removes_the_previous_rows_and_nothing_else(store: Store) -> None:
     for table in ("status_changes", "field_changes", "worklogs", "links", "status_intervals", "issue_metrics"):
         stray = store.query(f"SELECT DISTINCT issue_key FROM {table} WHERE issue_key LIKE 'DEMO-%'")
         assert {row["issue_key"] for row in stray} <= keys, table
-    # The previous DEMO's derived rows went with it; derive has not run on the new one yet.
     assert store.query("SELECT COUNT(*) FROM status_intervals WHERE issue_key LIKE 'DEMO-%'")[0][0] == 0
     assert store.count("findings", {"project_key": PROJECT}) == 0
     assert store.count("rule_status", {"project_key": PROJECT}) == 0
     assert store.count("warning_links", {"warning_finding_id": "f-demo"}) == 0
     assert store.count("digests", {"project_key": PROJECT}) == 0
     assert store.count("insights", {"project_key": PROJECT}) == 0
-    # The members are DEMO's again, as the new seeding stored them; AIL's are not touched.
     assert store.count("board_members", {"project_key": PROJECT}) == len(ASSIGNEE_NAMES) + len(MEMBERS)
-    # AIL is exactly as it was, findings and all.
     assert dump(store, "AIL") == ail_before
     assert store.count("findings", {"project_key": "AIL"}) == 1
     assert store.count("rule_status", {"project_key": "AIL"}) == 1
@@ -237,9 +219,6 @@ def test_without_reset_a_smaller_demo_leaves_the_extra_issues(store: Store) -> N
     seed_demo(store, now=NOW, issues=80)
     seed_demo(store, now=NOW, issues=50)
     assert store.count("issues", {"project_key": PROJECT}) == 80
-
-
-# --- the story, in the derived data ------------------------------------------------------------------
 
 
 def test_counts_and_render_match_the_tables(seeded: tuple[Store, DemoStats, DeriveResult]) -> None:
@@ -277,7 +256,6 @@ def test_derive_sees_a_clean_history(seeded: tuple[Store, DemoStats, DeriveResul
         "WHERE w.started_at < i.created_at OR w.started_at > ? OR w.updated_at < w.started_at OR w.updated_at > ?",
         (now, now),
     )[0] == 0
-    # resolved_at is the moment of the last move into Done, and only Done issues have one.
     assert store.query_one("SELECT COUNT(*) FROM issues WHERE (status = 'Done') != (resolved_at IS NOT NULL)")[0] == 0
     assert store.query_one(
         "SELECT COUNT(*) FROM issues i WHERE status = 'Done' AND resolved_at != "
@@ -305,7 +283,6 @@ def test_types_epics_and_hierarchy(seeded: tuple[Store, DemoStats, DeriveResult]
     work = store.query_one("SELECT COUNT(*) FROM issues WHERE issue_type IN ('Task', 'Bug', 'Test')")[0]
     under_epic = store.query_one("SELECT COUNT(*) FROM issues WHERE issue_type IN ('Task', 'Bug', 'Test') AND epic_key IS NOT NULL")[0]
     assert 0.75 <= share(under_epic, work) <= 0.95
-    # A subtask hangs under a task, which keeps the epic link; the subtask itself has none.
     subtasks = store.query(
         "SELECT s.epic_key, p.issue_type AS parent_type, p.created_at < s.created_at AS parent_first "
         "FROM issues s LEFT JOIN issues p ON p.issue_key = s.parent_key WHERE s.issue_type = 'Subtask'"
@@ -327,7 +304,6 @@ def test_estimates_are_points_on_about_two_thirds_and_hours_on_none(seeded: tupl
         "SELECT i.story_points IS NOT NULL AS pointed, m.estimate_basis FROM issues i JOIN issue_metrics m USING (issue_key)"
     )
     assert all((row["estimate_basis"] == "points") == bool(row["pointed"]) for row in basis)
-    # The points history: most set before the start, some after it (R-EST-02's material), a few revised.
     fields = {row[0]: row[1] for row in store.query("SELECT field, COUNT(*) FROM field_changes GROUP BY field")}
     assert set(fields) == {"story_points", "assignee"} and fields["story_points"] > 500 and fields["assignee"] > 500
     assert all(
@@ -347,7 +323,6 @@ def test_logged_time_is_tempo_worklogs_on_most_done_work(seeded: tuple[Store, De
     assert 0.78 <= share(logged, done) <= 0.92
     assert {row[0] for row in store.query("SELECT DISTINCT author_id FROM worklogs")} == {WORKLOG_AUTHOR}
     assert store.query_one("SELECT COUNT(*) FROM worklogs WHERE seconds <= 0 OR seconds % 900 != 0")[0] == 0
-    # The issue's time columns agree with its worklogs; a parent's aggregate includes its subtasks.
     assert store.query_one(
         "SELECT COUNT(*) FROM issues i WHERE COALESCE(time_spent_s, 0) != "
         "(SELECT COALESCE(SUM(seconds), 0) FROM worklogs w WHERE w.issue_key = i.issue_key)"
@@ -372,7 +347,6 @@ def test_skipped_stages_fell_after_the_process_change(seeded: tuple[Store, DemoS
     before = store.query_one(f"SELECT COUNT(*), SUM({skipped}) FROM issues i WHERE status = 'Done' AND resolved_at < ?", (change,))
     after = store.query_one(f"SELECT COUNT(*), SUM({skipped}) FROM issues i WHERE status = 'Done' AND resolved_at >= ?", (change,))
     assert share(before[1], before[0]) >= 2 * share(after[1], after[0])
-    # derive records each skip against the stage it jumped over.
     metrics = store.query_one(
         "SELECT COUNT(*) FROM issue_metrics m JOIN issues i USING (issue_key) "
         "WHERE i.status = 'Done' AND m.skipped_stages LIKE '%\"development\"%'"
@@ -392,7 +366,6 @@ def test_effort_ratios_spread_around_one_and_two_epics_drift(seeded: tuple[Store
     assert sum(ratio > 2.0 for ratio in ratios) >= 5
     assert sum(ratio >= 1.5 for ratio in ratios) >= 30  # R-EFF-01 has work to do
     assert max(ratios) <= 6.0  # a long tail, not nonsense
-    # Two epics drift upwards in the last five weeks: their recent median is well above the rest.
     change = to_iso(NOW - timedelta(days=35))
     recent: dict[str, list[float]] = {}
     for row in rows:
@@ -426,7 +399,6 @@ def test_exactly_one_active_sprint_ending_in_two_days_with_a_third_not_started(
     not_started = [row for row in members if row["status_category"] != "done" and row["started_at"] is None]
     assert 0.30 <= share(len(not_started), len(members)) <= 0.50
     assert any(row["story_points"] is None for row in members if row["status_category"] != "done")  # W-EST-01's material
-    # The sprint_ids column and the sprint objects agree, and every closed sprint has its history.
     for key, raw in raw_issues(store).items():
         ids = sorted(s["id"] for s in raw["fields"].get(SPRINT_FIELD) or [])
         assert json.loads(store.query_one("SELECT sprint_ids FROM issues WHERE issue_key = ?", (key,))[0]) == ids
@@ -444,12 +416,10 @@ def test_hygiene_reopens_and_unassigned_work(seeded: tuple[Store, DemoStats, Der
     assert store.query_one(
         "SELECT COUNT(*) FROM status_changes WHERE from_status = 'Done' AND to_status = 'In Progress'"
     )[0] == reopened[1]
-    # Some of the reopened work is open again right now.
     assert store.query_one(
         "SELECT COUNT(*) FROM issues i WHERE status = 'In Progress' AND EXISTS "
         "(SELECT 1 FROM status_changes sc WHERE sc.issue_key = i.issue_key AND sc.from_status = 'Done')"
     )[0] >= 1
-    # Early warnings have something to find too: effort burning fast on open work.
     assert store.query_one(
         "SELECT COUNT(*) FROM issue_metrics m JOIN issues i USING (issue_key) "
         "WHERE i.status = 'In Progress' AND m.effort_ratio >= 0.8"
@@ -481,8 +451,6 @@ def test_about_a_tenth_of_open_issues_sit_beyond_the_p90_of_their_status(
 
 
 def test_accounts_carry_only_their_fictional_names(seeded: tuple[Store, DemoStats, DeriveResult]) -> None:
-    """People are shown by Jira display name, so the demo's accounts have made-up ones (the brief's,
-    in this order), and nothing else of a person: no email address, no avatar, no real name."""
     store, _, _ = seeded
     assert list(ASSIGNEE_NAMES.items()) == [
         ("acc-01", "Ada Brooks"), ("acc-02", "Ben Okafor"), ("acc-03", "Carmen Ruiz"), ("acc-04", "Dev Malhotra"),
@@ -498,8 +466,6 @@ def test_accounts_carry_only_their_fictional_names(seeded: tuple[Store, DemoStat
         assert "emailAddress" not in text and "avatarUrls" not in text
         assignee = raw["fields"]["assignee"]
         assert assignee is None or assignee["displayName"] == ASSIGNEE_NAMES[assignee["accountId"]]
-    # The people table holds each assignee and member as a sync would: the display name, active, seen at the
-    # seeding, and no picture URL (two have a picture drawn in code: the test after this one).
     people = {row["account_id"]: tuple(row)[1:] for row in store.query(
         "SELECT account_id, display_name, active, updated_at, avatar_url FROM people")}
     assert people == {account: (name, 1, to_iso(NOW), None) for account, name in {**ASSIGNEE_NAMES, **MEMBER_NAMES}.items()}
@@ -514,9 +480,6 @@ def test_accounts_carry_only_their_fictional_names(seeded: tuple[Store, DemoStat
 def test_the_board_has_three_members_with_no_tickets_and_no_app_account(
     seeded: tuple[Store, DemoStats, DeriveResult],
 ) -> None:
-    """DEMO's members, as a sync's member fetch stores them: every assignee and three fictional people who hold none
-    of its tickets (no pictures), seen at the seeding. The worklogs' app account is in the list the demo maps, and
-    the mapping keeps it out, as every app account."""
     store, _, _ = seeded
     assert list(MEMBER_NAMES.items()) == [("acc-09", "Noor Haddad"), ("acc-10", "Tomás Ferreira"), ("acc-11", "Yuki Tanabe")]
     members = {row[0]: row[1] for row in store.query(
@@ -531,7 +494,7 @@ def test_the_board_has_three_members_with_no_tickets_and_no_app_account(
 
 
 def decode_png(data: bytes) -> tuple[int, int, list[tuple[int, ...]]]:
-    """A PNG's size and pixels, checked chunk by chunk: the signature, every CRC, 8-bit RGB, rows unfiltered."""
+    """A PNG's size and pixels, checked chunk by chunk"""
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
     at, chunks = 8, {}
     while at < len(data):
@@ -551,8 +514,6 @@ def decode_png(data: bytes) -> tuple[int, int, list[tuple[int, ...]]]:
 
 
 def test_two_accounts_have_a_picture_drawn_in_code(seeded: tuple[Store, DemoStats, DeriveResult]) -> None:
-    """Two of the eight have a picture, so the dashboard shows both a picture and initials: an abstract pattern
-    made in code as valid PNG bytes, stored as a sync stores a fetched one, but with no URL: nothing was fetched."""
     store, _, _ = seeded
     rows = {row["account_id"]: row for row in store.query("SELECT * FROM people")}
     assert {account for account, row in rows.items() if row["avatar"] is not None} == set(PICTURED) == {"acc-01", "acc-05"}
@@ -589,7 +550,6 @@ def test_rows_match_their_raw_payload_through_the_real_mapping(
     assert sorted(links_from_raw, key=lambda r: (r["issue_key"], r["kind"], r["target"])) == stored_links
     assert {row["title"] for row in stored_links} == {"blocks", "is blocked by", "relates to"}
     assert 20 <= len(stored_links) <= 120
-    # The raw timestamps are Jira's form in the account's zone, and the sprint field matches fields.yaml.
     sample = json.loads(store.query_one("SELECT raw_json FROM issues WHERE sprint_ids != '[]' AND sprint_ids IS NOT NULL")[0])
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{4}", sample["fields"]["created"])
     assert {"id", "name", "state", "startDate", "endDate", "boardId", "goal"} <= set(sample["fields"][SPRINT_FIELD][0])
@@ -609,9 +569,6 @@ def test_statuses_sync_state_and_the_run_record(seeded: tuple[Store, DemoStats, 
     assert run["started_at"] == to_iso(NOW)
     recorded = json.loads(run["stats_json"])
     assert recorded["issues"] == ISSUES and recorded["seed"] == 20261104 and recorded["sprints"] == stats.sprints
-
-
-# --- edges, errors, other sizes and keys -------------------------------------------------------------
 
 
 @pytest.mark.parametrize("count", [1, 5, 30])
@@ -674,9 +631,6 @@ def test_the_cli_seeds_and_points_at_the_next_commands(settings: Settings, capsy
 
 @pytest.mark.parametrize("seed", [20261104, 20261105])
 def test_the_people_have_habits_so_the_scorecards_show_every_state(tmp_path: Path, seed: int) -> None:
-    """JO-11: over the scorecards' default 90 days the demo shows each state a scorecard can be in: closer to the
-    process than the board, further from it, level with it, too few tickets to compare (Hana Mori, part time of
-    late), measures DEMO cannot show (no stage to skip, no code review in Jira) and members who hold no ticket."""
     from fastapi.testclient import TestClient
 
     from oversight.api.app import create_app
@@ -696,7 +650,6 @@ def test_the_people_have_habits_so_the_scorecards_show_every_state(tmp_path: Pat
         body = api.get("/api/v1/people/scorecard", params={"level": "people"}).json()
         members = [entry for entry in api.get("/api/v1/people/directory").json()["people"] if entry["tickets"] == 0]
     shown = [m["key"] for m in body["measures"] if m["measurable"]]
-    # One truth per board (JO-12 G11): the rules measure R-FLOW-02 on DEMO, so the scorecard measures skipped stages.
     assert [m["key"] for m in body["measures"] if not m["measurable"]] == ["code_review"]
     values = [row["values"][key] for row in body["people"] for key in shown]
     assert {value["vs_board"] for value in values} == {"closer", "further", "level", None}

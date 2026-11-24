@@ -1,14 +1,6 @@
-# Effort rules: R-EFF-01 (finished work logged at least 1.5x its estimate) and
-# W-EFF-01 (work in progress already at 0.8x or more), on AIL (8 h per story
-# point) and HRS (original estimates). effort ratio = time spent / estimate.
-# Format: see estimates.yaml. Every estimate here was set at creation (no
-# history), so R-EST-02 stays silent; AIL's finished cases date from April 2026
-# (before the history window, as in estimates.yaml).
-
 defaults: {issue_type: Task, assignee_id: acc-team-1}
 
 cases:
-  # --- AIL (points) ------------------------------------------------------------
   - about: "Done: 24 h logged on 2 points (16 h), exactly 1.5x"
     issue: {issue_key: AIL-201, status: Done, created_at: "2026-04-06T09:00:00.000Z",
             story_points: 2.0, time_spent_s: 86400}
@@ -55,7 +47,6 @@ cases:
     status_changes:
       - {changelog_id: "12071", changed_at: "2026-11-02T10:00:00.000Z", from_status: To Do, to_status: In Progress}
 
-  # --- HRS (hours) -----------------------------------------------------------------
   - about: "Closed: 8 h logged on a 4 h estimate, 2x"
     issue: {issue_key: HRS-201, status: Closed, created_at: "2026-10-05T09:00:00.000Z",
             original_estimate_s: 14400, time_spent_s: 28800}

@@ -1,52 +1,3 @@
-"""GET /people/{person_id}/card (contract 4.19 in the jira-oversight-ui repository): the person card (JO-13).
-
-The product owner's request of 12 Nov 2026: hovering or clicking a person's name, wherever the dashboard shows one at
-people level, opens a card about their work, as Atlassian's profile card opens one about the person. It is for
-admins (people level); users (team level) keep names as they are, with no card.
-
-Every figure on a card is one the dashboard already shows elsewhere, worked out by the same functions from the same
-records (one computation), so a card never disagrees with the page it leads to. A person's tickets are the board's
-work, Epics left out, whose current assignee they are (JO-12, G5):
-- person: {id, name, avatar}, as everywhere (oversight.api.people); board: {key, name}, the name as GET /projects
-  gives it.
-- membership: "holds_tickets" when they hold at least one of the board's tickets now, in any status (the
-  directory's "With tickets" group, the scorecard's everyone), else "member_no_tickets" (a member who holds none,
-  or someone holding only Epics).
-- work: {open_tickets, in_progress, done_in_period, days}: the three counts of their scorecard over `days`
-  (oversight/api/scorecard.py), so open_tickets is also their GET /people open tickets; 0 each for someone who holds
-  none.
-- findings: {open_breaches, open_warnings}: their GET /people row's (routes/people.people_rows): the open findings
-  on every ticket they hold, finished ones too, which is what Findings filtered to them lists; 0 each for someone
-  who holds none.
-- process: {closer, level, further, too_few, measurable}, their scorecard next to the board's over `days`: closer,
-  level and further count the measures (the rates and the ratio) on which their figure stands so; too_few the
-  measures the board can show over the period on which they were not compared (too few tickets, theirs or the
-  board's); measurable the measures the board can show over the period, the sum of the other four. null when they
-  were compared on no measure: they hold no tickets, or too few for every measure.
-- in_progress_now: their tickets in progress now (the scorecard's in progress), longest in progress first, then by
-  issue number, at most CARD_TICKETS: {key, summary, status, since}, since being when the ticket last went into
-  progress (in_progress_since), read from its status history as sync stored it, so a sync that derive has not yet
-  followed is never read as the status before it. in_progress_more: how many more there are.
-- other_boards: {key, name, open_tickets} for each other board the service serves (JIRA_PROJECTS, in its order) on
-  which they hold open tickets, counted as that board's GET /people counts them; the board read is never in it, nor
-  a board where they hold none. The dashboard's server keeps only the boards the session may open (an admin: every
-  board) before anything reaches the browser.
-- last_activity_at: the latest status change or logged work (by when the work was done) on the tickets they hold on
-  the board, up to now; null when there is none, and for someone who holds none.
-
-People level only, as the scorecards (JO-11): the level reaches this route as it reaches them, set by the dashboard's
-server on every request and never by the browser, as level=team|people (team when left out). At team level the
-answer is 403 {"detail", "code": "people_level_only"}, whoever is asked about. The other parameters: project, as
-everywhere, and days, 30, 90 or 180 (90 when left out), as the scorecard's. Anything else, a value given twice
-included, is a 422. A person id that is not on the board (assigned one of its tickets now, or a member), a malformed
-one included, is a 404, as the picture route answers it. No-store, as every JSON route.
-
-Every card served is recorded in the access log (JO-12, oversight/api/access_log.py) as person_card_view, with the
-person and {"days"}, at most once per viewer, person and board in any ten minutes (PERSON_CARD_ONCE_IN): a card is
-read whenever an admin hovers a name, and hovering back and forth must not flood the log. So the request must name
-its viewer (X-Oversight-Viewer, else 422), and when the entry cannot be written (or the log read to see whether one
-is due) nothing is served (500, access_log_unavailable).
-"""
 from __future__ import annotations
 
 import sqlite3
@@ -92,8 +43,6 @@ _NOT_ON_THE_BOARD = "nobody by that id is on this board"
 
 # The tickets in progress: what the card lists of each.
 _ISSUES_SQL = "SELECT issue_key, summary, status, status_category, created_at FROM issues WHERE issue_key IN ({marks})"
-# Their status changes as sync stored them: derive's own input, from which each one's timeline is rebuilt here (derive's
-# status_intervals can be a run behind: sync, derive and the rules are separate steps).
 _CHANGES_SQL = """
     SELECT issue_key, changelog_id, changed_at, from_status, to_status FROM status_changes
     WHERE issue_key IN ({marks})
@@ -164,9 +113,6 @@ def timeline_of(
     changes: Sequence[Mapping[str, Any]],
     stage_of: Callable[[str | None], str | None],
 ) -> list[Interval]:
-    """A ticket's status timeline as derive builds it (derive.timeline.build_intervals, the same function), from its
-    status changes as sync stored them: never a run behind the snapshot, as derive's stored intervals can be between
-    a sync and the derive after it. Empty when it cannot be built (no creation time, a moment that cannot be read)."""
     try:
         return build_intervals(issue["created_at"], issue["status"], changes, stage_of)
     except (ValueError, TypeError):
@@ -174,14 +120,7 @@ def timeline_of(
 
 
 def in_progress_since(intervals: Sequence[Interval], category: Callable[[str | None, str | None], str]) -> str | None:
-    """When a ticket in progress now last went into progress: the start of the unbroken run of in-progress intervals
-    that ends its timeline (moving on to another in-progress status, In Progress to In Review, keeps it in progress; a
-    ticket reopened from Done starts again), each status's category as the Issue page's timeline reads it.
-    `intervals` is its timeline in order (timeline_of), whose last interval is the status its history says it is in
-    now: a ticket never moved has been in the status it was created in since its creation. None when that history
-    ends outside progress though Jira says the ticket is in progress now (a change missing from it, so when it went
-    back into progress is not known), and when there is no timeline (no creation time, which no synced ticket lacks):
-    a time is never made up."""
+    """When a ticket in progress now last went into progress"""
     if not intervals or category(intervals[-1].status, intervals[-1].stage) != IN_PROGRESS:
         return None
     since = ts(intervals[-1].entered_at)
@@ -195,9 +134,6 @@ def in_progress_since(intervals: Sequence[Interval], category: Callable[[str | N
 def in_progress_now(
     conn: sqlite3.Connection, ctx: ApiContext, tickets: Sequence[Ticket]
 ) -> tuple[list[dict[str, Any]], int]:
-    """Their tickets in progress now, longest in progress first (then by issue number), at most CARD_TICKETS, and
-    how many more there are: read in bulk (the tickets and their status changes, 500 tickets a query), never one
-    query per ticket."""
     keys = [ticket.issue_key for ticket in tickets if ticket.category == IN_PROGRESS]
     issues: dict[str, sqlite3.Row] = {}
     changes: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -238,9 +174,6 @@ def last_activity(conn: sqlite3.Connection, keys: Sequence[str], until: str) -> 
 
 
 def other_boards(conn: sqlite3.Connection, ctx: ApiContext, person_id: str) -> list[dict[str, Any]]:
-    """Every other board the service serves on which they hold open tickets, in the service's order, each with
-    their open tickets there as that board's GET /people counts them (its work, Epics left out, not done). A board
-    that has never synced holds no ticket, so it is not read (JO-17: there may be dozens)."""
     found: list[dict[str, Any]] = []
     for board in ctx.served().boards:
         key = board.key
@@ -300,7 +233,6 @@ def get_person_card(
 ) -> dict[str, Any]:
     # Least privilege first: a team-level request learns nothing about anyone, not even whether they are on the board.
     people_level_only(query.level, "person cards")
-    # Every card read is recorded in the access log, so its viewer must be named (JO-12).
     viewer = need_viewer(request)
     card = person_card(conn, ctx, person_id, query.days)
     if card is None:

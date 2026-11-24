@@ -2,19 +2,6 @@
 .SYNOPSIS
     Builds the dashboard as a self-contained Next.js server (output: standalone) and puts it in the folder IIS runs it from.
 
-.DESCRIPTION
-    Runs from the dashboard's source folder (jira-oversight-ui): `npm ci` with no install script, then `npm run build`
-    with STANDALONE_OUTPUT=1, then copies what the server needs into -DestinationPath: server.js and its traced
-    node_modules, .next\static and public. Nothing else is copied: no source, no .env file, no test output. Every
-    setting is read when the server starts, from the dashboard's env file (dashboard.env.example), so the build holds
-    none and the same folder serves any deployment.
-
-    -DestinationPath is mirrored: what the folder holds that the build does not is deleted, so keep nothing of your own
-    in it (the env file, the logs and web.config live elsewhere). Stop the dashboard's site first when it is running
-    (docs/DEPLOYMENT_IIS.md, "Updating"): the server holds its files open.
-
-    Supports -WhatIf: it prints what it would do and changes nothing.
-
 .PARAMETER SourcePath
     The dashboard's source folder. Default: jira-oversight-ui beside the backend's folder.
 

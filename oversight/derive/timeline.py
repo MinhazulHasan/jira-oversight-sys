@@ -1,9 +1,4 @@
-"""Status intervals from status history (Phase 2).
-
-An issue's timeline is an unbroken chain of intervals: from created_at to its
-first status change, from each change to the next, and an open interval for
-the status it is in now. Hours are calendar hours.
-"""
+"""Status intervals from status history."""
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
@@ -13,8 +8,6 @@ from typing import Any, cast
 
 from oversight.timeutil import parse_ts, to_iso
 
-# status_intervals.status is NOT NULL and a timeline has no gaps, so a change
-# whose status name is missing still opens an interval, under this name.
 UNKNOWN_STATUS = "(unknown)"
 
 
@@ -29,8 +22,6 @@ class Interval:
 
 @dataclass
 class TimelineWarnings:
-    # A change whose from_status differs (case-insensitively) from the status the
-    # issue was in: history was edited, or a status was renamed.
     inconsistent_transitions: int = 0
     # A change dated before created_at; its interval is clamped to 0 hours.
     negative_intervals: int = 0
@@ -48,20 +39,7 @@ def build_intervals(
     stage_of: Callable[[str | None], str | None],
     warnings: TimelineWarnings | None = None,
 ) -> list[Interval]:
-    """Rebuild one issue's status intervals (Planning.md Phase 2).
-
-    `changes` are status_changes rows (from_status, to_status, changed_at,
-    changelog_id), sorted here with sort_changes. The first interval starts at
-    created_at, in the first change's from_status, or in current_status if there
-    are no changes. Each change closes the current interval at changed_at and
-    opens one in to_status. The last interval is open (left_at None, hours None).
-    hours = max(0, left - entered) in hours. Counts anomalies into `warnings`.
-    An issue created directly in Done gives a single open Done interval.
-
-    Timestamps may be in any form oversight.timeutil.parse_ts accepts; the
-    intervals carry them in the storage format. A missing status name becomes
-    UNKNOWN_STATUS (and so has no stage).
-    """
+    """Rebuild one issue's status intervals."""
     if warnings is None:
         warnings = TimelineWarnings()
     ordered = sort_changes(changes)
@@ -94,8 +72,6 @@ def build_intervals(
 
 
 def _change_order(change: Mapping[str, Any]) -> tuple[datetime, int, int, str]:
-    # Changelog ids grow over time, so they break ties between changes made in
-    # the same millisecond; compared as text, "10" would sort before "9".
     raw_id = change.get("changelog_id")
     text = "" if raw_id is None else str(raw_id)
     when = _timestamp(change.get("changed_at"), f"changed_at of change {text or '(no id)'}")

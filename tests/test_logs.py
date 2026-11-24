@@ -25,8 +25,6 @@ def json_lines(text: str) -> list[dict]:
 
 
 def test_a_logger_made_before_configuration_follows_it(capsys: pytest.CaptureFixture[str]) -> None:
-    # Regression: get_logger() used to fix structlog's configuration at creation,
-    # so module-level loggers kept the defaults (console text on stdout, debug included).
     structlog.reset_defaults()
     early = get_logger("early")
     configure_logging("INFO", "json")
@@ -65,8 +63,6 @@ def test_capture_logs_sees_module_level_loggers() -> None:
 
 
 def test_logging_follows_a_replaced_and_closed_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Regression: the stream was captured at configure time; once pytest closed
-    # a test's capture stream, every later warning raised "I/O operation on closed file".
     first = io.StringIO()
     monkeypatch.setattr(sys, "stderr", first)
     configure_logging("INFO", "json")
@@ -83,8 +79,6 @@ def test_logging_follows_a_replaced_and_closed_stderr(monkeypatch: pytest.Monkey
 def test_a_cli_run_under_capture_does_not_break_later_logging(
     settings: Settings, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The order-dependent failure: main() configures logging under capsys, then
-    # a warning is logged once that capture stream has been replaced.
     assert main(["derive", "--project", "A-B"], settings=settings) == 2
     capsys.readouterr()
     later = io.StringIO()
@@ -105,8 +99,6 @@ def test_bound_values_and_secrets(capsys: pytest.CaptureFixture[str]) -> None:
 def test_the_web_servers_own_lines_are_json_and_its_access_lines_are_off(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # uvicorn's defaults wrote plain text ("INFO:     Started server process") and an access line per request with
-    # the full query string, a Findings search as typed among it.
     configure_logging("INFO", "json")
     saved = {name: (logging.getLogger(name).handlers[:], logging.getLogger(name).level, logging.getLogger(name).propagate)
              for name in ("uvicorn", "uvicorn.error", "uvicorn.access")}
@@ -126,7 +118,6 @@ def test_the_web_servers_own_lines_are_json_and_its_access_lines_are_off(
     assert [(e["event"], e["logger"], e["level"]) for e in json_lines(err)] == [
         ("Started server process [1234]", "uvicorn.error", "info")]
 
-    # `python -m oversight api` runs uvicorn with that config and its access lines off.
     import uvicorn
 
     ran: dict = {}
@@ -143,9 +134,6 @@ def test_the_web_servers_own_lines_are_json_and_its_access_lines_are_off(
 def test_run_py_logs_as_python_m_oversight_api_does(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Regression (the JO-12 check): run.py, the README's other way to start the API (how a local or Windows install
-    # runs it), kept uvicorn's defaults: plain-text lines, and an access line per request with the full query string,
-    # a Findings search as typed among it.
     import runpy
 
     import uvicorn
@@ -158,7 +146,7 @@ def test_run_py_logs_as_python_m_oversight_api_does(
     monkeypatch.setattr(uvicorn, "run", lambda target, **options: served.update(options, target=target))
     monkeypatch.setattr("oversight.settings.get_settings", lambda: settings)
     monkeypatch.setattr("oversight.api.app.prepare_snapshot", lambda *args, **kwargs: None)
-    structlog.reset_defaults()  # a fresh process: console text on stdout until something configures it
+    structlog.reset_defaults()
 
     runpy.run_path(str(PROJECT_ROOT / "run.py"), run_name="__main__")
 
@@ -167,7 +155,6 @@ def test_run_py_logs_as_python_m_oversight_api_does(
     get_logger("api").info("api_request", method="GET", route="/api/v1/findings", status=200)
     out, err = capsys.readouterr()
     assert out == "" and [(e["event"], e["route"]) for e in json_lines(err)] == [("api_request", "/api/v1/findings")]
-    # The same logging as `python -m oversight api`, option for option.
     cli: dict = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **options: cli.update(options))
     monkeypatch.setattr("oversight.api.app.create_app", lambda settings: object())
@@ -177,8 +164,6 @@ def test_run_py_logs_as_python_m_oversight_api_does(
 
 
 def test_each_worker_run_py_starts_logs_json(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    """A reloaded worker (API_RELOAD) is a process of its own that run.py's set-up never reached: serve_app, the
-    factory uvicorn calls in it, configures the log itself."""
     from oversight.api import app as app_module
 
     settings = Settings(_env_file=None, api_service_key="k" * 32, log_format="json")
@@ -215,8 +200,7 @@ def test_each_api_request_is_one_structured_line_without_its_query(tmp_path: Pat
 
 
 def test_the_http_layer_never_logs_request_urls(caplog: pytest.LogCaptureFixture) -> None:
-    # A webhook URL is a credential: httpx's INFO "HTTP Request: POST <url>" must stay out,
-    # even when something sets stdlib logging to INFO after the CLI configured it.
+    # A webhook URL is a credential: httpx's INFO request line must stay out of the logs.
     configure_logging("DEBUG", "console")
     with caplog.at_level(logging.INFO):
         logging.getLogger("httpx").info("HTTP Request: POST https://example.webhook.office.com/secret-path")

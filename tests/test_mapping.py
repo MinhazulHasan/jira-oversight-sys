@@ -1,8 +1,4 @@
-"""Jira JSON -> rows, checked against the real (sanitised) AIL samples.
-
-issue_sample.json and changelog_sample.json were observed on the site. The
-mapping_*.json fixtures follow the documented shapes in SHAPES.md.
-"""
+"""Jira JSON -> rows, checked against the real (sanitised) AIL samples."""
 from __future__ import annotations
 
 import json
@@ -27,7 +23,7 @@ from oversight.store.db import Store
 
 from tests.conftest import JIRA_FIXTURES
 
-KEY = "AIL-1140"  # the sample issue
+KEY = "AIL-1140"
 T0 = "2026-11-03T05:00:00.000Z"
 T1 = "2026-11-03T06:00:00.000Z"
 
@@ -44,7 +40,7 @@ SAMPLE_STATUS_ROWS = [
     {
         "issue_key": KEY,
         "changelog_id": "334350",
-        "changed_at": "2026-11-03T05:09:56.971Z",  # 2026-11-02T23:09:56.971-0600
+        "changed_at": "2026-11-03T05:09:56.971Z",
         "author_id": "acc-dev-1",
         "from_status": "To Do",
         "to_status": "In Progress",
@@ -52,7 +48,7 @@ SAMPLE_STATUS_ROWS = [
     {
         "issue_key": KEY,
         "changelog_id": "335082",
-        "changed_at": "2026-11-04T04:54:38.662Z",  # 2026-11-03T22:54:38.662-0600
+        "changed_at": "2026-11-04T04:54:38.662Z",
         "author_id": "acc-dev-1",
         "from_status": "In Progress",
         "to_status": "Done",
@@ -66,7 +62,7 @@ SAMPLE_FIELD_ROWS = [
         "field": "assignee",
         "changed_at": "2026-11-03T05:08:21.960Z",
         "from_value": None,
-        "to_value": "acc-dev-1",  # the account id, not the display name
+        "to_value": "acc-dev-1",
     },
     {
         "issue_key": KEY,
@@ -74,15 +70,15 @@ SAMPLE_FIELD_ROWS = [
         "field": "story_points",
         "changed_at": "2026-11-03T05:09:54.208Z",
         "from_value": None,
-        "to_value": "0.5",  # from toString: `to` is null for story points
+        "to_value": "0.5",
     },
     {
         "issue_key": KEY,
         "changelog_id": "334353",
         "field": "sprint",
         "changed_at": "2026-11-03T05:10:16.892Z",
-        "from_value": None,  # "" means no sprint
-        "to_value": "4427",  # the sprint id, not its name
+        "from_value": None,
+        "to_value": "4427",
     },
 ]
 
@@ -140,9 +136,6 @@ def _without(fields: FieldsConfig, logical: str) -> FieldsConfig:
     return FieldsConfig(fields={name: ref for name, ref in fields.fields.items() if name != logical})
 
 
-# --- map_issue ------------------------------------------------------------------
-
-
 def test_map_issue_maps_every_column_of_the_real_sample(fields: FieldsConfig) -> None:
     issue = _sample_issue()
     assert map_issue(issue, fields) == {
@@ -155,8 +148,8 @@ def test_map_issue_maps_every_column_of_the_real_sample(fields: FieldsConfig) ->
         "status_category": "done",
         "assignee_id": "acc-dev-1",
         "parent_key": "AIL-1138",
-        "epic_key": "AIL-1138",  # the parent is an Epic (hierarchyLevel 1)
-        "created_at": "2026-11-03T05:08:12.832Z",  # 2026-11-02T23:08:12.832-0600 in UTC
+        "epic_key": "AIL-1138",
+        "created_at": "2026-11-03T05:08:12.832Z",
         "updated_at": "2026-11-04T04:54:38.662Z",
         "resolved_at": "2026-11-04T04:54:38.644Z",
         "original_estimate_s": None,
@@ -167,7 +160,7 @@ def test_map_issue_maps_every_column_of_the_real_sample(fields: FieldsConfig) ->
         "sprint_ids": [4427],
         "raw_json": issue,
     }
-    assert issue == _sample_issue()  # mapping never changes its input
+    assert issue == _sample_issue()
 
 
 def test_map_issue_row_has_exactly_the_issues_columns(store: Store, fields: FieldsConfig) -> None:
@@ -186,8 +179,8 @@ def test_sample_rows_store_cleanly_and_a_second_pass_writes_nothing(
         stats += store.upsert_many("field_changes", map_field_changes(KEY, histories, fields))
         return stats.written
 
-    assert write() == 1 + 2 + 3  # the issue, its two status changes, its three field changes
-    assert write() == 0  # same payloads, so nothing changes: sync idempotency rests on this
+    assert write() == 1 + 2 + 3
+    assert write() == 0
     stored = store.query_one("SELECT sprint_ids, story_points, raw_json FROM issues")
     assert stored["sprint_ids"] == "[4427]"
     assert stored["story_points"] == 0.5
@@ -212,10 +205,10 @@ def test_subtask_keeps_its_parent_but_has_no_epic(fields: FieldsConfig) -> None:
 @pytest.mark.parametrize(
     ("parent_type", "epic_key"),
     [
-        ({"name": "Epic"}, "AIL-1138"),  # no hierarchyLevel: the name decides
+        ({"name": "Epic"}, "AIL-1138"),
         ({"name": "Epic", "hierarchyLevel": None}, "AIL-1138"),
-        ({"name": "Feature", "hierarchyLevel": 1}, "AIL-1138"),  # an epic type renamed by an admin
-        ({"name": "Epic", "hierarchyLevel": 0}, None),  # the level wins over the name
+        ({"name": "Feature", "hierarchyLevel": 1}, "AIL-1138"),
+        ({"name": "Epic", "hierarchyLevel": 0}, None),
         ({"name": "Task"}, None),
         (None, None),
     ],
@@ -240,7 +233,6 @@ def _company_issue(epic_link: Any) -> dict[str, Any]:
 def test_company_managed_epic_link_gives_the_epic() -> None:
     row = map_issue(_company_issue("AIL-5"), COMPANY_FIELDS)
     assert (row["parent_key"], row["epic_key"]) == (None, "AIL-5")
-    # Points come from this site's own field id; integer points become a float.
     assert row["story_points"] == 3.0
     assert isinstance(row["story_points"], float)
 
@@ -251,13 +243,13 @@ def test_epic_link_without_a_key_string_gives_no_epic(value: Any) -> None:
 
 
 def test_parent_epic_wins_over_the_epic_link() -> None:
-    issue = _sample_issue()  # its parent AIL-1138 is an epic
+    issue = _sample_issue()
     issue["fields"]["customfield_10014"] = "AIL-5"
     assert map_issue(issue, COMPANY_FIELDS)["epic_key"] == "AIL-1138"
 
 
 def test_epic_link_is_ignored_when_fields_yaml_has_none(fields: FieldsConfig) -> None:
-    assert fields.id_of("epic_link") is None  # team-managed AIL has no Epic Link field
+    assert fields.id_of("epic_link") is None
     assert map_issue(_company_issue("AIL-5"), fields)["epic_key"] is None
 
 
@@ -269,7 +261,7 @@ def test_missing_or_null_nested_objects_give_none(fields: FieldsConfig) -> None:
     del values["status"]["statusCategory"]
     values["issuetype"] = None
     values["customfield_10016"] = None
-    values["customfield_10020"] = None  # sprint null
+    values["customfield_10020"] = None
     values["resolutiondate"] = None
     row = map_issue(issue, fields)
     assert row["assignee_id"] is None
@@ -277,7 +269,7 @@ def test_missing_or_null_nested_objects_give_none(fields: FieldsConfig) -> None:
     assert (row["status"], row["status_category"]) == ("Done", None)
     assert row["issue_type"] is None
     assert row["story_points"] is None
-    assert row["sprint_ids"] == []  # the site has a sprint field; this issue is in no sprint
+    assert row["sprint_ids"] == []
     assert row["resolved_at"] is None
 
 
@@ -292,8 +284,8 @@ def test_missing_or_null_nested_objects_give_none(fields: FieldsConfig) -> None:
 )
 def test_bare_issue_maps_without_raising(fields: FieldsConfig, issue: dict[str, Any]) -> None:
     row = map_issue(issue, fields)
-    assert row["issue_id"] == "52507"  # a numeric id is stored as text
-    assert row["project_key"] == "AIL"  # the key's prefix when fields.project is missing
+    assert row["issue_id"] == "52507"
+    assert row["project_key"] == "AIL"
     assert row["sprint_ids"] == []
     assert row["raw_json"] == issue
     rest = set(row) - {"issue_key", "issue_id", "project_key", "sprint_ids", "raw_json"}
@@ -320,7 +312,7 @@ LEGACY_SPRINTS = [
         ([{"id": "4427"}, {"id": 4427}], [4427]),
         ([{"name": "a sprint without an id"}, {"id": 4427}], [4427]),
         (LEGACY_SPRINTS, [12, 15]),
-        ({"id": 4427}, [4427]),  # a single object instead of a list
+        ({"id": 4427}, [4427]),
     ],
 )
 def test_sprint_ids(fields: FieldsConfig, value: Any, expected: list[int]) -> None:
@@ -331,7 +323,7 @@ def test_sprint_ids(fields: FieldsConfig, value: Any, expected: list[int]) -> No
 
 def test_sprint_ids_are_none_when_the_site_has_no_sprint_field(fields: FieldsConfig) -> None:
     removed = _without(fields, "sprint")
-    nulled = FieldsConfig(fields={**fields.fields, "sprint": None})  # `sprint: null` in fields.yaml
+    nulled = FieldsConfig(fields={**fields.fields, "sprint": None})
     for no_sprint in (removed, nulled):
         assert map_issue(_sample_issue(), no_sprint)["sprint_ids"] is None
 
@@ -375,12 +367,9 @@ def test_issue_without_its_key_or_id_is_rejected(fields: FieldsConfig, missing: 
 @pytest.mark.parametrize("value", ["yesterday", "2026-11-02T23:08:12.832", {"date": "2026-11-02"}])
 def test_unparseable_issue_timestamp_is_rejected(fields: FieldsConfig, value: Any) -> None:
     issue = _sample_issue()
-    issue["fields"]["created"] = value  # the middle one has no UTC offset
+    issue["fields"]["created"] = value
     with pytest.raises(JiraError, match="'created' of AIL-1140 is not a timestamp"):
         map_issue(issue, fields)
-
-
-# --- map_status_changes -----------------------------------------------------------
 
 
 def test_status_changes_from_the_real_changelog(store: Store) -> None:
@@ -388,17 +377,14 @@ def test_status_changes_from_the_real_changelog(store: Store) -> None:
     rows = map_status_changes(KEY, histories)
     assert rows == SAMPLE_STATUS_ROWS
     assert all(set(row) == _columns(store, "status_changes") for row in rows)
-    assert histories == _sample_histories()  # mapping never changes its input
+    assert histories == _sample_histories()
 
 
 def test_status_changes_are_sorted_when_histories_come_newest_first() -> None:
-    # expand=changelog returns the same histories newest first.
     assert map_status_changes(KEY, list(reversed(_sample_histories()))) == SAMPLE_STATUS_ROWS
 
 
 def test_bulk_fetch_form_maps_like_the_issue_changelog(fields: FieldsConfig) -> None:
-    # Bulk fetch keys entries by issue id, may split an issue over pages and sends
-    # epoch milliseconds. Merged by id, the histories must give the same rows.
     entries = _load("mapping_bulk_changelog.json")["issueChangeLogs"]
     histories = [h for entry in entries if entry["issueId"] == "52507" for h in entry["changeHistories"]]
     assert map_status_changes(KEY, histories) == SAMPLE_STATUS_ROWS
@@ -412,7 +398,7 @@ def test_epoch_millisecond_created_becomes_utc() -> None:
 
 def test_status_item_without_field_id_is_matched_by_field_and_fieldtype() -> None:
     item = _status_item("To Do", "In Progress")
-    del item["fieldId"]  # field "status" and fieldtype "jira" remain
+    del item["fieldId"]
     rows = map_status_changes("AIL-1", [_history("100", T0, item)])
     assert [(row["from_status"], row["to_status"]) for row in rows] == [("To Do", "In Progress")]
 
@@ -420,7 +406,6 @@ def test_status_item_without_field_id_is_matched_by_field_and_fieldtype() -> Non
 @pytest.mark.parametrize(
     "item",
     [
-        # A custom field that happens to be called "status", with and without its fieldId.
         {"field": "status", "fieldtype": "custom", "fromString": "a", "toString": "b"},
         {"field": "status", "fieldtype": "custom", "fieldId": "customfield_10500", "fromString": "a", "toString": "b"},
         {"field": "resolution", "fieldtype": "jira", "fieldId": "resolution", "to": "10000", "toString": "Done"},
@@ -433,9 +418,9 @@ def test_other_items_are_not_status_changes(item: dict[str, Any]) -> None:
 def test_tied_timestamps_order_ids_as_numbers() -> None:
     histories = [
         _history("10", T0, _status_item("In Progress", "Done")),
-        _history("x7", T0, _status_item("Done", "In Progress")),  # a non-numeric id sorts after numeric ones
+        _history("x7", T0, _status_item("Done", "In Progress")),
         _history("9", T0, _status_item("To Do", "In Progress")),
-        _history("5", T1, _status_item("In Progress", "Done")),  # a smaller id, but later
+        _history("5", T1, _status_item("In Progress", "Done")),
     ]
     ids = [row["changelog_id"] for row in map_status_changes("AIL-1", histories)]
     assert ids == ["9", "10", "x7", "5"]
@@ -465,7 +450,7 @@ def test_a_history_delivered_twice_gives_one_row() -> None:
     [
         ({"id": None}, "without an id"),
         ({"created": None}, "without a created time"),
-        ({"created": "2026-11-03 05:00"}, "is not a timestamp"),  # no UTC offset
+        ({"created": "2026-11-03 05:00"}, "is not a timestamp"),
     ],
 )
 def test_a_history_without_id_or_time_is_rejected(
@@ -481,12 +466,9 @@ def test_a_history_without_id_or_time_is_rejected(
 
 def test_histories_that_give_no_row_need_no_id_or_time(fields: FieldsConfig) -> None:
     description = {"field": "description", "fieldtype": "jira", "fieldId": "description", "toString": "<redacted>"}
-    untracked = {"items": [description]}  # no id, no created
+    untracked = {"items": [description]}
     assert map_status_changes("AIL-1", [untracked, {}]) == []
     assert map_field_changes("AIL-1", [untracked, {}], fields) == []
-
-
-# --- map_field_changes ------------------------------------------------------------
 
 
 def test_field_changes_from_the_real_changelog(store: Store, fields: FieldsConfig) -> None:
@@ -539,10 +521,10 @@ def test_several_sprints_stay_one_string_of_ids(fields: FieldsConfig) -> None:
     ("name", "logical"),
     [
         ("Story point estimate", "story_points"),
-        ("STORY POINT ESTIMATE", "story_points"),  # case-insensitive
+        ("STORY POINT ESTIMATE", "story_points"),
         ("Sprint", "sprint"),
         ("Code Reviewers", "code_reviewers"),
-        ("timeoriginalestimate", "original_estimate"),  # system fields go by their id
+        ("timeoriginalestimate", "original_estimate"),
         ("timeestimate", "remaining_estimate"),
         ("Assignee", "assignee"),
     ],
@@ -572,7 +554,6 @@ def test_a_display_name_shared_by_two_tracked_fields_matches_neither() -> None:
     )
     nameless = {"field": "Points", "fieldtype": "custom", "toString": "3"}
     assert map_field_changes("AIL-1", [_history("404", T0, nameless)], clash) == []
-    # The fieldId still identifies the field exactly.
     with_id = {**nameless, "fieldId": "customfield_10016"}
     rows = map_field_changes("AIL-1", [_history("405", T0, with_id)], clash)
     assert [row["field"] for row in rows] == ["story_points"]
@@ -580,7 +561,7 @@ def test_a_display_name_shared_by_two_tracked_fields_matches_neither() -> None:
 
 def test_same_field_twice_in_one_history_keeps_the_last(fields: FieldsConfig) -> None:
     second = {"field": "Story point estimate", "fieldtype": "custom", "fromString": "1", "toString": "2"}
-    history = _history("406", T0, _points_item("1"), second)  # matched by fieldId, then by name
+    history = _history("406", T0, _points_item("1"), second)
     rows = map_field_changes("AIL-1", [history], fields)
     assert [(row["field"], row["from_value"], row["to_value"]) for row in rows] == [("story_points", "1", "2")]
 
@@ -588,15 +569,12 @@ def test_same_field_twice_in_one_history_keeps_the_last(fields: FieldsConfig) ->
 @pytest.mark.parametrize(
     ("change", "values"),
     [
-        # People fields: from/to hold account ids, the strings hold display names.
         ({"from": "acc-dev-1", "fromString": "Developer One", "to": "acc-dev-2", "toString": "Developer Two"},
          ("acc-dev-1", "acc-dev-2")),
-        # Story points: from/to are null and the value is in the strings.
         ({"from": None, "fromString": "0.5", "to": None, "toString": "1"}, ("0.5", "1")),
-        # Sprints: "" means none.
         ({"from": "", "fromString": "", "to": "4427", "toString": "Sample Sprint 10"}, (None, "4427")),
         ({"from": "", "fromString": "Old", "to": "", "toString": ""}, ("Old", None)),
-        ({"from": 3600, "to": 1800}, ("3600", "1800")),  # numbers come back as text
+        ({"from": 3600, "to": 1800}, ("3600", "1800")),
         ({}, (None, None)),
     ],
 )
@@ -611,15 +589,12 @@ def test_change_values_prefer_from_and_to_over_the_strings(
 def test_field_changes_sort_by_time_then_numeric_id_then_field(fields: FieldsConfig) -> None:
     assignee = {"field": "assignee", "fieldtype": "jira", "fieldId": "assignee", "to": "acc-dev-1"}
     histories = [
-        _history("5", T1, assignee),  # a smaller id, but later
+        _history("5", T1, assignee),
         _history("10", T0, _points_item("2"), assignee),
         _history("9", T0, _points_item("1")),
     ]
     order = [(row["changelog_id"], row["field"]) for row in map_field_changes("AIL-1", histories, fields)]
     assert order == [("9", "story_points"), ("10", "assignee"), ("10", "story_points"), ("5", "assignee")]
-
-
-# --- map_worklog -----------------------------------------------------------------
 
 
 def test_worklog_from_the_documented_shape(store: Store) -> None:
@@ -628,7 +603,7 @@ def test_worklog_from_the_documented_shape(store: Store) -> None:
     assert row == {
         "worklog_id": "67746",
         "issue_key": KEY,
-        "started_at": "2026-11-02T15:00:00.000Z",  # 09:00 in Chicago
+        "started_at": "2026-11-02T15:00:00.000Z",
         "seconds": 14400,
         "author_id": "app-tempo",
         "updated_at": "2026-11-03T05:09:51.525Z",
@@ -639,7 +614,7 @@ def test_worklog_from_the_documented_shape(store: Store) -> None:
 def test_worklog_with_missing_parts_gives_none() -> None:
     row = map_worklog("AIL-1", {"id": 67746, "author": None, "timeSpentSeconds": None})
     assert row == {
-        "worklog_id": "67746",  # a numeric id is stored as text
+        "worklog_id": "67746",
         "issue_key": "AIL-1",
         "started_at": None,
         "seconds": None,
@@ -651,9 +626,6 @@ def test_worklog_with_missing_parts_gives_none() -> None:
 def test_worklog_without_an_id_is_rejected() -> None:
     with pytest.raises(JiraError, match="worklog of AIL-1 without an id"):
         map_worklog("AIL-1", {"timeSpentSeconds": 60})
-
-
-# --- map_remote_links --------------------------------------------------------------
 
 
 def test_remote_links_skip_missing_urls_and_keep_the_first_per_target(store: Store) -> None:
@@ -675,9 +647,6 @@ def test_remote_link_edge_cases() -> None:
     assert rows == [{"issue_key": KEY, "kind": "remote_link", "target": "https://git.example/pr/1", "title": None}]
 
 
-# --- map_issue_links -----------------------------------------------------------------
-
-
 def test_issue_links_use_the_direction_text_and_merge_per_target(store: Store) -> None:
     issue = _sample_issue()
     issue["fields"]["issuelinks"] = _load("mapping_issuelinks.json")["issuelinks"]
@@ -691,7 +660,7 @@ def test_issue_links_use_the_direction_text_and_merge_per_target(store: Store) -
 
 
 def test_issue_without_links_gives_no_rows() -> None:
-    assert map_issue_links(_sample_issue()) == []  # the real sample has "issuelinks": []
+    assert map_issue_links(_sample_issue()) == []
     assert map_issue_links({"id": "1", "key": "AIL-1", "fields": {"issuelinks": None}}) == []
     assert map_issue_links({"id": "1", "key": "AIL-1"}) == []
 
@@ -699,9 +668,6 @@ def test_issue_without_links_gives_no_rows() -> None:
 def test_link_type_without_direction_text_gives_no_title() -> None:
     issue = {"key": "AIL-1", "fields": {"issuelinks": [{"type": {"name": "Odd"}, "inwardIssue": {"key": "AIL-2"}}]}}
     assert map_issue_links(issue) == [{"issue_key": "AIL-1", "kind": "issue_link", "target": "AIL-2", "title": None}]
-
-
-# --- map_statuses ---------------------------------------------------------------------
 
 
 def test_statuses_appear_once_across_issue_types(store: Store) -> None:
@@ -716,7 +682,7 @@ def test_statuses_appear_once_across_issue_types(store: Store) -> None:
 
 def test_status_edge_cases() -> None:
     project_statuses = [
-        {"name": "Task", "statuses": [{"id": 10087, "name": "In Review"}]},  # numeric id, no category
+        {"name": "Task", "statuses": [{"id": 10087, "name": "In Review"}]},
         {"name": "Bug", "statuses": None},
         {"name": "Test"},
     ]
@@ -730,9 +696,6 @@ def test_status_edge_cases() -> None:
 def test_status_without_an_id_or_a_name_is_rejected(status: dict[str, Any]) -> None:
     with pytest.raises(JiraError, match="of project AIL without"):
         map_statuses("AIL", [{"statuses": [status]}])
-
-
-# --- a board's members (user/assignable/search) ------------------------------------------------------
 
 
 def member(account: str = "712020:aaaa-0001", **fields: Any) -> dict[str, Any]:
@@ -765,10 +728,9 @@ def test_a_member_is_a_people_row_as_an_assignee_is_and_nothing_more() -> None:
     text = json.dumps(row)
     for kept_out in ("noor.haddad@example.invalid", "Asia/Dubai", "en_GB", "example.invalid/rest", "16x16", "32x32"):
         assert kept_out not in text
-    # The same row map_assignee makes from the same user object.
     assert row == map_assignee({"fields": {"assignee": member()}}, T0)
     with Store.open(":memory:") as store:
-        store.upsert("people", row)  # a people row exactly: every key a column
+        store.upsert("people", row)
 
 
 @pytest.mark.parametrize(

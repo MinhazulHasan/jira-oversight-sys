@@ -1,9 +1,3 @@
-"""The checks (oversight/rules/checks.py), each called directly on hand-built issues.
-
-Each test builds a few issues with tests/rules_helpers.py, derives them at the
-fixed NOW, then calls one check through a RuleContext as the engine would, and
-compares whole Hits (evidence key, evidence and message) for the hit cases.
-"""
 from __future__ import annotations
 
 import pytest
@@ -25,13 +19,12 @@ from tests.rules_helpers import (
     with_project,
 )
 
-STARTED = [(-48.0, "To Do", "In Progress")]  # entered development 48 h before NOW
+STARTED = [(-48.0, "To Do", "In Progress")]
 FINISHED = [*STARTED, (-2.0, "In Progress", "Done")]
 
 
 @pytest.fixture
 def hours_process(process: ProcessConfig) -> ProcessConfig:
-    """AIL plus OPS: the same three statuses, estimated in original-estimate hours."""
     return with_project(process, "OPS", estimate=HOURS_BASIS)
 
 
@@ -40,14 +33,11 @@ def _ops(store: Store, hours_process: ProcessConfig, fields: FieldsConfig) -> Ru
     return context(store, hours_process, fields, project="OPS")
 
 
-# --- missing_estimate ---------------------------------------------------------------------
-
-
 def test_missing_estimate_on_a_points_project(store: Store, process: ProcessConfig, fields: FieldsConfig) -> None:
     add_issue(store, "AIL-1", status="In Progress", changes=STARTED)
-    add_issue(store, "AIL-2", status="In Progress", changes=STARTED, original_h=8)  # hours aren't AIL's basis
+    add_issue(store, "AIL-2", status="In Progress", changes=STARTED, original_h=8)
     add_issue(store, "AIL-3", status="In Progress", changes=STARTED, points=3)
-    add_issue(store, "AIL-4")  # never started
+    add_issue(store, "AIL-4")
     derive(store, process)
     ctx = context(store, process, fields)
 
@@ -64,7 +54,7 @@ def test_missing_estimate_on_an_hours_project(
     store: Store, hours_process: ProcessConfig, fields: FieldsConfig
 ) -> None:
     add_issue(store, "OPS-1", status="Done", changes=FINISHED)
-    add_issue(store, "OPS-2", status="In Progress", changes=STARTED, points=3)  # points aren't OPS's basis
+    add_issue(store, "OPS-2", status="In Progress", changes=STARTED, points=3)
     add_issue(store, "OPS-3", status="In Progress", changes=STARTED, original_h=6)
     ctx = _ops(store, hours_process, fields)
 
@@ -74,9 +64,6 @@ def test_missing_estimate_on_an_hours_project(
     assert hits(ctx, "missing_estimate", "OPS-3") == []
 
 
-# --- estimate_after_start -------------------------------------------------------------------
-
-
 def test_estimate_after_start_on_a_points_project(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
@@ -84,15 +71,14 @@ def test_estimate_after_start_on_a_points_project(
         history = [] if set_at is None else [(set_at, "story_points", None, "3")]
         add_issue(store, key, status="In Progress", changes=STARTED, points=3, field_changes=history)
 
-    pointed("AIL-1", -40)  # 8 h after the start
-    pointed("AIL-2", -47.5)  # inside the hour's grace
-    pointed("AIL-3", -60)  # before the start
-    pointed("AIL-4", None)  # set at creation, no history
-    add_issue(store, "AIL-5", status="In Progress", changes=STARTED)  # never set
+    pointed("AIL-1", -40)
+    pointed("AIL-2", -47.5)
+    pointed("AIL-3", -60)
+    pointed("AIL-4", None)
+    add_issue(store, "AIL-5", status="In Progress", changes=STARTED)
     derive(store, process)
     ctx = context(store, process, fields)
 
-    # The evidence holds the grace it was found under, so a finding a later setting closed still says what it crossed.
     assert hits(ctx, "estimate_after_start", "AIL-1", grace_hours=1) == [
         Hit(
             "estimate-after-start",
@@ -102,18 +88,17 @@ def test_estimate_after_start_on_a_points_project(
     ]
     for key in ("AIL-2", "AIL-3", "AIL-4", "AIL-5"):
         assert hits(ctx, "estimate_after_start", key, grace_hours=1) == [], key
-    [default] = hits(ctx, "estimate_after_start", "AIL-1")  # the grace defaults to 1 h
+    [default] = hits(ctx, "estimate_after_start", "AIL-1")
     assert default.evidence["grace_hours"] == 1.0
     assert hits(ctx, "estimate_after_start", "AIL-1", grace_hours=7.5)[0].evidence["grace_hours"] == 7.5
-    assert hits(ctx, "estimate_after_start", "AIL-1", grace_hours=8) == []  # exactly the grace is fine
+    assert hits(ctx, "estimate_after_start", "AIL-1", grace_hours=8) == []
 
 
 def test_estimate_after_start_on_an_hours_project(
     store: Store, hours_process: ProcessConfig, fields: FieldsConfig
 ) -> None:
     add_issue(store, "OPS-1", status="In Progress", changes=STARTED, original_h=10,
-              field_changes=[(0, "original_estimate", None, "36000")])  # 48 h after the start
-    # Story-point history means nothing on an hours project: the original estimate was there from creation.
+              field_changes=[(0, "original_estimate", None, "36000")])
     add_issue(store, "OPS-2", status="In Progress", changes=STARTED, original_h=10, points=2,
               field_changes=[(-10, "story_points", None, "2")])
     ctx = _ops(store, hours_process, fields)
@@ -128,14 +113,11 @@ def test_estimate_after_start_on_an_hours_project(
     assert hits(ctx, "estimate_after_start", "OPS-2") == []
 
 
-# --- effort_ratio_at_least --------------------------------------------------------------------
-
-
 def test_effort_ratio_on_a_points_project(store: Store, process: ProcessConfig, fields: FieldsConfig) -> None:
-    add_issue(store, "AIL-1", status="Done", changes=FINISHED, points=2, spent_h=32)  # 2.0× of 16 h
-    add_issue(store, "AIL-2", status="Done", changes=FINISHED, points=2, spent_h=20)  # 1.25×
-    add_issue(store, "AIL-3", status="Done", changes=FINISHED, original_h=4, spent_h=40)  # no points: no ratio
-    add_issue(store, "AIL-4", status="Done", changes=FINISHED, points=1, worklogs=[(-30, 6), (-20, 6)])  # 1.5×
+    add_issue(store, "AIL-1", status="Done", changes=FINISHED, points=2, spent_h=32)
+    add_issue(store, "AIL-2", status="Done", changes=FINISHED, points=2, spent_h=20)
+    add_issue(store, "AIL-3", status="Done", changes=FINISHED, original_h=4, spent_h=40)
+    add_issue(store, "AIL-4", status="Done", changes=FINISHED, points=1, worklogs=[(-30, 6), (-20, 6)])
     derive(store, process)
     ctx = context(store, process, fields)
 
@@ -148,7 +130,6 @@ def test_effort_ratio_on_a_points_project(store: Store, process: ProcessConfig, 
     ]
     assert hits(ctx, "effort_ratio_at_least", "AIL-2", threshold=1.5) == []
     assert hits(ctx, "effort_ratio_at_least", "AIL-3", threshold=1.5) == []
-    # The threshold is inclusive; time spent is Jira's timespent, here the worklogs' sum.
     assert [h.message for h in hits(ctx, "effort_ratio_at_least", "AIL-4", threshold=1.5)] == [
         "Logged 12.0 h against an estimate of 8.0 h (1.50×; threshold 1.5×)"
     ]
@@ -156,9 +137,9 @@ def test_effort_ratio_on_a_points_project(store: Store, process: ProcessConfig, 
 
 
 def test_effort_ratio_on_an_hours_project(store: Store, hours_process: ProcessConfig, fields: FieldsConfig) -> None:
-    add_issue(store, "OPS-1", status="Done", changes=FINISHED, original_h=10, spent_h=15)  # exactly 1.5×
+    add_issue(store, "OPS-1", status="Done", changes=FINISHED, original_h=10, spent_h=15)
     add_issue(store, "OPS-2", status="Done", changes=FINISHED, original_h=10, spent_h=14)
-    add_issue(store, "OPS-3", status="Done", changes=FINISHED, points=1, spent_h=40)  # no original estimate
+    add_issue(store, "OPS-3", status="Done", changes=FINISHED, points=1, spent_h=40)
     ctx = _ops(store, hours_process, fields)
 
     assert hits(ctx, "effort_ratio_at_least", "OPS-1", threshold=1.5) == [
@@ -172,16 +153,12 @@ def test_effort_ratio_on_an_hours_project(store: Store, hours_process: ProcessCo
     assert hits(ctx, "effort_ratio_at_least", "OPS-3", threshold=1.5) == []
 
 
-# --- entered_stage_without_evidence, skipped_stage, reopened ------------------------------------
-
-
 def test_entered_stage_without_evidence(store: Store, process: ProcessConfig, fields: FieldsConfig) -> None:
     reviewed = with_project(process, status_to_stage=FIVE_STAGES, evidence={"code_review": {"status": "Code Review"}})
     add_issue(store, "AIL-1", status="Testing", changes=[*STARTED, (-20, "In Progress", "Testing")])
     add_issue(store, "AIL-2", status="Testing",
               changes=[*STARTED, (-30, "In Progress", "Code Review"), (-20, "Code Review", "Testing")])
     add_issue(store, "AIL-3", status="Code Review", changes=[*STARTED, (-30, "In Progress", "Code Review")])
-    # Reviewed only after first reaching testing: that first entry still had no review before it.
     add_issue(store, "AIL-4", status="Testing", changes=[
         *STARTED, (-30, "In Progress", "Testing"), (-20, "Testing", "Code Review"), (-10, "Code Review", "Testing"),
     ])
@@ -191,7 +168,7 @@ def test_entered_stage_without_evidence(store: Store, process: ProcessConfig, fi
 
     assert hits(ctx, "entered_stage_without_evidence", "AIL-1", **params) == [
         Hit(
-            "testing-2",  # the interval's seq: To Do 0, In Progress 1, Testing 2
+            "testing-2",
             {"stage": "testing", "entered_at": at(-20), "evidence": "code_review", "status": "Testing"},
             "Entered testing (Testing) with no code review recorded before it",
         )
@@ -256,12 +233,8 @@ def test_reopened_one_hit_per_reopen(store: Store, process: ProcessConfig, field
 def test_a_move_into_a_done_status_missing_from_the_statuses_table_is_not_a_reopen(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    # Closed was renamed or moved, so the statuses table lacks it and no stage maps it;
-    # it is the issue's current status and Jira reports that as done. Derive's lookup
-    # falls back to the issue's own category (reopen_count 0), and the rule must agree.
     add_issue(store, "AIL-1", status="Closed", changes=[*FINISHED, (-1, "Done", "Closed")])
     store.conn.execute("UPDATE issues SET status_category = 'done' WHERE issue_key = 'AIL-1'")
-    # Moving out of Done into a status that is unknown and not the current one stays a reopen.
     add_issue(store, "AIL-2", status="In Progress", changes=[*FINISHED, (-1, "Done", "Parked"), (-0.5, "Parked", "In Progress")])
     derive(store, process)
     ctx = context(store, process, fields)
@@ -271,13 +244,10 @@ def test_a_move_into_a_done_status_missing_from_the_statuses_table_is_not_a_reop
     assert [(h.evidence_key, h.message) for h in hits(ctx, "reopened", "AIL-2")] == [("reopen-3", "Reopened: Done → Parked")]
 
 
-# --- in_progress_unassigned -----------------------------------------------------------------------
-
-
 def test_in_progress_unassigned(store: Store, process: ProcessConfig, fields: FieldsConfig) -> None:
     add_issue(store, "AIL-1", status="In Progress", changes=[(-30, "To Do", "In Progress")], assignee=None)
     add_issue(store, "AIL-2", status="In Progress", changes=[(-30, "To Do", "In Progress")])
-    add_issue(store, "AIL-3", assignee=None)  # unassigned, but not in progress
+    add_issue(store, "AIL-3", assignee=None)
     add_issue(store, "AIL-4", status="In Progress", changes=[(-72, "To Do", "In Progress")], assignee=None)
     derive(store, process)
     ctx = context(store, process, fields)
@@ -296,13 +266,10 @@ def test_in_progress_unassigned(store: Store, process: ProcessConfig, fields: Fi
     ]
 
 
-# --- stuck_in_status and no_evidence_after_percentile (thresholds from the project's history) ------
-
-
 def test_stuck_in_status_against_the_projects_own_history(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    add_history(store, "In Progress", [10, 20, 30, 40])  # p90 by hand: 30 + 0.7 * 10 = 37 h
+    add_history(store, "In Progress", [10, 20, 30, 40])
     add_issue(store, "AIL-1", status="In Progress", changes=[(-50, "To Do", "In Progress")])
     add_issue(store, "AIL-2", status="In Progress", changes=[(-20, "To Do", "In Progress")])
     derive(store, process)
@@ -330,7 +297,6 @@ def test_stuck_in_status_is_silent_with_a_note_when_history_is_thin(
 
     assert hits(ctx, "stuck_in_status", "AIL-1", pct=90) == []
     assert hits(ctx, "stuck_in_status", "AIL-2", pct=90) == []
-    # One note for the rule, however many issues met the thin history.
     assert ctx.notes == {"W-AGE-01": "In Progress: fewer than 4 closed intervals in 90 days, no threshold"}
 
 
@@ -340,11 +306,11 @@ def _review_label_process(process: ProcessConfig) -> ProcessConfig:
 
 def test_no_evidence_after_percentile(store: Store, process: ProcessConfig, fields: FieldsConfig) -> None:
     labelled = _review_label_process(process)
-    add_history(store, "In Progress", [10, 20, 30, 40])  # development p75 by hand: 30 + 0.25 * 10 = 32.5 h
+    add_history(store, "In Progress", [10, 20, 30, 40])
     add_issue(store, "AIL-1", status="In Progress", changes=[(-40, "To Do", "In Progress")])
     add_issue(store, "AIL-2", status="In Progress", changes=[(-40, "To Do", "In Progress")], labels=["code-reviewed"])
     add_issue(store, "AIL-3", status="In Progress", changes=[(-20, "To Do", "In Progress")])
-    add_issue(store, "AIL-4", status="Testing", created=-200)  # not in the stage at all
+    add_issue(store, "AIL-4", status="Testing", created=-200)
     derive(store, labelled)
     ctx = context(store, labelled, fields, catalogue(min_history=4), rule="W-REV-01")
     params = {"stage": "development", "evidence": "code_review", "pct": 75}
@@ -376,15 +342,12 @@ def test_no_evidence_after_percentile_is_silent_with_a_note_when_history_is_thin
     assert ctx.notes == {"W-REV-01": "development: fewer than 5 closed intervals in 180 days, no threshold"}
 
 
-# --- unestimated_in_active_sprint ---------------------------------------------------------------
-
-
 def test_unestimated_in_active_sprint(store: Store, process: ProcessConfig, fields: FieldsConfig) -> None:
     active, closed = sprint(4401), sprint(4400, state="closed", start=-480, end=-240)
     add_issue(store, "AIL-1", sprints=[closed, active])
     add_issue(store, "AIL-2", sprints=[active], points=3)
-    add_issue(store, "AIL-3", sprints=[closed])  # only a finished sprint
-    add_issue(store, "AIL-4")  # in no sprint
+    add_issue(store, "AIL-3", sprints=[closed])
+    add_issue(store, "AIL-4")
     derive(store, process)
     ctx = context(store, process, fields)
 
@@ -403,7 +366,7 @@ def test_unestimated_in_active_sprint_on_an_hours_project(
     store: Store, hours_process: ProcessConfig, fields: FieldsConfig
 ) -> None:
     board = [sprint(4401, name="Ops 12")]
-    add_issue(store, "OPS-1", sprints=board, points=3)  # points aren't the estimate on OPS
+    add_issue(store, "OPS-1", sprints=board, points=3)
     add_issue(store, "OPS-2", sprints=board, original_h=6)
     ctx = _ops(store, hours_process, fields)
 
@@ -413,12 +376,7 @@ def test_unestimated_in_active_sprint_on_an_hours_project(
     assert hits(ctx, "unestimated_in_active_sprint", "OPS-2") == []
 
 
-# --- sprint_at_risk -----------------------------------------------------------------------------
-
-
 def _sprint_of_five(store: Store, *, not_started: int, end: float) -> None:
-    """Five issues in active sprint 4401, ending `end` hours from now: `not_started` of
-    them still in To Do, then issues in progress, and the fifth done."""
     board = [sprint(4401, end=end)]
     for n in range(1, 6):
         if n <= not_started:
@@ -441,7 +399,6 @@ def test_sprint_at_risk_at_40_percent_not_started_with_2_days_left(
 ) -> None:
     _sprint_of_five(store, not_started=2, end=48)
 
-    # The evidence holds the limits it was found under beside what was measured (days left, the share not started).
     assert _at_risk(store, process, fields) == Hit(
         "sprint-4401-at-risk",
         {"sprint_id": 4401, "name": "Sprint 4401", "end_date": at(48), "days_left": 2.0, "issues": 5,
@@ -469,7 +426,7 @@ def test_sprint_past_its_end_is_at_risk_and_epics_are_not_counted(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
     _sprint_of_five(store, not_started=2, end=-24)
-    add_issue(store, "AIL-6", issue_type="Epic", sprints=[sprint(4401, end=-24)])  # a container, never "started"
+    add_issue(store, "AIL-6", issue_type="Epic", sprints=[sprint(4401, end=-24)])
 
     result = _at_risk(store, process, fields)
 
@@ -482,15 +439,12 @@ def test_sprint_past_its_end_is_at_risk_and_epics_are_not_counted(
 def test_a_sprint_past_its_end_with_work_not_done_is_at_risk_whatever_share_started(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    """18 Nov 2026: AILED's sprint ended on 16 Nov and is still open with 2 of 17 tickets in progress and none in To Do,
-    and the Portfolio said "On track": a share of 0 not started is under any threshold. Past its end, work not done is
-    the risk itself."""
-    _sprint_of_five(store, not_started=0, end=-48)  # four in progress, one done, none in To Do
+    _sprint_of_five(store, not_started=0, end=-48)
 
     result = _at_risk(store, process, fields)
 
     assert result == Hit(
-        "sprint-4401-at-risk",  # the same finding as before the end: one evidence key
+        "sprint-4401-at-risk",
         {"sprint_id": 4401, "name": "Sprint 4401", "end_date": at(-48), "days_left": -2.0, "issues": 5,
          "not_started": 0, "not_done": 4, "overdue": True, "share": 0.0, "threshold_days_left": 2.0,
          "threshold_share": 0.3},
@@ -501,7 +455,7 @@ def test_a_sprint_past_its_end_with_work_not_done_is_at_risk_whatever_share_star
 def test_a_sprint_past_its_end_with_everything_done_is_not_at_risk(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    board = [sprint(4401, end=-48)]  # still open in Jira, but nothing is left to do
+    board = [sprint(4401, end=-48)]
     for n in range(1, 4):
         add_issue(store, f"AIL-{n}", status="Done", changes=FINISHED, sprints=board, points=1)
 
@@ -513,17 +467,12 @@ def test_sprint_at_risk_skips_issues_derive_has_not_reached(
 ) -> None:
     _sprint_of_five(store, not_started=1, end=48)
     derive(store, process)
-    # Synced after derive: in progress, but with no metrics yet it can't be told started or not.
     add_issue(store, "AIL-6", status="In Progress", changes=STARTED, sprints=[sprint(4401, end=48)], points=1)
     ctx = context(store, process, fields)
     [active] = ctx.active_sprints()
 
     assert "AIL-6" in active.issue_keys
-    # 1 of the 5 derived issues (20%), not 2 of 6 (33%, over the 30% share).
     assert check_sprint_at_risk(active, ctx, {"days_left": 2, "not_started_share": 0.3}) is None
-
-
-# --- how names read -------------------------------------------------------------------------------
 
 
 def test_stage_names_and_word_lists_read_as_prose() -> None:

@@ -1,10 +1,3 @@
-"""GET /insights/latest (contract 4.7): the newest weekly briefing.
-
-404 before the first briefing (`python -m oversight insights` writes one). The
-sentences and candidates are the insights row as weekly.py stored them;
-`method` tells the reader how the briefing was made, in the same words as the
-interface's sample briefing.
-"""
 from __future__ import annotations
 
 import sqlite3

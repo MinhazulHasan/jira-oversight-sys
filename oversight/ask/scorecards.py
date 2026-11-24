@@ -1,69 +1,4 @@
-"""Ask's person scorecards and comparison (JO-11): the two tools' facts, the answer built in code, and the check
-that an answer labels no one.
-
-Every figure is oversight/api/scorecard.py's, worked out as GET /people/scorecard works it out. Here they become fact
-sets, one row each, with names beside person ids (never an id alone) and each figure also as the dashboard shows it
-(`shown`: "72% · 18 of 25", a count, or the ratio to one decimal), so an answer may quote "72%" and the number check
-(validate.py) finds it:
-
-  oversight_person_scorecard -> one row per person asked about and measure, in the directory's order of the people
-      and the contract's order of the measures: {person_id, name, measure, label, kind, value, numerator,
-      denominator, shown, enough, vs_board, board_value, board_numerator, board_denominator, board_shown,
-      measurable, reason, rule_ids}
-  oversight_people_compare(measure, order) -> everyone who holds a ticket in the order asked (JO-14; the params
-      always carry the order used): "closer" closer to the process first, "most" the figure highest first,
-      "fewest" lowest first; people with too few tickets last whatever the order, then the whole board's row
-      (person_id null, name "Whole board"): {person_id, name, measure, label, kind, value, numerator, denominator,
-      shown, enough, vs_board, standing, measurable, reason}; standing is "Closer to the process", "Further from
-      the process", "Level with the board" or "Too few tickets"
-  oversight_people_compare(overall, order) -> everyone, by the number of measures on which they are closer to the
-      process than the board, most first ("closer" and "most"; ties by open findings per 10 open tickets, a figure
-      on too few tickets counting as the most) or fewest first ("fewest", the exact reverse), people compared on
-      none last: {person_id, name, closer, further, level, compared, too_few, open_findings_per_10, open_findings,
-      open_tickets, enough, standing} (open_findings and open_tickets: the ratio's numerator and denominator;
-      enough: whether it rests on enough tickets to be compared; standing "Too few tickets" for those compared on
-      none, else null); no board row (the board is what each is compared with)
-  oversight_people_compare(open_tickets | in_progress | done_in_period, order) -> everyone who holds a ticket, by
-      that count, most first ("most", and "closer": a count has no closer side) or fewest first ("fewest"), ties by
-      name; then, when the board has work nobody holds, one row for it (person_id null, name "Unassigned": no one's,
-      never ranked, JO-12 G5); then the whole board's row; in the per-measure columns (standing null: a count is
-      never closer or further); open_tickets and in_progress are counts of now, which no period bounds (their params
-      carry no days)
-
-The answer built in code (code_built), for the catalogue (which plans such a question in code) and as the analyst's
-fallback, never labels anyone and never says "best", and knows where each of its figures came from (built_answer's
-hints), so every figure is cited to the row of the person it is about (validate.py):
-- a scorecard, for each person: "{Name}, last {days} days, next to the board: closer to the process on {labels};
-  further from it on {labels}; level on {labels}." (each clause only when it has labels; "{Name}, last {days} days,
-  next to the board." when none has), then "Too few tickets to compare: {labels}."; and once, "Not measurable on
-  this board: {labels}." (in the person's paragraph for one person, as a paragraph of its own after several);
-- a comparison by a measure: "{Label}, last {days} days, {order}: {Name} {figure}, ... and {Name} {figure}. The whole
-  board: {figure}. Too few tickets to compare: {names}.", the first sentence saying the order it used in plain words
-  (JO-14): "closest to the process first" (order "closer"), "highest first" ("most") or "lowest first" ("fewest"),
-  never calling the highest worst or the lowest best ("Not measurable on this board: {Label}. {reason}" when the
-  board cannot show it);
-- the overall comparison: "Measures closer to the process than the board, last {days} days, most first: {Name}
-  {closer} of {compared}, ... Too few tickets to compare: {names}." ("fewest first" for order "fewest");
-- a comparison by a count: "Done in the period, last {days} days, most first: {Name} {count}, ... Unassigned: {count}
-  tickets done. The whole board: {count}." ("fewest first" for order "fewest"; "In progress now, most first: ..."
-  and "Open tickets, most first: ..." for the counts of now, which no period bounds; the Unassigned sentence only
-  when the tickets nobody holds count above 0: "Unassigned: 148 open tickets.", "Unassigned: 1 ticket in
-  progress.").
-Labels and names are joined "A, B and C", with no comma before "and", as the no-tickets sentence joins names. The
-service adds prompts.DECISION_YOURS after a personnel question's figures, and prompts.caveat() as the last paragraph
-of any answer that rests on figures over a period (a ranking by a count of now alone has no period to state).
-
-character_labels() is the wording check: an answer (never the question) that calls anyone lazy, useless,
-incompetent, careless, dishonest, insincere, stupid, an idiot, hopeless, worthless or pathetic, in any form of the
-word (laziness, carelessness, incompetence, lazily, lazybones), or a slacker, a liar or sloppy, is rewritten once,
-then replaced by the answer built here. The forms are listed whole, never as a stem and anything after it, and the
-names of the people on the board are taken out before the check: a surname such as Lazić or Stupidov is no label.
-
-view_rows() fills the analyst's scorecard view (oversight/ask/analyst.py): the last 90 days, the whole board's rows
-(person_id null) and everyone's who holds a ticket, or, with comparing people turned off, the one person the question
-mentions (none when it mentions several); each row carries the period (days, period_from, period_to), so an answer
-may say it.
-"""
+"""Ask's person scorecards and comparison: their facts, the answer built in code and the labelling check."""
 from __future__ import annotations
 
 import re
@@ -95,13 +30,11 @@ from oversight.ask.catalog import Column, Facts, _day, _row
 
 SCORECARD_TOOL = "oversight_person_scorecard"
 COMPARE_TOOL = "oversight_people_compare"
-# The rates of now (the open tickets stuck in a status now, the open findings per 10 open tickets now): no period is
-# said beside them, as none is true of them.
+# Rates of now: no period is said beside them.
 NOW_MEASURES = frozenset({"stuck_now", "open_findings_per_10"})
 SCORECARD_TOOLS = frozenset((SCORECARD_TOOL, COMPARE_TOOL))
 WHOLE_BOARD = "Whole board"
-# The tickets nobody holds, said after a ranking by a count (JO-12, G5), one and several: "Unassigned: 148 open
-# tickets." The dashboard's sample says the same words.
+# The tickets nobody holds, said after a ranking by a count; matches the dashboard's sample.
 UNASSIGNED_WORDS: dict[str, tuple[str, str]] = {
     "open_tickets": ("open ticket", "open tickets"),
     "in_progress": ("ticket in progress", "tickets in progress"),
@@ -110,10 +43,7 @@ UNASSIGNED_WORDS: dict[str, tuple[str, str]] = {
 # The marker words the dashboard shows beside a figure.
 STANDING = {"closer": "Closer to the process", "further": "Further from the process", "level": "Level with the board"}
 TOO_FEW = "Too few tickets"
-# Words that label someone's character: never in an answer, whatever the question says. Each word family's forms
-# listed whole (laziness, lazily, lazybones, carelessness, incompetence, stupidity, ...), never a stem and anything
-# after it, so a surname that starts the same way (Lazić, Lazidou, Stupidov) or a place (Lazio) is no label; and the
-# common insults beside them. "careful", "hopes" and "sincere" are no label either.
+# Character labels, each form listed whole so a surname such as Lazić is never matched.
 CHARACTER_LABELS = re.compile(
     r"\b(?:lazy-?bones|lazy|lazi(?:er|est|ly|ness)|useless(?:ly|ness)?|incompeten(?:t|ts|tly|ce|cy)"
     r"|careless(?:ly|ness)?|dishonest(?:ly|y)?|insincer(?:e|ely|ity)|stupid(?:er|est|ly|ity)?"
@@ -189,8 +119,7 @@ VIEW_COLUMNS: tuple[str, ...] = (
 
 
 def shown(measure: Measure, value: Value) -> str | None:
-    """A figure as the dashboard shows it: "72% · 18 of 25" (a rate), "12" (a count), "2.3" (the ratio); None when
-    there is none."""
+    """A figure as the dashboard shows it: "72% · 18 of 25", "12" or "2.3"; None when there is none."""
     figure = value["value"]
     if figure is None:
         return None
@@ -205,8 +134,7 @@ def _period_words(period: Period) -> str:
     return f"the last {period.days} days ({_day(period.since)} to {_day(period.until)})"
 
 
-# How each fact set reads, its columns named in plain lower-case words mid-sentence (the model reads the same words).
-# The dashboard's sample writes the same notes (src/server/sample/ask/scorecard.ts).
+# Each fact set's reading in plain words; the dashboard's sample writes the same notes.
 _READING = (
     "by each ticket's current assignee, Epics left out; a rate's value is a percentage of its denominator, a count's "
     "value is the count, and open findings per 10 open tickets is the open breaches and warnings on the person's open "
@@ -228,8 +156,7 @@ _OVERALL_READING = (
 
 
 def scorecard_rows(board: Board, person_ids: Sequence[str], days: int) -> tuple[list[dict[str, Any]], str]:
-    """oversight_person_scorecard's rows and note: the people asked about who are on the board, in the directory's
-    order, each measure next to the board's."""
+    """oversight_person_scorecard's rows and note: each person asked about, each measure next to the board's."""
     period = board.period(days)
     against = board_values(board, period)
     wanted = set(person_ids)
@@ -257,9 +184,7 @@ def scorecard_rows(board: Board, person_ids: Sequence[str], days: int) -> tuple[
 
 def compare_rows(board: Board, measure: str, days: int, *, first: str = "closer", only: frozenset[str] | None = None
                  ) -> tuple[list[Column], list[dict[str, Any]], str]:
-    """oversight_people_compare's columns, rows and note (see the module docstring). first: the order asked for,
-    "closer", "most" or "fewest" (scorecard.order). only: those people alone (two to ten mentioned side by side), in
-    the same order, then the whole board, and never the tickets nobody holds (no one asked about them)."""
+    """oversight_people_compare's columns, rows and note, in the order asked for."""
     period = board.period(days)
     against = board_values(board, period)
     first = effective_order(measure, first)
@@ -299,8 +224,7 @@ def compare_rows(board: Board, measure: str, days: int, *, first: str = "closer"
             None if counted else STANDING.get(one.values[chosen.key]["vs_board"] or "", TOO_FEW))
         for one in ordered
     ]
-    # A ranking by a count ranks people only (JO-12, G5): the tickets nobody holds come after it, as one row, never
-    # ranked, then the whole board's.
+    # A ranking by a count ranks people only; the tickets nobody holds follow as one unranked row.
     nobody = [ticket for ticket in board.work if ticket.holder is None] if only is None else []
     if counted and reason is None and nobody:
         rows.append(row(None, values(board, nobody, period)[chosen.key], None, name=UNASSIGNED_LABEL))
@@ -356,8 +280,7 @@ def _cell(fact: Mapping[str, Any], index: int, column: str, text: str) -> Piece:
 
 
 def _figure(fact: Mapping[str, Any], index: int, row: Mapping[str, Any]) -> list[Piece]:
-    """A figure in a sentence, cited to its own row: "72%" (a rate, from the figure as shown), "2.3" (the ratio),
-    "12" (a count)."""
+    """A figure in a sentence, cited to its own row."""
     value = row.get("value")
     if row.get("kind") == "rate":
         return [_cell(fact, index, "shown", str(value)), "%"]
@@ -411,10 +334,7 @@ def _scorecard_answer(fact: Mapping[str, Any]) -> list[list[Piece]]:
 
 
 def order_words(measure: str, first: str | None) -> str:
-    """The order a comparison's first sentence says it used, in plain words (JO-14): a rate or the ratio "closest to
-    the process first", "highest first" or "lowest first"; a count, and the overall number of measures closer, "most
-    first" or "fewest first". Never "worst" or "best": it reports the order. first: the facts' params order (none, on
-    an older fact set, reads as "closer")."""
+    """The order a comparison says it used, in plain words; never "worst" or "best"."""
     asked = first if first in ("most", "fewest") else "closer"
     if measure == OVERALL or measure in RANKED_COUNTS:
         return "fewest first" if asked == "fewest" else "most first"
@@ -456,7 +376,7 @@ def _compare_answer(fact: Mapping[str, Any]) -> list[list[Piece]]:
             pieces += _listed([[f"{row.get('name')} ", *_figure(fact, index, row)] for index, row in compared])
             pieces.append(".")
         if counted and unassigned is not None and isinstance(unassigned[1].get("value"), int) and unassigned[1]["value"]:
-            # After the ranking, never in it (JO-12, G5): "Unassigned: 148 open tickets."
+            # After the ranking, never in it: "Unassigned: 148 open tickets."
             amount = unassigned[1]["value"]
             one, several = UNASSIGNED_WORDS.get(str(measure), ("ticket", "tickets"))
             pieces += [" " if pieces else "", f"{UNASSIGNED_LABEL}: ", _figure(fact, unassigned[0], unassigned[1])[0],
@@ -470,9 +390,7 @@ def _compare_answer(fact: Mapping[str, Any]) -> list[list[Piece]]:
 
 
 def built_answer(facts: Iterable[Mapping[str, Any]]) -> tuple[str, dict[int, tuple[str, int, str]]] | None:
-    """The answer for the scorecard and comparison facts among these (fact sets as Facts.to_dict() writes them), built
-    in code: a paragraph each; and where each figure it writes starts -> (fact ref, row index, column) it was read
-    from, for validate's hints. None when there are none."""
+    """The code-built answer for the scorecard and comparison facts, with validate hints; None if there are none."""
     paragraphs: list[list[Piece]] = []
     for fact in facts:
         if fact.get("tool") == SCORECARD_TOOL:
@@ -502,9 +420,7 @@ def code_built(facts: Iterable[Mapping[str, Any]]) -> str | None:
 
 
 def scorecard_days(facts: Iterable[Facts]) -> list[int] | None:
-    """The periods of the scorecard figures an answer rests on, for the caveat, each once, shortest first: every
-    scorecard and comparison fact set's, and 90 when the analyst read the scorecard view (whose period it is); None
-    when it rests on neither. A ranking by a count of now (open tickets, in progress) has no period: it adds none."""
+    """The periods of the scorecard figures an answer rests on, shortest first, for the caveat; None if none."""
     found = list(facts)
     days = {_days(fact.to_dict()) for fact in found
             if fact.tool in SCORECARD_TOOLS
@@ -515,10 +431,7 @@ def scorecard_days(facts: Iterable[Facts]) -> list[int] | None:
 
 
 def character_labels(text: str, names: Iterable[str] = ()) -> list[str]:
-    """The words in an answer that label someone's character, each once, lower-cased, in order. names: the display
-    names of the people on the board, each word of which is taken out first, as the data writes it (case and all, as
-    names are found everywhere), so a person's name is never read as a label, written whole or in part ("Ms Lazy" is
-    her surname), while the same word written as a word ("lazy") still is."""
+    """The words in an answer that label someone's character, each once; people's names are taken out first."""
     words = sorted({word for name in names for word in name.split() if len(word) > 1}, key=len, reverse=True)
     if words:
         pattern = re.compile(r"(?<!\w)(?:" + "|".join(re.escape(word) for word in words) + r")(?!\w)")
@@ -527,8 +440,7 @@ def character_labels(text: str, names: Iterable[str] = ()) -> list[str]:
 
 
 def without_labels(text: str) -> str:
-    """The text with every measure's label blanked (as long as it was), so a figure in a label ("per 10 open
-    tickets") is never read as anyone's figure."""
+    """The text with every measure's label blanked, so a figure in a label is never read as anyone's figure."""
     return MEASURE_LABELS.sub(lambda match: " " * len(match.group()), text)
 
 
@@ -542,8 +454,7 @@ def labels_problem(words: Sequence[str]) -> str:
 
 
 def view_rows(board: Board, *, comparison: bool, mentioned: Sequence[str]) -> list[tuple[Any, ...]]:
-    """The scorecard view's rows (VIEW_COLUMNS): the last 90 days; the whole board (person_id null), then everyone
-    who holds a ticket, or with comparing people off only the one person the question mentions."""
+    """The scorecard view's rows for the last 90 days: the whole board, then the people it may show."""
     period = board.period(DEFAULT_DAYS)
     against = board_values(board, period)
     people = list(board.holders) if comparison else [who for who in board.holders if [who["id"]] == list(mentioned)]

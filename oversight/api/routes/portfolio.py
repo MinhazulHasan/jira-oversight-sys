@@ -1,60 +1,3 @@
-"""GET /portfolio (contract 4.18): every board at a glance, the admin's home (JO-12).
-
-Not board-scoped: one row for each board the service serves that has synced (JIRA_PROJECTS, in order, then the boards
-discovery found, by name: JO-17), and boards_not_synced, how many of the boards listed have not synced yet (a count:
-the dashboard says "N more boards in Jira aren't synced yet" and points at the board picker). The same count goes out
-as not_synced too, the name the first JO-17 build sent, for any client built on it (18 Nov 2026: the contract's name is
-boards_not_synced). Every figure is worked out by the same functions, from the same records, as that board's GET
-/overview, so each always equals the Overview's:
-- open_breaches, open_warnings, new_findings_7d, resolved_findings_7d: the Overview's headline totals now
-  (totals.open_breaches.current, open_warnings, new_7d and resolved_7d: oversight.api.aggregates.window_totals), so
-  what is new and resolved is what happened to the work, never what a change of the board's rule settings did to its
-  findings.
-- open_tickets, in_progress: the Overview's "where work sits now" (status_mix: work, Epics left out), its statuses
-  in the new and in-progress categories together, and in progress alone.
-- open_findings_trend: open findings, breaches and warnings, at the end of each of the last 8 weeks (Monday 00:00
-  UTC), oldest first: the 7 weeks before this one as GET /trends counts its weekly open_breaches plus
-  open_warnings, and last the current week to date, open now, which is exactly open_breaches + open_warnings.
-- tracking_since: when the rules first saw the board, as the Overview's tracking_since (null before any rules run):
-  in the board's first tracked week every finding is new only because tracking began, which the dashboard says
-  rather than showing a rise.
-- active_sprint: whether the board has an active sprint now (found in the synced sprint objects, as Ask finds it;
-  an open W-SPR-01 or W-EST-01 finding is one too); false before the first sync.
-- unestimated_in_active_sprint: the open findings of W-EST-01 ("Unestimated work in the active sprint"), as the
-  Overview's findings by rule counts them; null with no active sprint, or when the catalogue has no such rule (or
-  it is disabled) or it cannot be measured there: never a 0 that was not measured.
-- sprint_at_risk: true when W-SPR-01 ("Sprint at risk") has an open finding, false when it has none; null with no
-  active sprint, or when the rule is not in the catalogue or cannot be measured there (active_sprint tells the two
-  apart). A sprint still open past its end date with work not done is at risk (W-SPR-01 finds it: never "On track").
-- sprint_overdue: {ended_at, not_done} when sprint_at_risk is true because the active sprint is past its end date with
-  work not done (its open W-SPR-01 finding's evidence, the one that ended first when there are several), so the
-  dashboard can say "Ended 16 Nov, 2 not done"; null otherwise.
-- top_rule: the rule with the most open findings ({id, title, open}), ties in catalogue order, as the Overview's
-  findings by rule lists them; null when nothing is open.
-- last_sync_at: the start of the board's last successful sync (null before the first: the board has no figures yet,
-  and the dashboard shows none); stale: true when that is more than 2 hours ago, or there is none (the one rule the
-  dashboard's top bar, Findings and the digest use: oversight.timeutil.STALE_AFTER, JO-14).
-
-attention: the 10 oldest open breaches across the boards listed, one row for each ticket and rule ({project, issue_key,
-rule_id, title (the rule's, as its own board names it: a custom rule's too, JO-20), severity, opened_at (first seen),
-last_seen_at (the last rules run that saw it), age_days, findings}), oldest first. A rule can hold more than one open finding on one ticket (R-FLOW-02 opens one for each
-transition that skipped a stage), and the same ticket and rule listed twice reads as a duplicate (13 Nov 2026), so
-they are one row: opened_at the oldest one's first sighting, last_seen_at the latest sighting of any, and findings how
-many are open (1 or more); the list is the 10 oldest distinct tickets and rules. age_days is whole days from first
-seen to now while the board's last sync is fresh, and to last_seen_at once it is stale: what is open is known only as
-of that sync, so the age stops there, as Findings' "Open for" does ("at last sync"; one clock, JO-14). Breaches first
-seen at the same moment (one rules run stamps every board alike) take turns by board, so one board never fills the
-list on a tie: the
-board's first of that moment, then each other board's first, then the seconds; then board (JIRA_PROJECTS order),
-issue number, issue key and rule. Issue findings only, as each leads to its ticket (a sprint finding has none).
-
-Parameters: board (repeatable, at most once each): the boards to list (and count in boards_not_synced), and to find
-the oldest breaches across, in the service's order; the dashboard's server sends the boards a session may open (none
-for an admin: every board), so "Needs attention" is that reader's ten oldest. A well-formed key this service does not
-serve lists nothing (a session from before a board was removed). project (checked as everywhere, otherwise ignored; a
-board never synced is no refusal here) and level (team|people, accepted and ignored: the portfolio holds no person).
-Anything else is a 422. `meta` names every board (meta.service_meta). No-store, as every JSON route.
-"""
 from __future__ import annotations
 
 import json
@@ -85,11 +28,6 @@ BOARD_PARAM = "board"
 _PARAMETERS = frozenset({PROJECT_PARAM, LEVEL_PARAM, BOARD_PARAM})
 _BOARD_KEY = re.compile(r"[A-Z][A-Z0-9_]{0,19}")  # a Jira project key, as the dashboard checks one
 _SPRINT_PREFIX = "sprint:"
-# Open breaches on issues, oldest first, one row for each ticket and rule: "open now" as the Overview's totals count it
-# (first seen by now, not resolved by now); a finding with no first-seen time (none the engine writes) has no age to
-# show, so it is left out. The findings table alone, never joined, and grouped: each finding counted once, and a ticket
-# and rule with several open findings (one per skipped stage) one row, its oldest first sighting, its latest sighting
-# and how many.
 _OLDEST_BREACHES_SQL = f"""
     SELECT issue_key, rule_id, MIN(first_seen_at) AS opened, MAX(last_seen_at) AS seen, COUNT(*) AS findings
     FROM findings
@@ -128,8 +66,7 @@ def _known_parameters(request: Request) -> None:
 
 
 def _listed(request: Request, ctx: ApiContext) -> list[Board]:
-    """The boards to list, in the service's order: those `board` names (checked by _known_parameters), else every
-    board the service serves."""
+    """The boards to list, in the service's order"""
     asked = {value.strip().upper() for value in request.query_params.getlist(BOARD_PARAM)}
     boards = ctx.served().boards
     return [board for board in boards if board.key in asked] if asked else list(boards)
@@ -147,8 +84,6 @@ def _rule(by_rule: list[dict[str, Any]], rule_id: str) -> dict[str, Any] | None:
 
 
 def _sprint(conn: sqlite3.Connection, project: str, by_rule: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
-    """active_sprint, unestimated_in_active_sprint, sprint_at_risk and sprint_overdue (see the module docstring): a
-    figure only where there is an active sprint and its rule is measured, never a 0 that stands for "cannot say"."""
     risk, unestimated = _rule(by_rule, SPRINT_RULE), _rule(by_rule, UNESTIMATED_RULE)
     # An open finding of either sprint rule is an active sprint, whatever the sprint objects say.
     active = any(rule is not None and rule["open"] > 0 for rule in (risk, unestimated)) or _has_active_sprint(conn, project)
@@ -166,8 +101,6 @@ def _sprint(conn: sqlite3.Connection, project: str, by_rule: list[dict[str, Any]
 
 
 def _overdue(conn: sqlite3.Connection, project: str, now: datetime) -> dict[str, Any] | None:
-    """{ended_at, not_done} of the sprint that ended first among those the sprint rule found past their end with work
-    not done (its evidence says overdue); None when none was."""
     at = to_iso(now)
     found = []
     for (raw,) in conn.execute(_OPEN_SPRINT_FINDINGS_SQL, (project, SPRINT_RULE, at, at)).fetchall():
@@ -218,11 +151,8 @@ def board_row(conn: sqlite3.Connection, ctx: ApiContext, now: datetime) -> dict[
 
 
 def oldest_breaches(conn: sqlite3.Connection, ctx: ApiContext, project: str, now: datetime) -> list[dict[str, Any]]:
-    """The board's oldest open breaches on issues, one for each ticket and rule (with how many open findings it holds),
-    at most ATTENTION, oldest first, each aged on the one clock: to now while the board's last sync is fresh, to the
-    last rules run that saw it once that sync is stale."""
     at = to_iso(now)
-    rules = ctx.rules  # the board's own: its custom rules (JO-20) too, a deleted one by its title
+    rules = ctx.rules
     stale = is_stale(last_synced_at(conn, project), now)
     found = []
     for row in conn.execute(_OLDEST_BREACHES_SQL, (project, at, at, ATTENTION)).fetchall():
@@ -244,9 +174,6 @@ def oldest_breaches(conn: sqlite3.Connection, ctx: ApiContext, project: str, now
 
 
 def attention_order(breaches: list[tuple[int, dict[str, Any]]]) -> list[dict[str, Any]]:
-    """(board order, breach) pairs, each board's oldest first, as the attention list orders them (see the module
-    docstring): first seen, then the breach's turn among its board's breaches first seen at that moment, then board,
-    issue number, issue key and rule."""
     turns: dict[tuple[int, str], int] = {}
     keyed = []
     for order, breach in breaches:
@@ -273,12 +200,11 @@ def portfolio(
         board = replace(ctx, selected=key)
         boards.append(board_row(conn, board, now))
         breaches.extend((order, breach) for breach in oldest_breaches(conn, board, key, now))
-    # The boards listed that have not synced yet (JO-17): no figures to show, so no row.
     not_synced = len(listed) - len(synced)
     return {
         "meta": service_meta(conn, ctx),
         "boards": boards,
         "attention": attention_order(breaches)[:ATTENTION],
         "boards_not_synced": not_synced,
-        "not_synced": not_synced,  # the first JO-17 build's name for it, kept for any client built on that
+        "not_synced": not_synced,
     }

@@ -1,111 +1,4 @@
-"""Ask at people level (the product owner's decisions of 11 Nov 2026): who holds the work, and how it follows the
-process, as facts.
-
-Ask answers at one of two levels, which the dashboard's server sets on every
-request (the browser never chooses it): "people" for an admin, and wherever
-sign-in is off; "team" for everyone else.
-
-- team: as before. The views hold no person, the catalogue has no person tool,
-  and a question about someone is declined (prompts.TEAM_DECLINE).
-- people: Ask may name the people tickets are assigned to, count their tickets
-  and findings, rank them by a count, and (JO-11) set each person's process
-  figures next to the whole board's: nothing about people is declined, and an
-  answer never insults anyone or labels their character; the decision about a
-  person is the admin's. A question may mention up to ten people by person id
-  (the @ list), so a name is never misspelt or mixed up, or type one's full
-  display name (named_in: as if picked with @, unless two people share it).
-
-Mentions (JO-10). The @ list offers everyone on the board: the people assigned
-one of its tickets now, and its members who hold none (GET /people/directory).
-A mention of someone not on the board at all is not_understood with
-UNKNOWN_MENTION_MESSAGE (service.py). A mention of a member with no tickets is
-answered in code, never by a model, with no_tickets_sentence(): "<A> has",
-"<A> and <B> have", "<A>, <B> and <C> have" (no comma before "and"), then "no
-tickets on this board.". When every mention is such a member, that sentence is
-the whole answer (outcome no_data, nothing planned, no model asked, `people`
-those members in the order mentioned). When some mentions hold tickets, the
-question is answered about them as before, and the answer ends with the
-sentence for the rest as one more paragraph; the model is told the others only
-as <no_tickets> (names), to leave them out, and the name check passes their
-names, which are mentions.
-
-Everything Ask knows about people at people level is a PeopleScope, which the
-API works out from the snapshot with the person rules (oversight/api/people.py,
-oversight/api/routes/people.py: people_scope): each person by person id,
-display name and picture version, and never an account id, an email address, a
-picture or its URL, or a time zone. From it:
-
-- the analyst's views gain the assignee columns and the people view
-  (oversight/ask/analyst.py), holding GET /people's figures;
-- the analyst's views also gain the scorecard view (JO-11, scorecards.view_rows);
-- the catalogue gains seven person tools (PEOPLE_CATALOG). They are offered at
-  people level only (the comparison only where people may be compared,
-  PEOPLE_COMPARISON), and never by the MCP server, which serves CATALOG:
-    oversight_people(project, rank_by, order?: most|fewest, person_ids?<=10, n<=50)
-        -> rows {person_id, name, tickets, open_tickets, open_breaches, open_warnings,
-           tickets_with_findings}: GET /people's people (their tickets: the board's work,
-           Epics left out, as the scorecard counts them) ranked by one figure, most first
-           (fewest first with order "fewest"), ties by name (the directory's order); a
-           "who" ranking ranks people only (JO-12, G5), so the Unassigned row (person_id
-           null, name "Unassigned") comes after them, never ranked, and the answer says
-           it in one sentence ("Unassigned: <n> open tickets."); with person_ids, only
-           those people's rows (the people a question mentions); rank_by open_findings
-           ranks by open breaches and warnings together, a column of its own
-    oversight_board_people(project, holding: any|none)
-        -> rows {person_id, name, tickets}: everyone on the board, as the @ list
-           shows them (GET /people/directory): the people assigned one of its tickets
-           now, then its members who hold none (tickets 0), each by name; holding
-           "none": only those members ("who has no tickets?")
-    oversight_person_tickets(project, person, state: open|in_progress|done|all, days, n<=200)
-        -> rows {issue_key, summary, issue_type, status, epic_key, assignee_id, assignee}:
-           the tickets the person holds now (open: status category not done, their
-           backlog; in_progress: status category in progress, what someone is
-           working on; done: done in the last `days`, what they finished, as the
-           scorecard's "Done in the period" counts it; all: every ticket; each
-           leaves Epics out, as GET /people and every scorecard figure do), most
-           recently updated first
-    oversight_ticket_assignee(project, issue_key)
-        -> the ticket's row as above, with who holds it now (assignee "Unassigned",
-           assignee_id null, when nobody does)
-    oversight_person_findings(project, person, rule_id?, severity?, state: open|resolved|all, n<=50)
-        -> oversight_list_findings' rows plus assignee_id and assignee: the findings on
-           the tickets the person holds now (findings follow the ticket's current
-           assignee; a sprint finding is no one's)
-    oversight_person_scorecard(project, person_ids 1..10, days: 30|90|180)
-        -> one row per person and measure: their scorecard next to the whole board's
-           (oversight/api/scorecard.py; the rows in oversight/ask/scorecards.py); more
-           than one person where comparing people is off raises ComparisonOff
-    oversight_people_compare(project, measure: a rate or the ratio | overall | open_tickets |
-                             in_progress | done_in_period, days?, order: closer|most|fewest,
-                             n?<=50, person_ids?: 2..10, those people alone, then the board)
-        -> everyone who holds a ticket in the order the question asks (JO-14):
-           "closer" (the default, no direction word) closer to the process first,
-           "most" (most, highest, largest, top N) the figure highest first,
-           "fewest" (fewest, least, lowest, smallest, bottom N) lowest first, for
-           every measure; a count (whose backlog is biggest, who has the most in
-           progress, who finished the most) has no closer side, so "closer" is most
-           first there; people with too few tickets last whatever the order, then
-           the whole board's row (not for overall), after a count's tickets nobody
-           holds (an "Unassigned" row, never ranked); the facts' params carry the
-           order used; open_tickets and in_progress are counts of now, which take no
-           days; n only for a question's "top N" or "bottom N" (everyone otherwise)
-- check_names() verifies the people an answer names, beside the number check
-  (validate.py): every board person's name in the answer must be in the
-  answer's facts or among the mentions, matched as whole words as the data
-  writes them (case and all, as the dashboard finds names), so an everyday
-  word is never read as someone with a one-word name. The people it verifies
-  are the response's `people`, in order of first appearance.
-- named_in() finds the people a question names by full display name, which
-  the service makes mentions (JO-11 decision 8); names_someone() tells whether
-  a question still names someone in its own words rather than by a mention (an
-  @ typed before part of a name): the catalogue knows people only by a
-  mention, so the service points such a question to @ there rather than
-  answer it from the whole board's figures.
-- SCORECARD_WORDS and PERSONNEL_WORDS are the two families of words that
-  evaluate people (JO-09's JUDGEMENT_WORDS, split, and more): such a question
-  is answered with figures (router.judging), a personnel one ending with the
-  sentence that the decision is the admin's.
-"""
+"""Ask at people level: who holds the work and how it follows the process, as facts."""
 from __future__ import annotations
 
 import re
@@ -162,8 +55,7 @@ PEOPLE_COLUMNS: tuple[str, ...] = ("person_id", "name", *FIGURES)
 
 
 def mention_problem(mentions: Sequence[object]) -> str | None:
-    """Why these mentions cannot be asked about, in plain words; None when they can: at most ten, each a
-    person id, none twice."""
+    """Why these mentions cannot be asked about, in plain words; None when they can."""
     if len(mentions) > MAX_MENTIONS:
         return f"at most {MAX_MENTIONS} people can be mentioned"
     if not all(isinstance(mention, str) and PERSON_ID.fullmatch(mention) for mention in mentions):
@@ -175,20 +67,7 @@ def mention_problem(mentions: Sequence[object]) -> str | None:
 
 @dataclass(frozen=True)
 class PeopleScope:
-    """The people of one board as Ask may know them at people level.
-
-    rows: GET /people's rows for the board, in its order ({"person": Person | None, "tickets", ...}).
-    assignees: each assigned ticket's assignee now, by issue key.
-    open_keys: the board's tickets whose status category is not done, as GET /people counts open tickets.
-    in_progress_keys: the board's tickets whose status category is in progress (the same category, as the
-        Issue page shows it).
-    members: the board's members (its last member fetch) who hold none of its tickets now, in the directory's
-        order. A question may mention them; nothing counts them, and no view or tool holds them.
-    scorecard: the board as its scorecards are worked out (oversight/api/scorecard.py, JO-11), for the scorecard
-        tools and the analyst's scorecard view; None leaves them nothing to read.
-    comparison: whether people may be compared (PEOPLE_COMPARISON): off, the comparison tool is not offered, the
-        scorecard tool takes one person, and the scorecard view holds no one but the person mentioned.
-    """
+    """The people of one board as Ask may know them at people level."""
 
     rows: tuple[Mapping[str, Any], ...]
     assignees: Mapping[str, Person]
@@ -217,8 +96,7 @@ class PeopleScope:
 
 
 def people_figures(scope: PeopleScope) -> list[dict[str, Any]]:
-    """The people view's rows, in GET /people's order: a person as person_id and name, the Unassigned row as
-    NULL and "Unassigned"."""
+    """The people view's rows in GET /people's order; the Unassigned row as NULL and "Unassigned"."""
     return [
         {
             "person_id": row["person"]["id"] if row["person"] is not None else None,
@@ -235,8 +113,7 @@ def mentions_payload(people: Iterable[Person]) -> list[dict[str, str]]:
 
 
 def no_tickets_sentence(names: Sequence[str]) -> str:
-    """The answer for people mentioned who hold no ticket on the board, word for word: "<A> has", "<A> and <B>
-    have" or "<A>, <B> and <C> have" (no comma before "and"), then "no tickets on this board."."""
+    """The answer for mentioned people who hold no ticket on the board, word for word."""
     if not names:
         raise ValueError("no one to say it of")
     if len(names) == 1:
@@ -368,15 +245,13 @@ def run_people(conn: sqlite3.Connection, params: BaseModel, ctx: CatalogContext)
         figures = [{**row, "open_findings": row["open_breaches"] + row["open_warnings"]} for row in figures]
         columns = [*_PEOPLE_COLUMNS, Column("open_findings", "Open findings", "count")]
     fewest = params.order == "fewest"
-    # A "who" ranking ranks people only (JO-12, G5): the tickets nobody holds are no one's, so their row comes after
-    # the ranking, never in it, and an answer says it in one sentence of its own.
+    # A "who" ranking ranks people only: the tickets nobody holds follow it in a sentence of their own.
     people = [row for row in figures if row["person_id"] is not None]
     nobody = [row for row in figures if row["person_id"] is None]
     if params.person_ids is not None:
         wanted = set(params.person_ids)
         people, nobody = [row for row in people if row["person_id"] in wanted], []
-    # By the one figure, most first (fewest first with order "fewest"); ties in the directory's order (name folded for
-    # case and accents, then id), as the comparison orders them, so one count gives one order everywhere.
+    # Ties in the directory's order, as the comparison orders them, so one count gives one order everywhere.
     people.sort(key=lambda row: (row[params.rank_by] if fewest else -row[params.rank_by], fold(row["name"]),
                                  row["person_id"]))
     rows, truncated = _cap([_row(**row) for row in people], min(params.n, ctx.row_limit))
@@ -423,8 +298,7 @@ def run_person_tickets(conn: sqlite3.Connection, params: BaseModel, ctx: Catalog
     # The facts say the period only where there is one: an open backlog, or the work in progress, is now.
     params = params.model_copy(update={"days": (params.days or DEFAULT_DAYS) if params.state == "done" else None})
     found = [row for row in _rows(conn, _BOARD_TICKETS_SQL, (project,)) if row["issue_key"] in keys] if who else []
-    # An Epic holds work rather than being it: someone's tickets (all of them, their backlog, what they work on and
-    # what they finished) are the tickets under it, as GET /people and every scorecard figure count them (JO-12, G5).
+    # An Epic holds work rather than being it, so it is left out, as GET /people and the scorecards count.
     containers = {name.casefold() for name in ctx.rules.defaults.exclude_types}
     found = [row for row in found if (row["issue_type"] or "").casefold() not in containers]
     fetched, truncated = _cap(found, min(params.n, ctx.row_limit))
@@ -448,8 +322,7 @@ _BOARD_PEOPLE_COLUMNS = [
 
 
 def run_board_people(conn: sqlite3.Connection, params: BaseModel, ctx: CatalogContext) -> Facts:
-    """Everyone on the board, as the @ list shows them: those assigned one of its tickets now (with how many they
-    hold, as GET /people counts them), then its members who hold none, each by name; or only those members."""
+    """Everyone on the board as the @ list shows them, or only the members who hold no ticket."""
     assert isinstance(params, BoardPeopleParams)
     scope = _scope(ctx)
     project = _project_of(params, ctx)
@@ -543,7 +416,7 @@ def run_person_findings(conn: sqlite3.Connection, params: BaseModel, ctx: Catalo
                   truncated=truncated, as_of=_as_of(conn, ctx, project), note=note)
 
 
-# --- the scorecard tools (JO-11) ---------------------------------------------------------------
+# --- the scorecard tools ----------------------------------------------------------------------
 
 Days = Literal[30, 90, 180]
 CompareMeasure = Literal[
@@ -731,8 +604,7 @@ COMPARE_TOOL = "oversight_people_compare"
 
 
 def specs_for(level: str, *, comparison: bool = True) -> dict[str, QuerySpec]:
-    """The catalogue a question at this level may use: the team catalogue, and at people level the person tools (the
-    comparison only when people may be compared)."""
+    """The catalogue a question at this level may use; person tools only at people level."""
     if level != "people":
         return dict(CATALOG)
     people = {name: spec for name, spec in PEOPLE_CATALOG.items() if comparison or name != COMPARE_TOOL}
@@ -740,8 +612,7 @@ def specs_for(level: str, *, comparison: bool = True) -> dict[str, QuerySpec]:
 
 
 def people_catalog_schema(*, comparison: bool = True) -> list[dict[str, Any]]:
-    """[{name, description, input_schema}] for the person tools, as catalog_schema() gives the others (the comparison
-    only when people may be compared)."""
+    """[{name, description, input_schema}] for the person tools, as catalog_schema() gives the others."""
     return [
         {"name": spec.name, "description": spec.description, "input_schema": spec.params_model.model_json_schema()}
         for spec in PEOPLE_CATALOG.values()
@@ -769,9 +640,7 @@ class NameCheck:
 
 
 def name_pattern(name: str) -> re.Pattern[str]:
-    """A display name as whole words, as the data writes it (case and all), with any run of spaces between its words.
-    The model is told to write names exactly so, and the dashboard finds them so (src/lib/names.ts): "will" in an
-    answer is never a person named "Will"."""
+    """A display name as whole words, case and all, with any run of spaces between its words."""
     words = name.split()
     return re.compile(r"(?<!\w)" + r"\s+".join(re.escape(word) for word in words) + r"(?!\w)")
 
@@ -779,12 +648,7 @@ def name_pattern(name: str) -> re.Pattern[str]:
 def check_names(
     text: str, facts: Sequence[Facts], scope: PeopleScope, mentions: Sequence[Person], also: Sequence[Person] = ()
 ) -> NameCheck:
-    """Every board person's name in the answer must be in the answer's facts (a row's text or a note) or among the
-    mentions. Longer names are found first and blanked, so "Ada Brooks" is not also read as a person named "Ada".
-    A name two people share stands for those of them whose person id the facts or the mentions hold (both, when
-    neither does). "Unassigned" is the label for nobody, never a person. A person id written in the answer is a
-    problem too: people are named by name. `also`: members the question mentions who hold no ticket on the board,
-    looked for beside the board's people (and passed when they are among the mentions)."""
+    """Every board person's name in the answer must be in its facts or among the mentions."""
     board: dict[str, list[Person]] = {}
     for who in [*scope.people, *also]:
         key = " ".join(who["name"].split())
@@ -837,19 +701,9 @@ def _ids_written(text: str) -> list[str]:
     return [f"person id {match.group()} written instead of a name" for match in _PERSON_ID_IN_TEXT.finditer(text)]
 
 
-# --- questions that evaluate people (JO-11) --------------------------------------------------------
+# --- questions that evaluate people ---------------------------------------------------------------
 
-# JO-09 declined a question that would judge someone (its JUDGEMENT_WORDS). Since 11 Nov 2026 (the product owner's
-# decision, JO-11) every such question at people level is answered with figures, never declined, and the words are
-# two families, read over a lower-cased question (the dashboard's sample reads the same two lists, word for word:
-# src/server/sample/ask/match.ts, EVALUATIVE and PERSONNEL):
-# - SCORECARD_WORDS: how someone is doing, who follows the process, best, worst, who is struggling, falling behind
-#   or needs help, the MVP or the stars, rank, compare: answered with their scorecard, several side by side, or
-#   everyone compared (oversight/ask/router.py: judging);
-# - PERSONNEL_WORDS: firing (sacking, letting go, dismissing, laying off, demoting, replacing), promoting, rewarding
-#   (a bonus, a pay rise), deserving, blaming or trusting someone, an appraisal, and their character (lazy, attitude,
-#   competence, skill, reliability, and the labels an answer may never use: useless, careless, dishonest, ...):
-#   answered the same way, then prompts.DECISION_YOURS (the decision is the admin's).
+# Two families of evaluating words; the dashboard's sample (match.ts) reads the same lists word for word.
 SCORECARD_PATTERN = (
     r"\b(?:slow\w*|fast\w*|quick\w*|best|worst|better|worse|good|bad|badly|great|poor(?:ly)?"
     r"|productiv\w*|unproductive|perform\w*|underperform\w*|effort\w*|hard(?:er|est|ly)?|hard[\s-]?work\w*"
@@ -861,8 +715,7 @@ SCORECARD_PATTERN = (
     r"|need(?:s|ed|ing)?\s+(?:\w+\s+){0,2}?(?:help|support|attention|coaching|mentoring)"
     r"|mvps?|most\s+valuable|valuable|(?:rock|super)?stars?|standouts?|stand(?:s|ing)?\s+out|outperform\w*"
     r"|lagg(?:ing|ed|ards?)|lags?"
-    # How closely someone keeps to the process, either way round (the JO-14 review): "who is the least compliant?",
-    # "who is furthest from the process?", "who deviates from it most?", "who ignores the process?".
+    # How closely someone keeps to the process, either way round ("who deviates from it most?").
     r"|complian\w*|non-?complian\w*|compl(?:y|ies|ied|ying)|adher\w*|deviat\w*|stray\w*|non-?conform\w*"
     r"|(?:further|furthest|farthest|closest|closer)\s+(?:away\s+)?(?:from|to)\s+(?:the\s+|our\s+)?(?:agile\s+)?process"
     r"|(?:ignor|break|bend|skirt|flout|disregard)\w*\s+(?:the\s+|our\s+|their\s+)?(?:agile\s+)?"
@@ -881,28 +734,23 @@ PERSONNEL_PATTERN = (
 )
 SCORECARD_WORDS = re.compile(SCORECARD_PATTERN)
 PERSONNEL_WORDS = re.compile(PERSONNEL_PATTERN)
-# The ranking words: a ranking by one of GET /people's counts ("top 5 people by open breaches", "rank people by open
-# tickets", "compare @A and @B by open breaches", and since JO-14 "bottom 3 people by open tickets", fewest first)
-# stays JO-09's raw-count ranking (oversight_people), as it was.
+# Ranking words: a ranking by one of GET /people's counts stays a raw-count ranking (oversight_people).
 RANKING_WORDS = re.compile(r"rank\w*|top|bottom|compar\w*|versus|vs|side[\s-]by[\s-]side")
 
 
 def evaluates(question: str) -> bool:
-    """Whether a question asks how someone is doing, who follows the process, who is best or worst, for a rank, or to
-    compare people (SCORECARD_WORDS), or is a personnel question (PERSONNEL_WORDS)."""
+    """Whether a question evaluates people (SCORECARD_WORDS) or is a personnel question (PERSONNEL_WORDS)."""
     lower = question.lower()
     return SCORECARD_WORDS.search(lower) is not None or PERSONNEL_WORDS.search(lower) is not None
 
 
 def personnel(question: str) -> bool:
-    """Whether a question is about firing, promoting, rewarding, blaming or trusting someone, or their character
-    (PERSONNEL_WORDS): its answer ends with prompts.DECISION_YOURS."""
+    """Whether a question is a personnel one (PERSONNEL_WORDS); its answer ends with prompts.DECISION_YOURS."""
     return PERSONNEL_WORDS.search(question.lower()) is not None
 
 
 def ranks_only(question: str) -> bool:
-    """Whether the only evaluating words a question holds are ranking words (rank, top, bottom, compare, versus): a
-    raw-count ranking when it names one of GET /people's figures."""
+    """Whether the only evaluating words a question holds are ranking words."""
     lower = question.lower()
     found = {match.group() for match in SCORECARD_WORDS.finditer(lower)}
     return (bool(found) and all(RANKING_WORDS.fullmatch(word) for word in found)
@@ -910,25 +758,18 @@ def ranks_only(question: str) -> bool:
 
 
 def strip_names(question: str, names: Iterable[str]) -> str:
-    """The question without these people's names (and the @ before them), longest first, so a name is neither a topic
-    nor a project key: "@Bug Hunter" is not a bug. Case is ignored, as a reader types a name."""
+    """The question without these people's names and their @, so "@Bug Hunter" is not a bug."""
     for name in sorted({name for name in names if name.strip()}, key=lambda name: -len(name)):
         question = re.sub(rf"@?(?<!\w){re.escape(name)}(?!\w)", " ", question, flags=re.IGNORECASE)
     return question
 
 
-# --- the people a question names in its own words -------------------------------------------------
-# An @ typed before a word where a mention could start (at the start, or after a space, bracket or quote), as the
-# dashboard's @ list reads one: someone named in the text rather than picked. "a@b.example" is an address.
+# An @ typed where a mention could start: someone named in the text rather than picked.
 _TYPED_AT = re.compile(r"(?:^|(?<=[\s(\[{\"'“‘«]))@\w")
 
 
 def names_someone(question: str, people: Iterable[Person]) -> bool:
-    """Whether a question names someone on the board in its own words rather than by a mention: an @ typed before a
-    word, or a board person's display name as whole words. A name of two words or more is found as a reader types
-    it, in any case and with or without its accents. A one-word name is found only as the data writes it and not
-    where a sentence starts, where every word has a capital: "will" is no one, and nor is "Will the sprint end on
-    time?", but "How many breaches has Will?" names him. Unassigned and Unnamed account are labels, never names."""
+    """Whether a question names someone on the board in its own words rather than by a mention."""
     if _TYPED_AT.search(question):
         return True
     folded = fold(question)
@@ -961,12 +802,7 @@ def _folded_with_places(text: str) -> tuple[str, list[int]]:
 
 
 def named_in(question: str, people: Iterable[Person]) -> list[list[Person]]:
-    """The people a question names by their full display name in its own words (JO-11 decision 8): one group per name
-    found, in order of first appearance, each holding everyone on the board who goes by that name (two or more: a
-    name they share). Found as names_someone() finds a name: one of two words or more in any case and with or
-    without its accents (folded as the dashboard folds them); a one-word name only as the data writes it and not
-    where a sentence starts ("will" is no one). Longer names first, each blanked once found, so "Ada Brooks" is never
-    also "Ada". Unassigned and Unnamed account are labels, never names."""
+    """The people a question names by full display name: one group per name found, in order of appearance."""
     groups: dict[str, list[Person]] = {}
     for who in people:
         name = " ".join(who["name"].split())
@@ -996,19 +832,12 @@ def named_in(question: str, people: Iterable[Person]) -> list[list[Person]]:
     return [groups[key] for _start, key in sorted(found)]
 
 
-# Where a name typed in lower case stands as a person's: after a word that asks about someone ("how is ada doing?",
-# "what has ada finished?", "tickets for ada") or before a possessive ("ada's backlog"), in the folded question.
+# Where a lowercase name stands as a person's: after a word that asks about someone, or before a possessive.
 _SLOT_BEFORE = r"\b(?:is|was|has|does|did|how['’]?s|what['’]?s|for|of|about|by|from|with|to|show|me)\s+"
 
 
 def loosely_named_in(question: str, people: Iterable[Person]) -> list[tuple[str, list[Person]]]:
-    """The people a question names by a first name or a surname (the first or the last word of a display name of two
-    words or more; a surname that is also a common word, such as Best or Long, never) or a one-word name typed in
-    another case than the data writes it, where a person's name stands (_SLOT_BEFORE, or before a possessive): (the
-    name as the board writes it, everyone on the board who goes by it), in order of first appearance; two or more is a
-    name they share. The service reads names so only when named_in and first_named_in found no one and the question
-    asks something of one person (router.asks_of_someone), so "ada" in "how is ada doing?" and "Brooks" in "how is
-    Brooks doing?" are Ada Brooks when she is the only one, and "will" in "when will the sprint end?" is no one."""
+    """The people a question names by first name, surname or a mis-cased one-word name, where a name stands."""
     groups: dict[str, tuple[str, list[Person]]] = {}
     for who in people:
         words = who["name"].split()
@@ -1032,12 +861,9 @@ def loosely_named_in(question: str, people: Iterable[Person]) -> list[tuple[str,
     return [groups[key] for _start, key in sorted(found)]
 
 
-# --- a name no one on the board has (JO-12, G3) -----------------------------------------------------------------------
-# Where a typed name stands, as loosely_named_in reads one, but "to" (a verb follows it: "to finish"): after a word that
-# asks about someone, or before a possessive. The dashboard's sample reads the same slots and the same words.
+# As _SLOT_BEFORE without "to", which a verb follows; the dashboard's sample reads the same slots.
 _NAME_SLOT = r"\b(?:is|was|has|does|did|how['’]?s|what['’]?s|for|of|about|by|from|with|show|me)\s+"
-# Words that stand in those places but are never anyone's name: pronouns and determiners, the words of a question, of
-# time, of the board's work and of its process. Compared folded (fold()).
+# Words that stand in those places but are never anyone's name; compared folded.
 NOT_NAMES = frozenset("""
     a about after all also always an and another any anybody anyone anything are as at back bad badly be been before
     being best better both but by can could do does doing done down each either else enough ever every everybody
@@ -1067,13 +893,7 @@ NOT_NAMES = frozenset("""
 
 
 def unknown_name(question: str, people: Iterable[Person], *, asks: bool) -> str | None:
-    """A name typed where a person's name stands (_NAME_SLOT, or before a possessive: "how is zara doing?", "zara's
-    backlog") that no one on the board goes by, as the question writes it with a capital ("Zara"); None when there is
-    none. A word is read as a name only when the question asks something of one person (asks: router.asks_of_someone)
-    or when it is typed with a capital and not where a sentence starts ("Who is Zara?"); never a word of NOT_NAMES, a
-    word of anyone's name on the board (a surname typed alone is someone's), a word in capitals (a key or an
-    abbreviation), or one with a digit. The service reads it only when nothing else made sense of a question at people
-    level, so a question it answers is never read for names."""
+    """A name typed where a person's name stands that no one on the board goes by; None when there is none."""
     taken = {fold(word) for who in people for word in who["name"].split()}
     folded, places = _folded_with_places(question)
     found: list[tuple[int, int]] = []
@@ -1092,12 +912,7 @@ def unknown_name(question: str, people: Iterable[Person], *, asks: bool) -> str 
 
 
 def first_named_in(question: str, people: Iterable[Person]) -> list[tuple[str, list[Person]]]:
-    """The people a question names by first name alone (the first word of a display name of two words or more), after
-    every full name is taken out (named_in finds those): (the first name, everyone on the board whose name starts with
-    it), in order of first appearance; two or more is a first name they share. Found as a one-word name is: as the
-    data writes it, capital and all, and not where a sentence starts ("will" is no one, and nor is "Will the sprint
-    end?"), so "Is Ada doing well?" names Ada Brooks when she is the only Ada on the board. A first name that is also
-    someone's whole one-word name is left to named_in."""
+    """The people a question names by first name alone, after full names are taken out."""
     everyone = list(people)
     whole = {" ".join(who["name"].split()) for who in everyone}
     groups: dict[str, list[Person]] = {}

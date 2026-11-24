@@ -1,10 +1,4 @@
-"""The live adapter (LLM_PROVIDER) against the real service: opt-in, and only with credentials.
-
-Runs only with `pytest -m live`, and only when the environment holds
-ANTHROPIC_API_KEY, or LLM_PROVIDER=bedrock with AWS_REGION and AWS credentials
-(tests never read .env). One structured call and one compose
-call, both tiny, so a run costs a fraction of a cent.
-"""
+"""The live adapter (LLM_PROVIDER) against the real service: opt-in, with credentials."""
 from __future__ import annotations
 
 import os

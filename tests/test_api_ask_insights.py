@@ -1,9 +1,3 @@
-"""POST /ask (contract 4.6) and GET /insights/latest (4.7) against a seeded DEMO store.
-
-Shapes are checked against the zod schemas in the interface's
-src/lib/api/schemas.ts (askResponseSchema, insightsSchema); the scripted
-provider answers, so nothing leaves the machine.
-"""
 from __future__ import annotations
 
 import re
@@ -81,9 +75,6 @@ def ask(client: TestClient, question: str) -> dict[str, Any]:
     return body
 
 
-# --- POST /ask ------------------------------------------------------------------------------
-
-
 def test_an_answer_carries_its_plan_facts_and_citations(client: TestClient) -> None:
     body = ask(client, "Where do tickets get stuck most?")
     assert body["outcome"] == "answered"
@@ -127,9 +118,6 @@ def test_every_question_is_recorded_in_qa_log(client: TestClient, demo: Settings
 def test_ask_needs_the_service_key(demo: Settings) -> None:
     anonymous = TestClient(make_client(demo, NOW).app)
     assert anonymous.post("/api/v1/ask", json={"question": "Where do tickets get stuck most?"}).status_code == 401
-
-
-# --- GET /insights/latest -------------------------------------------------------------------
 
 
 def test_the_latest_briefing_matches_the_contract(client: TestClient, demo: Settings) -> None:

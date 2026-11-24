@@ -1,16 +1,3 @@
-"""Custom rules and the AI draft through the API (JO-20; contract 4.20 to 4.23, and 4.9's GET /rules): the check
-registry and the board's options in GET /rules/settings, a rule added, previewed, saved, edited, deleted and restored
-(undo) with its history, every refusal (422 on its fields, a new rule's by its place in the body; 409), a body that
-names the id its own new rule will be given, one board's custom rule as no rule of another, the rule's title wherever
-a finding names it (Findings, the drawer, the issue timeline, GET /rules, the Portfolio, Ask, the digest), and POST
-/rules/settings/draft: the scripted drafter, what no check can do, a used-up budget, a board at its limit, a refusal and
-a failed call, the one repair, its audit row and its log line, the limit it shares with Ask, and what it never writes
-or shows the model.
-
-The seeded DEMO board of tests/test_api_rule_settings.py, a fresh copy for each test, and its fictional admin. The
-re-check after a save runs the rules in this process, as there. No test talks to a model: the scripted provider, or a
-fake that answers what each test scripts.
-"""
 from __future__ import annotations
 
 import json
@@ -68,7 +55,6 @@ from tests.test_api_rule_settings import (  # noqa: F401  (board and seeded are 
 
 DRAFT = "/api/v1/rules/settings/draft?level=people"
 DRAFT_KEYS = {"meta", "project", "outcome", "draft", "explanation", "note", "problems"}
-# Bugs in progress for more than 3 days: a breach rule on DEMO, whose workflow is To Do, In Progress and Done.
 BUGS = {
     "title": "Bugs in progress over 3 days",
     "check": "time_in_status_over",
@@ -78,7 +64,6 @@ BUGS = {
 }
 STORED = {**BUGS, "description": None, "params": {"statuses": ["In Progress"], "hours": 72.0}}
 WORDS = "Bugs in progress for more than 3 days"
-# What the scripted drafter makes of WORDS on DEMO.
 SCRIPTED_DRAFT = {
     "title": "Bugs In Progress over 3 days", "description": "Flags bugs In Progress for more than 3 days.",
     "check": "time_in_status_over", "params": {"statuses": ["In Progress"], "hours": 72.0},
@@ -114,7 +99,6 @@ def draft_calls(settings: Settings) -> list[tuple[Any, ...]]:
 
 
 def assert_draft_contract(body: dict[str, Any], project: str = "DEMO") -> None:
-    """The draft's answer as the dashboard parses it (contract 4.23)."""
     assert set(body) == DRAFT_KEYS and body["project"] == project
     assert_meta(body["meta"])
     assert body["outcome"] in ("drafted", "not_supported", "not_understood", "unavailable")
@@ -125,9 +109,6 @@ def assert_draft_contract(body: dict[str, Any], project: str = "DEMO") -> None:
         assert (body["draft"], body["explanation"], body["problems"]) == (None, None, []) and is_text(body["note"])
     for problem in body["problems"]:
         assert set(problem) == {"field", "message"} and is_text(problem["field"]) and is_text(problem["message"])
-
-
-# --- the board's checks and options ------------------------------------------------------------------------------
 
 
 def test_the_settings_list_the_checks_with_the_boards_options(board: Settings) -> None:
@@ -152,15 +133,11 @@ def test_the_settings_list_the_checks_with_the_boards_options(board: Settings) -
         "Time in a status", ["new", "indeterminate"], ["indeterminate"])
     assert [option["value"] for option in checks["missing_field"]["params"][0]["options"]] == [
         "assignee", "estimate", "epic", "sprint"]
-    # DEMO records no evidence: a check that needs some is not measurable there, saying what is missing.
     review = checks["entered_stage_without_evidence"]
     assert (review["measurable"], review["missing_evidence"]) == (False, [
         "code_review", "dev_signoff", "testing", "test_review", "test_signoff"])
     assert [option["value"] for option in review["params"][0]["options"]] == ["backlog", "development", "done"]
     assert not any(rule["custom"] for rule in body["rules"])
-
-
-# --- adding, previewing, editing, deleting and restoring ---------------------------------------------------------
 
 
 def test_a_preview_of_a_rule_to_add_says_what_it_would_raise_and_writes_nothing(board: Settings) -> None:
@@ -208,7 +185,6 @@ def test_a_custom_rule_is_added_edited_deleted_and_restored_with_its_history(boa
     assert made["history"][0]["reason"] == "Bugs sit too long"
     settle(refresher)
 
-    # The re-check raised its findings, named by its title, its threshold in words.
     found = findings_of(client)
     assert sorted((item["issue_key"] for item in found), key=lambda key: int(key.rsplit("-", 1)[1])) == expected
     assert {(item["rule_title"], item["severity"], item["threshold"]) for item in found} == {
@@ -220,7 +196,6 @@ def test_a_custom_rule_is_added_edited_deleted_and_restored_with_its_history(boa
     assert (mine["check_label"], mine["threshold"], mine["needs"], mine["open"], mine["version"]) == (
         "Time in a status", "3 days in 'In Progress'", ["Status history"], len(expected), "0.1.0")
 
-    # Edited: its title, its limit; the history says each field, and undo edits it back.
     clock.at += timedelta(minutes=1)
     edited = save(client, {"op": "edit", "rule_id": "R-CUS-01", "title": "Bugs stuck in progress",
                            "params": {"hours": 96}}, revision=1)
@@ -234,7 +209,6 @@ def test_a_custom_rule_is_added_edited_deleted_and_restored_with_its_history(boa
     narrowed = {item["issue_key"]: item["resolved_why"] for item in findings_of(client, "resolved")}
     assert narrowed == {key: "settings_changed" for key in expected if key not in kept}
 
-    # Deleted: the preview says it would close every open finding; the re-check closes them, the titles stay.
     clock.at += timedelta(minutes=1)
     [deleting] = client.post(PREVIEW, json={"changes": [{"op": "delete", "rule_id": "R-CUS-01"}]}).json()["impact"]
     assert (deleting["rule_id"], deleting["open_now"], deleting["would_close"], deleting["would_open"]) == (
@@ -252,7 +226,6 @@ def test_a_custom_rule_is_added_edited_deleted_and_restored_with_its_history(boa
     assert {"value": "R-CUS-01", "label": "Bugs stuck in progress", "count": len(expected)} in facets
     assert "R-CUS-01" not in rules_of(client.get("/api/v1/rules").json())
 
-    # Undone: restored with the same id, so the same findings reopen, first seen as before.
     clock.at += timedelta(minutes=1)
     restored = save(client, {"op": "restore", "rule_id": "R-CUS-01"}, revision=3, reason="Undo of revision 3",
                     undo_of=deleted["history"][0]["change_id"])
@@ -356,9 +329,6 @@ def test_a_custom_rule_has_nothing_to_reset_to(board: Settings) -> None:
     {"op": "restore", "rule_id": "R-CUS-01"},
 ], ids=["off", "edit", "delete", "restore"])
 def test_a_body_never_names_the_id_its_own_new_rule_will_be_given(board: Settings, named: dict[str, Any]) -> None:
-    """R-CUS-01 is the id the create in the same body would be given: no rule on the board yet. The preview and the
-    save both refuse the body whole: no rule added off or added and deleted at once, no revision with nothing in its
-    history, no id used up."""
     client, refresher = serve(board)
     before = everything(board)
     for path in (PREVIEW, SETTINGS):
@@ -371,8 +341,6 @@ def test_a_body_never_names_the_id_its_own_new_rule_will_be_given(board: Setting
 
 
 def test_each_new_rules_problem_names_its_place_in_the_body(board: Settings) -> None:
-    """Two rules added at once, both refused on the same field: each problem names its rule by its place in the body,
-    and the detail says the sentence once."""
     client, refresher = serve(board)
     bad = {**BUGS, "check": "open_longer_than", "params": {"days": 0}, "applies_to": {
         "status_category": ["new", "indeterminate"], "issue_type": None}}
@@ -395,7 +363,6 @@ def test_each_new_rules_problem_names_its_place_in_the_body(board: Settings) -> 
 
 
 def test_one_boards_custom_rule_is_no_rule_of_another(board: Settings) -> None:
-    """A rule added to (and deleted from) DEMO cannot be restored, edited or deleted on AIL, nor seen there."""
     client, refresher = serve(board)
     save(client, {"op": "create", "rule": BUGS})
     save(client, {"op": "delete", "rule_id": "R-CUS-01"}, revision=1)
@@ -417,8 +384,6 @@ def test_one_boards_custom_rule_is_no_rule_of_another(board: Settings) -> None:
 
 
 def test_a_board_at_its_limit_offers_no_draft_and_asks_no_model(board: Settings) -> None:
-    """Fifty custom rules: a draft could never be added, so the AI draft is not offered, and asking for one anyway
-    answers unavailable with no model call."""
     client, refresher = serve(board)
     fifty = [{"op": "create", "rule": {**BUGS, "title": f"Bugs in progress, rule {n:02d}"}} for n in range(50)]
     full = save(client, *fifty)
@@ -433,7 +398,6 @@ def test_a_board_at_its_limit_offers_no_draft_and_asks_no_model(board: Settings)
 
 
 def test_each_draft_is_logged_with_its_board_viewer_and_model_calls(board: Settings) -> None:
-    """Who asked the AI to draft on which board, and when: the log line, with the llm_calls ids of its calls."""
     client, _ = serve(board)
     with capture_logs() as events:
         client.post(DRAFT, json={"text": WORDS})
@@ -447,9 +411,6 @@ def test_each_draft_is_logged_with_its_board_viewer_and_model_calls(board: Setti
     assert not any(WORDS in str(line) for line in lines)  # never the words
 
 
-# --- the rule's title wherever a finding names it --------------------------------------------------------------------
-
-
 def test_a_custom_rules_title_reaches_every_place_that_names_a_rule(
     board: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -458,7 +419,6 @@ def test_a_custom_rules_title_reaches_every_place_that_names_a_rule(
     settle(refresher)
     keys = stuck(board)
 
-    # The drawer and the Issue page.
     [finding] = [item for item in findings_of(client) if item["issue_key"] == keys[0]]
     drawer = client.get(f"/api/v1/findings/{finding['finding_id']}").json()["finding"]
     assert (drawer["rule_title"], drawer["threshold"]) == (BUGS["title"], "3 days in 'In Progress'")
@@ -466,18 +426,15 @@ def test_a_custom_rules_title_reaches_every_place_that_names_a_rule(
     timeline = client.get(f"/api/v1/issues/{keys[0]}/timeline").json()["findings"]
     assert {item["rule_title"] for item in timeline if item["rule_id"] == "R-CUS-01"} == {BUGS["title"]}
 
-    # The Portfolio's "Needs attention", each board's breaches by that board's own rules (every one listed here).
     monkeypatch.setattr(portfolio_module, "ATTENTION", 5000)
     attention = client.get("/api/v1/portfolio?board=DEMO").json()["attention"]
     assert {row["title"] for row in attention if row["rule_id"] == "R-CUS-01"} == {BUGS["title"]}
 
-    # Ask: the rule named by its id, its findings listed under its title; the answer still checks out.
     asked = client.post("/api/v1/ask", json={"question": "Which findings does R-CUS-01 have open?"}).json()
     [facts] = [fact for fact in asked["facts"] if fact["tool"] == "oversight_list_findings"]
     assert facts["params"]["rule_id"] == "R-CUS-01" and asked["outcome"] == "answered"
     assert {row["rule_title"] for row in facts["rows"]} == {BUGS["title"]}
 
-    # The analyst's rules list (Ask with a live model), from the board's own rules.
     analyst = SnapshotQuery(board.db_file, project="DEMO", sprint_field=None, rules=board_rules(
         board.db_file, CATALOGUE, "DEMO"))
     try:
@@ -486,14 +443,10 @@ def test_a_custom_rules_title_reaches_every_place_that_names_a_rule(
     finally:
         analyst.close()
 
-    # The digest, built for the board from the catalogue.
     process = ProcessConfig.load(CONFIG_FIXTURES / "process.yaml")
     with Store.open(board.db_file) as store:
         content = build_digest(store, process, CATALOGUE, project="DEMO", now=SAVED + timedelta(minutes=1))
     assert {item.rule_title for item in content.new_breaches if item.rule_id == "R-CUS-01"} == {BUGS["title"]}
-
-
-# --- the AI draft --------------------------------------------------------------------------------------------------
 
 
 def test_a_draft_fills_the_form_and_writes_nothing_but_its_audit_row(board: Settings) -> None:
@@ -510,7 +463,6 @@ def test_a_draft_fills_the_form_and_writes_nothing_but_its_audit_row(board: Sett
         "problems": []}
     assert everything(board) == before  # no setting, no rule: the admin adds it
     assert draft_calls(board) == [("rule_draft", "scripted", "ok")]
-    # The draft is a rule a save takes as it is.
     added = save(client, {"op": "create", "rule": body["draft"]})
     assert rules_of(added)["R-CUS-01"]["title"] == SCRIPTED_DRAFT["title"]
     settle(refresher)
@@ -540,7 +492,6 @@ def test_a_draft_waits_once_the_days_model_budget_is_used_up(board: Settings) ->
     assert_draft_contract(body)
     assert (body["outcome"], body["note"]) == ("unavailable", BUDGET_REASON)
     assert fake.calls == [] and draft_calls(board) == []  # no model asked
-    # The scripted drafter calls no model: the budget never stops it.
     scripted, _ = serve(budgeted)
     assert scripted.get(SETTINGS).json()["ai_draft"] == {"available": True, "reason": None}
     assert scripted.post(DRAFT, json={"text": WORDS}).json()["outcome"] == "drafted"
@@ -604,7 +555,6 @@ def test_the_model_sees_the_boards_names_and_the_words_never_its_tickets_or_peop
     summaries = [text for (text,) in query(board, "SELECT summary FROM issues WHERE length(summary) > 20")]
     names = [name for (name,) in query(board, "SELECT display_name FROM people WHERE display_name IS NOT NULL")]
     assert summaries and names and not any(text in call.user for text in summaries + names)
-    # Governance's usage counts the call (a model's: the scripted provider's never are).
     assert client.get("/api/v1/usage?level=people").json()["today"]["model_calls"] == 1
 
 

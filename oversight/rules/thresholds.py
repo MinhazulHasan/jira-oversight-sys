@@ -1,20 +1,4 @@
-"""History-based thresholds for early warnings (Phase 4).
-
-Deterministic: thresholds come from the project's own closed intervals, never
-from the AI.
-
-- status_age_threshold: closed status_intervals (left_at set) of the project's
-  issues whose status equals `status` (case-insensitive) and whose left_at is
-  within the last history_days before `now`. Issues whose type is one of
-  `exclude_types` (case-insensitive; the engine passes rules defaults.exclude_types)
-  are left out: an Epic stays open for months, and pooling its intervals with
-  the work's would inflate every percentile. An issue with no type is kept, as
-  the rules keep it. Fewer than min_history intervals -> None (the caller stays
-  silent and records why). Otherwise the pct-th percentile of their hours
-  (oversight.stats.percentile) with n.
-- stage_threshold: the same over intervals whose stage equals `stage`.
-Hours are calendar hours, as everywhere in Phase 2.
-"""
+"""History-based thresholds for early warnings."""
 from __future__ import annotations
 
 from collections.abc import Iterable

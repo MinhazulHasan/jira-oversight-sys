@@ -1,53 +1,4 @@
-"""The Q&A eval (Planning.md section 8): tests/eval/questions.yaml run through
-ask(), scored on the plan, the outcome and the numbers.
-
-CONTRACT (stub; the ask build implements it).
-
-questions.yaml entries: {id, question, expected_calls: [tool names in order],
-expected_outcome, expected_numbers: [strings that must appear in the answer],
-expected_keys: [issue keys that must appear]}. Expected numbers come from
-running the catalogue queries directly on the demo data (code, not the model).
-
-run_qa_eval(path, *, store, process, rules, settings, provider, out_path, now, project) -> EvalReport
-- For each case: ask(); record plan_ok (names match exactly), outcome_ok,
-  numbers_ok (every expected number is in the answer text, or there is none
-  expected), keys_ok, latency_s.
-- Writes a Markdown report (one row per case, then the rates) to out_path
-  (reports/qa_eval.md by default).
-- EvalReport.passed is True when the plan rate >= 0.90 and every answered case
-  has numbers_ok and keys_ok (the Phase 6 done-when), and median latency <= 5 s.
-`python -m oversight eval [--live]` runs it with the scripted provider by
-default (replay, offline, in CI) or the configured provider with --live.
-
-The dataset header. Expected values hold only on the data they were computed
-on, so the shipped questions.yaml is a mapping whose `dataset` names that data:
-{project, seed, issues, now}, the demo seeded with that seed and issue count at
-`now`, then derived and rules-run at the same time. load_dataset() reads it and
-build_dataset() rebuilds it in any store; the CLI does that in a throwaway
-in-memory store and asks every question at `now`, so the eval neither depends
-on nor writes to the snapshot. A questions file with no header (a plain list)
-runs against the configured database at the real clock, as before.
-
-Implementation notes
-- The shipped questions.yaml is a mapping {dataset, cases}; a plain list of
-  cases (the form Planning.md shows) is accepted too.
-  load_cases validates every entry before any question is asked (ids unique,
-  outcomes from the five the service returns, expected_calls from the
-  catalogue, keys shaped like issue keys) and raises ConfigError naming the
-  case, so a typo fails the run instead of scoring a case wrongly.
-- A number or key counts as "in the answer" only as a whole token: "15" is not
-  found in "150" or "0.15", "DEMO-3" is not found in "DEMO-30", and "1,150"
-  equals "1150". Only the answer text is searched, never the facts table or
-  the outcome message: the eval scores what a reader is shown as the answer.
-- Each ask runs as user "eval" against `project` (default
-  settings.jira_projects[0]), with the clock the caller injects (the dataset's
-  `now` when the file has a header, else the real clock). The scripted provider writes fact values only, so
-  not_verified never occurs offline; the tests cover it with a fake provider.
-- An empty case list cannot pass: every rate is 0 and passed is False.
-- The report is Markdown: one row per case, the rates, then one block per case
-  that missed something (expected against actual plan, the outcome message,
-  the numbers and keys not found), so a nightly run says what to look at.
-"""
+"""The Q&A eval: tests/eval/questions.yaml run through ask(), scored on plan, outcome and numbers."""
 from __future__ import annotations
 
 import re
@@ -233,11 +184,7 @@ def load_dataset(path: Path) -> EvalDataset | None:
 
 
 def build_dataset(store: Store, process: ProcessConfig, rules: RulesConfig, dataset: EvalDataset) -> None:
-    """Rebuild the dataset in `store`: seed the demo project, derive and run the rules, all at dataset.now.
-
-    The demo writes its sprints and points under its own field ids, so the rules
-    read them through the demo's FieldsConfig, whatever this site's fields.yaml says.
-    """
+    """Rebuild the dataset in `store`: seed the demo project, derive and run the rules, all at dataset.now."""
     from oversight.demo import DEMO_FIELDS, seed_demo
     from oversight.derive.run import run_derive
     from oversight.rules.engine import run_rules

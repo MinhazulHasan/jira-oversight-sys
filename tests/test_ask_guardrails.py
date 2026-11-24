@@ -1,8 +1,3 @@
-"""JO-12, Ask's guardrails and the usage figures: ASK_RATE_LIMIT per viewer (429 ask_rate_limited, Retry-After,
-nothing logged, no model), LLM_DAILY_TOKEN_BUDGET (Ask answers without the model and says so; insights skip; resets at
-00:00 UTC), and GET /usage (contract 4.17, people level only). No network: the model is a stand-in that fails the test
-if it is ever asked.
-"""
 from __future__ import annotations
 
 import sqlite3
@@ -87,9 +82,6 @@ def spend(settings: Settings, *calls: tuple[str, str, int, int]) -> None:
                                        "outcome": "ok"})
 
 
-# --- the rate limit ---------------------------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(("value", "rule"), [("off", None), ("OFF", None), ("30/10m", (30, 600)), (" 5/1M ", (5, 60)),
                                               ("1/1440m", (1, 86400))])
 def test_ask_rate_limit_is_off_or_a_count_per_minutes(value: str, rule: tuple[int, int] | None) -> None:
@@ -147,7 +139,6 @@ def test_over_the_limit_a_question_is_refused_with_retry_after_and_nothing_else_
         assert refused.headers["cache-control"] == "no-store"
     assert (count(demo, "qa_log"), count(demo, "llm_calls"), count(demo, "access_log")) == (asked, called, logged)
 
-    # Another viewer has a limit of their own; and once the first question leaves the window, one more is let in.
     assert api.post("/api/v1/ask", json=question, headers={"X-Oversight-Viewer": OTHER}).status_code == 200
     clock.at = NOW + timedelta(minutes=10)
     assert api.post("/api/v1/ask", json=question).status_code == 200
@@ -167,9 +158,6 @@ def test_with_the_limit_off_no_one_is_ever_limited(demo: Settings) -> None:
         assert api.post("/api/v1/ask", json={"question": "   "}).status_code == 200
 
 
-# --- the daily model budget --------------------------------------------------------------------------------------
-
-
 def test_the_budget_is_off_by_default_and_never_negative() -> None:
     assert Settings(_env_file=None).llm_daily_token_budget == 0
     with pytest.raises(ValidationError, match="LLM_DAILY_TOKEN_BUDGET must be 0"):
@@ -186,7 +174,6 @@ def test_todays_spend_is_the_models_tokens_since_midnight_utc(calls: Settings) -
         assert budget_reached(conn, calls.model_copy(update={"llm_daily_token_budget": 1000}), NOW)
         assert not budget_reached(conn, calls.model_copy(update={"llm_daily_token_budget": 1001}), NOW)
         assert not budget_reached(conn, calls, NOW)  # 0: no limit
-        # It resets at 00:00 UTC.
         midnight = datetime(2026, 11, 5, tzinfo=UTC)
         assert spent_today(conn, midnight - timedelta(milliseconds=1)) == 1000 and spent_today(conn, midnight) == 0
     finally:
@@ -233,9 +220,6 @@ def test_once_the_budget_is_used_up_the_insights_skip_with_a_log_line(calls: Set
     assert run is not None and '"skipped": "budget"' in run["stats_json"]
 
 
-# --- GET /usage --------------------------------------------------------------------------------------------------
-
-
 def fresh(tmp_path: Path, **update: Any) -> Settings:
     settings = Settings(_env_file=None, jira_projects="DEMO", api_service_key=KEY, db_path=tmp_path / "oversight.db",
                         config_dir=CONFIG_FIXTURES, reports_dir=tmp_path / "reports", **update)
@@ -261,7 +245,6 @@ def test_usage_today_and_the_last_seven_days(tmp_path: Path) -> None:
     assert set(body) == {"meta", "today", "last_7_days", "ai_model"}
     assert body["today"] == {"questions": 2, "model_calls": 2, "input_tokens": 130, "output_tokens": 70,
                              "budget_tokens": None, "budget_used_pct": None}
-    # Whether a model is set up at all, so a page of zero tokens can say why: stub here, so off.
     assert body["ai_model"] == "off"
     live = settings.model_copy(update={"llm_mode": "live"})
     conn = open_readonly(settings.db_file)
@@ -308,8 +291,6 @@ def test_usage_needs_no_viewer_and_records_nothing(tmp_path: Path) -> None:
 
 
 def test_the_viewer_hash_is_what_the_rate_limit_counts_and_a_restart_forgets(demo: Settings) -> None:
-    """Two names on one hash are one viewer: the name is for people to read, the hash is who it is. The counts are
-    kept in the process's memory, so a new process (a restart) starts with none."""
     limited = demo.model_copy(update={"ask_rate_limit": "1/1m"})
     api = client_of(limited, viewer=ADMIN, name="Morgan Reyes")
     assert api.post("/api/v1/ask", json={"question": "   "}).status_code == 200

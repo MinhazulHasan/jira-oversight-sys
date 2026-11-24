@@ -1,15 +1,4 @@
-"""The LLM audit trail: one llm_calls row per call (Planning.md section 9).
-
-- prompt_hash(system, user) -> the sha256 hex of system + "\\x1f" + user.
-- record_llm_call(store, *, purpose, provider, model, prompt_hash, usage,
-  latency_ms, stop_reason, outcome, error=None, qa_id=None, now=utcnow) inserts
-  one row (call_id = uuid4 hex) and returns the call_id. `error` is a short
-  message with no prompt text and no secrets.
-
-The trail holds hashes, counts and outcomes only: never a prompt, never an
-answer, never a key. A reader can tell which prompt version was used, how much
-it cost and whether it worked, and nothing more.
-"""
+"""LLM audit trail: one llm_calls row per call, holding hashes, counts and outcomes only."""
 from __future__ import annotations
 
 import hashlib
@@ -28,8 +17,7 @@ _ERROR_MAX_CHARS = 500
 
 
 def prompt_hash(system: str, user: str) -> str:
-    """A stable fingerprint of a rendered prompt, so calls can be tied to a
-    prompt version without storing the prompt itself."""
+    """Fingerprint of a rendered prompt, tying a call to a prompt version without storing the prompt."""
     return hashlib.sha256(f"{system}\x1f{user}".encode("utf-8")).hexdigest()
 
 

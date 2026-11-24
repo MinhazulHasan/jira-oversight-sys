@@ -1,102 +1,3 @@
-"""Rule settings for admins (JO-15): what one board changes of the rule catalogue, and the rules it runs with; and the
-rules an admin adds to a board (JO-20, custom rules).
-
-config/rules.yaml stays the catalogue: every rule's definition and the defaults every board starts from. An admin
-changes, per board, from the dashboard (people level; oversight/api/routes/rule_settings.py):
-- enabled: on or off (off: the rule is not run on the board);
-- severity: breach or warning (how its findings are reported);
-- thresholds: the numeric params in EDITABLE, by the rule's check, each within its bounds (min and max included,
-  enforced here and mirrored by the dashboard, whose field moves by `step`). A param the rule's catalogue entry leaves
-  out that the check reads with a default (grace_hours, pct) can be set too, from that default. Structural params
-  (stage, evidence) never can, and nothing else of a rule, nor the catalogue's defaults (look-back, history days,
-  excluded types), changes here: rules.yaml keeps them.
-A value is a finite number (never a boolean or a string), within its bounds, with at most 4 decimal places. The
-cross-rule rule: a warning that escalates_to a breach rule of the same check, both with a threshold (W-EFF-01 and
-R-EFF-01, both effort_ratio_at_least), keeps its threshold strictly below the breach rule's while both are on. Its
-refusal is said on the field the change set moved, with the other rule's value in its unit, as the dashboard says it:
-"Must stay below R-EFF-01's 1.5× while both are on: the warning comes first." on the warning's, "Must stay above
-W-EFF-01's 0.8× while both are on." on the breach rule's. EDITABLE and its ParamSpecs live in
-oversight/rules/registry.py, beside the check registry that builds on them.
-
-Custom rules (JO-20). An admin adds a rule to one board: one of the registry's checks (oversight/rules/registry.py)
-with its params, the status categories and issue types it applies to, a title, a description and how serious it is
-(Breach: kind rule and severity breach; Warning: kind warning and severity warning). Its id is R-CUS-nn for a breach
-rule and W-CUS-nn for a warning, the next number of its prefix across every board (two or three digits), never
-reused: a rule is never hard-deleted. custom_rules holds each one, its definition as created and last edited, the
-board's settings revision that created it, who created it (the viewer's name, as the history keeps it) and, once
-deleted, when. At most CUSTOM_LIMIT (50) live custom rules a board; a title of 3 to 80 characters and a description of
-at most 300, plain text (the API cleans them as it cleans a reason; registry.check_title also takes out characters that
-show as nothing and folds look-alike forms), the title unique among the board's rules, on or off, catalogue and
-custom, as a reader sees it (registry.title_key: ignoring case). Afterwards its on/off and severity are set as any
-rule's (rule_settings, relative to the rule as created: on, and its severity then); its kind stays.
-
-A change set is a list of changes, each one rule's (Change), at most one per rule:
-- set (JO-15's shape): enabled, severity and params, or reset. On a custom rule: enabled and severity as above, params
-  edit its params (as an edit), and a reset is refused: a custom rule has no catalogue value to go back to;
-- create: a new custom rule's definition; the id is given here;
-- edit: a custom rule's title, description, params (some or all) or applies_to; never its check (delete it and add it
-  again);
-- delete: a custom rule, marked deleted; its findings close as settings_changed, as a rule turned off;
-- restore: a deleted custom rule of this board (what undo of a delete sends), back with the same id.
-Each is validated against the registry and the board's options (registry.check_definition and its parts), the limit
-and the titles, all or nothing: SettingsInvalid names every problem, each on its field (a new rule's with no rule id:
-it has none yet, so with its place in the change set instead). A change other than a create names a rule the board
-holds already, never the id a create in the same change set will be given: that id is the save's to give, and a change
-set that named it could hide what it does from the history (a rule added and deleted at once, or added off). A change
-set that changes nothing is refused too.
-
-Storage (schema version 9, custom_rules from version 11; nothing here writes to Jira). rule_settings holds one row
-per board and rule that differs from its catalogue entry (a custom rule's: as created), each field NULL where the
-board keeps that value: a field set back is stored as NULL, and a row with nothing left is deleted (a deleted custom
-rule's row stays, so a restore brings back its severity too). rule_settings_changes keeps every change, never purged:
-the audit trail and what undo restores. Each holds when, the board, the revision it made, the viewer (hash and name,
-as the access log reads them: never an email address), the reason, each field it changed with its effective value
-before and after ("1.5 -> 2"), and the change it undid. A custom rule's fields: rule (added: from null; deleted: to
-null; restored: from null), with the rule's definition as {title, description, check, params, applies_to, severity};
-title, description, applies_to and params.<name> for an edit; enabled and severity as any rule's. A board's revision
-is its highest change's (0: never changed). save_board_settings checks the revision a save was made from, validates
-the change set and writes the rows, the custom rules and the change in one write transaction (BEGIN IMMEDIATE): a save
-made from another revision is refused (SettingsConflict), so two admins never overwrite each other, and a change set
-with any problem changes nothing (SettingsInvalid, naming every problem in plain words). A save that names a change it
-undoes (undo_of) must undo the board's latest change exactly, as the dashboard offers it: each field that change set
-back to its value before it, and nothing else (an added rule deleted, a deleted one restored, an edit edited back). So
-the history says a change was undone only when it no longer applies.
-
-Where the board's settings stand. Each rules run records, per board, the settings revision it applied (its stats'
-settings_revision) and, per rule it ran, the rule_version and settings_hash it ran with (rule_status). recent_runs
-reads the board's latest RECENT_RUNS succeeded rules runs and showing picks the one whose settings the board's
-findings show: GET /rules/settings says from them whether the settings have reached the findings, and a preview
-compares a change with what they show (oversight/rules/engine.py). turned_off reads from the history the rules the
-board itself turned off, rules.yaml's own "off" apart: their findings close as settings_changed.
-
-The board's rules. effective_rules(catalogue, settings, custom) applies a board's overrides, appends its live custom
-rules (settings.custom unless `custom` is given) and validates the result again as a RulesConfig (its models still
-forbid anything rules.yaml cannot say), each Rule carrying what the board made of it (oversight/rules/catalog.py):
-- its rule_version (RulesConfig.rule_version): the catalogue's version while its severity is the catalogue's, else
-  "<version>+<severity>" ("0.1.0+breach"); a custom rule's is "c<created_revision>", with "+<severity>" while its
-  severity differs from the one it was created with. Only a severity change gives a rule's findings new ids: turning
-  it off and on again, deleting and restoring it, or changing a threshold or the scope, never does;
-- settings_hash: None while its params are the catalogue's, else the first 12 hex characters of the SHA-256 of their
-  canonical JSON (sorted keys, numbers as floats); a custom rule's always, of {params, applies_to}. The engine writes it
-  on every finding it upserts and in rule_status, so an open finding the rule no longer produces resolves as
-  "settings_changed", never as "cleared", when it was last seen under other params or another scope
-  (oversight/rules/engine.py);
-- customised: whether anything of it differs from rules.yaml on the board (a custom rule: its on/off or severity from
-  the rule as created);
-- identity_params: the catalogue's params, which name its findings (checks.keyed): a ticket over both an old and a
-  new threshold stays the same finding. A custom rule's are CUSTOM_IDENTITY's, fixed values written once (never the
-  registry's starting values, which a release may move), so neither editing its threshold nor a new release ever
-  renames a finding;
-- custom (JO-20): whether an admin added it. A custom rule's requires_evidence and requires_stages come from its
-  params (registry.requirements), so "not measurable" works for it as for a catalogue rule.
-The board's deleted custom rules are kept beside its rules (RulesConfig.find, title_of), so their findings keep their
-titles. With no settings and no custom rules it is the catalogue itself, so a board nobody changed runs exactly as it
-did before. A stored value that can no longer apply (a param no longer editable, or out of its bounds after an
-upgrade; a custom rule whose check or params no longer fit the registry) is left out with a warning
-(rule_setting_ignored), never an error. load_board_settings reads a board's settings through any connection, a
-read-only one too, and finds none in a snapshot from before version 9 (no rule_settings table yet), and no custom rule
-before version 11.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -116,7 +17,7 @@ from pydantic import ValidationError
 from oversight.config import ProcessConfig
 from oversight.logs import get_logger
 from oversight.rules.catalog import Rule, RulesConfig
-# EDITABLE, ParamSpec, DECIMALS and Unit are registry.py's since JO-20, read from here as JO-15 always read them.
+# EDITABLE, ParamSpec, DECIMALS and Unit live in registry.py; re-exported here.
 from oversight.rules.registry import (  # noqa: F401
     CHECK_SPECS,
     CUSTOM_LIMIT,
@@ -148,20 +49,11 @@ log = get_logger("rules")
 SEVERITIES: tuple[str, ...] = ("breach", "warning")
 REASON_MAX = 500  # characters
 HISTORY_LIMIT = 50  # the changes GET /rules/settings lists, newest first
-# A changed field's name: enabled, severity, or params.<name>; for a custom rule also rule, title, description and
-# applies_to.
 ENABLED, SEVERITY, PARAMS = "enabled", "severity", "params."
 RULE, TITLE, DESCRIPTION, APPLIES = "rule", "title", "description", "applies_to"
-# A custom rule's id: its prefix (R: a breach rule, W: a warning), CUS and its number, two digits or three. Numbers are
-# never given twice, deleted rules' included, so a service can add at most CUSTOM_NUMBER_MAX breach rules and as many
-# warnings in its life, across every board (docs/DEPLOYMENT.md).
 CUSTOM_ID = re.compile(r"([RW])-CUS-([0-9]{2,3})")
 CUSTOM_NUMBER_MAX = 999
 ChangeOp = Literal["set", "create", "edit", "delete", "restore"]
-# The params a custom rule's findings are named by (checks.keyed: only these checks name a finding by a param), by
-# check. Fixed values, written once and never to change: not the registry's starting values, which the form starts a
-# new rule from and a later release may move, so no release ever gives a custom rule's findings new ids (a finding
-# renamed would close as cleared and open again as new). They are what those starting values were when JO-20 shipped.
 CUSTOM_IDENTITY: dict[str, dict[str, float]] = {
     "effort_ratio_at_least": {"threshold": 1.5},
     "no_evidence_after_percentile": {"pct": 75.0},
@@ -169,14 +61,12 @@ CUSTOM_IDENTITY: dict[str, dict[str, float]] = {
 
 
 def editable_params(rule: Rule) -> list[ParamSpec]:
-    """The params of `rule` (as the catalogue has it) an admin may set, in EDITABLE's order: its check's, each with a
-    value to start from (rules.yaml's, else the check's default) that is a number."""
     specs = EDITABLE.get(rule.check, ())
     return [spec for spec in specs if _number(rule.params.get(spec.name, spec.default)) is not None]
 
 
 def default_value(rule: Rule, spec: ParamSpec) -> float:
-    """The param's value in the catalogue: rules.yaml's, else the check's default. `rule` is the catalogue's."""
+    """The param's value in the catalogue: rules.yaml's, else the check's default."""
     value = _number(rule.params.get(spec.name, spec.default))
     if value is None:
         raise ValueError(f"{rule.id}: {spec.name} is not a setting this rule has")
@@ -188,9 +78,6 @@ def default_value(rule: Rule, spec: ParamSpec) -> float:
 
 @dataclass(frozen=True)
 class RuleSetting:
-    """One rule's overrides on one board, as rule_settings holds them: None (or no param) wherever the board keeps
-    rules.yaml's (a custom rule's: as it was created)."""
-
     rule_id: str
     enabled: bool | None = None
     severity: str | None = None
@@ -203,10 +90,6 @@ class RuleSetting:
 
 @dataclass(frozen=True)
 class CustomRule:
-    """A rule an admin added to one board (JO-20), as custom_rules holds it: its definition as created and last edited
-    (its params and applies_to as canonical JSON, so a board's settings stay hashable), the board's settings revision
-    that created it, who created it and when, and when it was deleted (None while it exists)."""
-
     rule_id: str
     title: str
     description: str | None
@@ -235,17 +118,12 @@ class CustomRule:
         return {"status_category": found.get("status_category") or [], "issue_type": found.get("issue_type")}
 
     def definition(self, severity: str | None = None) -> dict[str, Any]:
-        """The rule as the history says it: {title, description, check, params, applies_to, severity}, the severity the
-        board runs it with (`severity`) or as created."""
         return {"title": self.title, "description": self.description, "check": self.check, "params": self.params,
                 "applies_to": self.applies_to, "severity": severity or self.severity}
 
 
 @dataclass(frozen=True)
 class BoardSettings:
-    """One board's rule settings: its revision (its highest change; 0 when never changed), its rows, by rule id, and
-    its custom rules, deleted ones too, in the order they were added."""
-
     project: str
     revision: int = 0
     rules: tuple[RuleSetting, ...] = ()
@@ -262,7 +140,6 @@ class BoardSettings:
         return [rule for rule in self.custom if rule.live]
 
     def deleted_custom(self, catalogue: RulesConfig) -> list[str]:
-        """The custom rules the board deleted, by id (one whose row holds a catalogue rule's id, a hand edit, never)."""
         listed = {rule.id for rule in catalogue.rules}
         return [rule.rule_id for rule in self.custom if not rule.live and rule.rule_id not in listed]
 
@@ -288,7 +165,6 @@ _CHANGE_OF_BOARD_SQL = "SELECT revision, changes_json FROM rule_settings_changes
 
 
 def _has_tables(conn: sqlite3.Connection) -> bool:
-    """Whether the snapshot has the rule settings tables (version 9 on): a read-only connection never migrates."""
     return int(conn.execute(_TABLES_SQL).fetchone()[0]) == 2
 
 
@@ -298,9 +174,6 @@ def _has_custom(conn: sqlite3.Connection) -> bool:
 
 
 def load_board_settings(conn: sqlite3.Connection, project: str) -> BoardSettings:
-    """The board's settings as the snapshot holds them, through any connection (a read-only one too): none in a
-    snapshot without the tables yet. The revision is read before the rows, so a save landing between the two shows as
-    a newer row under an older revision, which the next save (made from that revision) is refused for."""
     if not _has_tables(conn):
         return BoardSettings(project)
     revision = conn.execute(_REVISION_SQL, (project,)).fetchone()[0] or 0
@@ -310,8 +183,6 @@ def load_board_settings(conn: sqlite3.Connection, project: str) -> BoardSettings
 
 
 def _setting(row: Sequence[Any]) -> RuleSetting:
-    """A rule_settings row as read (by position, whatever the connection's row factory): a value that cannot be one
-    (a hand edit) reads as rules.yaml's."""
     rule_id, enabled, severity, params_json = row[0], row[1], row[2], row[3]
     try:
         stored = json.loads(params_json) if params_json else {}
@@ -328,8 +199,6 @@ def _setting(row: Sequence[Any]) -> RuleSetting:
 
 
 def _custom(row: Sequence[Any]) -> CustomRule:
-    """A custom_rules row as read (by position): a JSON column that cannot be read (a hand edit) reads as {}, which the
-    board's rules then leave out with a warning (effective_rules)."""
     values = tuple(row)
     return CustomRule(
         rule_id=str(values[0]), title=str(values[1] or ""), description=values[2] or None, kind=str(values[3]),
@@ -340,8 +209,6 @@ def _custom(row: Sequence[Any]) -> CustomRule:
 
 
 def next_numbers(conn: sqlite3.Connection) -> dict[str, int]:
-    """The next free number of each custom rule id prefix (R, W), across every board: one more than the highest ever
-    given, deleted rules included, so an id is never reused."""
     highest = {"R": 0, "W": 0}
     if _has_custom(conn):
         for row in conn.execute(_CUSTOM_IDS_SQL).fetchall():
@@ -352,8 +219,6 @@ def next_numbers(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def read_history(conn: sqlite3.Connection, project: str, limit: int = HISTORY_LIMIT) -> list[dict[str, Any]]:
-    """The board's changes, newest first, at most `limit`, as GET /rules/settings sends them: {change_id, at, revision,
-    by: {hash, name}, reason, undo_of, changes: [{rule_id, field, from, to}]}; none before version 9."""
     if not _has_tables(conn):
         return []
     return [_history_entry(row) for row in conn.execute(_HISTORY_SQL, (project, limit)).fetchall()]
@@ -373,7 +238,6 @@ def _history_entry(row: Sequence[Any]) -> dict[str, Any]:
 
 
 def _field_changes_of(changes_json: object) -> list[dict[str, Any]]:
-    """A change's changes_json as [{rule_id, field, from, to}]: an item that cannot be read (a hand edit) is left out."""
     try:
         stored = json.loads(changes_json) if isinstance(changes_json, str) and changes_json else []
     except ValueError:
@@ -386,11 +250,6 @@ def _field_changes_of(changes_json: object) -> list[dict[str, Any]]:
 
 
 def turned_off(conn: sqlite3.Connection, project: str) -> frozenset[str]:
-    """The rules the board itself turned off: those its own latest change of `enabled` set to false, from its history
-    (none before version 9), through any connection. A rule rules.yaml has off is one when the board turned it on and
-    then off again: its findings were raised by the board's settings, so they close as settings_changed, as those of a
-    rule rules.yaml has on do when the board turns it off. A rule rules.yaml has off that the board never turned on is
-    not: its findings are left as they are."""
     if not _has_tables(conn):
         return frozenset()
     latest: dict[str, bool] = {}
@@ -403,12 +262,7 @@ def turned_off(conn: sqlite3.Connection, project: str) -> frozenset[str]:
 
 # --- where a board's settings stand -------------------------------------------------------------------------------
 
-# The board's latest succeeded rules runs this many at most: runs that overlap are never that many, so the run whose
-# settings the board's findings show is always among them, and reading them stays cheap however long the history grows
-# (the runs index on kind and started_at, read newest first, stops after them).
 RECENT_RUNS = 20
-# Each succeeded rules run that holds stats for the board, newest first. The board key is a project key
-# ([A-Z][A-Z0-9_]*), so it never needs escaping inside the JSON path.
 _RECENT_RUNS_SQL = f"""
 SELECT run_id, started_at, finished_at, stats_json
 FROM runs
@@ -421,9 +275,6 @@ LIMIT {RECENT_RUNS}
 
 @dataclass(frozen=True)
 class AppliedRun:
-    """A succeeded rules run as it touched one board: when it started and finished (storage format), the board's
-    settings revision it applied (0: none, or a run from before JO-15) and its stats for the board."""
-
     run_id: str
     started_at: str
     finished_at: str | None
@@ -432,8 +283,6 @@ class AppliedRun:
 
 
 def recent_runs(conn: sqlite3.Connection, project: str) -> list[AppliedRun]:
-    """The board's latest RECENT_RUNS succeeded rules runs, newest first, through any connection (a read-only one
-    too)."""
     runs = []
     for row in conn.execute(_RECENT_RUNS_SQL, (project,)).fetchall():
         run_id, started_at, finished_at, stats_json = row[0], row[1], row[2], row[3]
@@ -444,24 +293,17 @@ def recent_runs(conn: sqlite3.Connection, project: str) -> list[AppliedRun]:
         board = stats.get(project) if isinstance(stats, dict) else None
         if not isinstance(board, dict):
             continue
-        revision = int(_number(board.get("settings_revision")) or 0)  # none before JO-15
+        revision = int(_number(board.get("settings_revision")) or 0)  # none before rule settings existed
         runs.append(AppliedRun(str(run_id), str(started_at or ""), finished_at, max(revision, 0), board))
     return runs
 
 
 def showing(runs: Sequence[AppliedRun]) -> AppliedRun | None:
-    """The run whose settings the board's findings show: the highest settings revision among the board's recent runs,
-    the latest started of those (None before its first rules run). Revisions only grow, and a run reads the board's
-    settings inside its write transaction for the board, which no save and no other run shares, so the highest is the
-    one the findings show, whichever run started last (a re-check can start after a cycle that reaches the board later,
-    or at the same moment)."""
     return max(runs, key=lambda run: (run.revision, run.started_at, run.run_id), default=None)
 
 
 # --- the board's rules ------------------------------------------------------------------------------------------
 
-# effective_rules' answers, by catalogue, board, rows and custom rules: a request reads its board's rules once, and a
-# board's rules are worked out (and validated) once for each set of rows, not once for each request. A few dozen at most.
 _MEMO: dict[tuple[int, str, tuple[RuleSetting, ...], tuple[CustomRule, ...]], tuple[RulesConfig, RulesConfig]] = {}
 _MEMO_SIZE = 64
 _MEMO_LOCK = threading.Lock()
@@ -470,9 +312,6 @@ _MEMO_LOCK = threading.Lock()
 def effective_rules(
     catalogue: RulesConfig, settings: BoardSettings, custom: Sequence[CustomRule] | None = None
 ) -> RulesConfig:
-    """The rules a board runs with: the catalogue, the board's settings applied, its custom rules (`custom`, else the
-    settings' own) appended, validated again (see the module docstring). With no settings and no custom rule, the
-    catalogue itself. ValueError for a `catalogue` that is already a board's."""
     if catalogue.is_board_rules:
         raise ValueError("effective_rules takes the catalogue (rules.yaml), not one board's rules")
     customs = settings.custom if custom is None else tuple(custom)
@@ -542,8 +381,6 @@ def _board_rules(catalogue: RulesConfig, settings: BoardSettings, customs: Seque
 
 
 def _custom_entry(rule: CustomRule, settings: BoardSettings, catalogue_ids: set[str]) -> dict[str, Any] | None:
-    """A custom rule as a rules.yaml entry, its on/off and severity as the board set them; None, with a warning, for
-    one that no longer fits (an id rules.yaml also holds, a check or params the registry no longer takes)."""
     spec = CHECK_SPECS.get(rule.check)
     params = rule.params
     if rule.rule_id in catalogue_ids or spec is None or not _params_fit(rule.check, params):
@@ -575,8 +412,6 @@ def _custom_entry(rule: CustomRule, settings: BoardSettings, catalogue_ids: set[
 
 
 def _params_fit(check: str, params: Mapping[str, Any]) -> bool:
-    """Whether stored params are what the check reads (a hand edit or an older registry may leave them otherwise):
-    every param there, each of its kind and, for a number, within its bounds."""
     spec = CHECK_SPECS[check]
     if set(params) != {param.name for param in spec.params}:
         return False
@@ -597,9 +432,6 @@ def _params_fit(check: str, params: Mapping[str, Any]) -> bool:
 
 
 def _mark_custom(rule: Rule, custom: CustomRule) -> None:
-    """What a board makes of a custom rule: its version ("c<revision>", "+<severity>" while not as created), the
-    fingerprint of its params and scope, CUSTOM_IDENTITY's values as the params its findings are named by, and whether
-    its on/off or severity differ from the rule as created."""
     rule._custom = True
     rule._board_version = custom_version(custom, rule.severity)
     rule._settings_hash = settings_hash({"params": rule.params, "applies_to": custom.applies_to})
@@ -608,23 +440,17 @@ def _mark_custom(rule: Rule, custom: CustomRule) -> None:
 
 
 def custom_version(custom: CustomRule, severity: str) -> str:
-    """A custom rule's rule_version: "c<created_revision>", with "+<severity>" while its severity differs from the one
-    it was created with."""
     version = f"c{custom.created_revision}"
     return version if severity == custom.severity else f"{version}+{severity}"
 
 
 def settings_hash(params: Mapping[str, Any]) -> str:
-    """The first 12 hex characters of the SHA-256 of the params' canonical JSON: sorted keys, no spaces, every number
-    as a float (so 2 and 2.0 in rules.yaml are one fingerprint)."""
     canonical = {name: _number(value) if _number(value) is not None else value for name, value in params.items()}
     text = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
 def board_rules(db_path: Path, catalogue: RulesConfig, project: str) -> RulesConfig:
-    """The rules `project` runs with, its settings read from the snapshot at db_path through a read-only connection of
-    their own: the catalogue itself when there is no snapshot yet or the board has no settings."""
     if not Path(db_path).exists():
         return catalogue
     conn = open_readonly(db_path)
@@ -637,16 +463,12 @@ def board_rules(db_path: Path, catalogue: RulesConfig, project: str) -> RulesCon
 
 @dataclass(frozen=True)
 class _Effective:
-    """A rule's editable settings on a board: on or off, its severity, and every editable param, in EDITABLE's order."""
-
     enabled: bool
     severity: str
     params: tuple[tuple[str, float], ...]
 
 
 def _effective(rule: Rule, setting: RuleSetting | None) -> _Effective:
-    """What `rule` (the catalogue's) is on a board with `setting`, as effective_rules applies it: a stored value that
-    cannot apply reads as the catalogue's."""
     stored = dict(setting.params) if setting is not None else {}
     params = []
     for spec in editable_params(rule):
@@ -670,11 +492,6 @@ def custom_state(rule: CustomRule, setting: RuleSetting | None) -> tuple[bool, s
 
 @dataclass(frozen=True)
 class Change:
-    """One rule's change as a request names it (op "set", JO-15's): any of enabled, severity and params (some of its
-    editable params; a custom rule's params of any kind), or reset, back to rules.yaml for that rule (with nothing else).
-    JO-20's ops on custom rules: create (rule: the new rule's definition; no rule_id, the id is given here), edit (edit:
-    the fields given, of title, description, params and applies_to), delete and restore."""
-
     rule_id: str
     enabled: bool | None = None
     severity: str | None = None
@@ -703,23 +520,14 @@ class Change:
 
 @dataclass(frozen=True)
 class Problem:
-    """Why a change set was refused, in plain words, with the rule and the field it is about when there is one. A new
-    rule's problem names no rule (it has no id yet) but its place: the index of its create in the change set."""
-
     rule_id: str | None
-    # enabled | severity | params.<name> | params (not an object of thresholds) | reset | rule_id (a change that names
-    # no rule) | changes | revision | reason | undo_of, or the name of a key the request does not take (at most 40
-    # characters); for a custom rule also op, rule, title, description, check, applies_to, applies_to.status_category,
-    # applies_to.issue_type; None when the problem is with the request as a whole.
     field: str | None
     message: str
     # A new rule's: where its create stands in the change set, 0 first.
     index: int | None = None
 
     def as_dict(self) -> dict[str, str | None]:
-        """The problem as the API's errors say it: a new rule's field by its place in the request, as
-        "changes.<index>.rule.<field>" ("changes.1.rule.params.days"; "changes.1.rule" for the rule as a whole), so a
-        request that adds several rules says which one each problem is about."""
+        """The problem as the API's errors report it."""
         field = self.field
         if self.rule_id is None and self.index is not None:
             field = ".".join(part for part in (f"changes.{self.index}.rule", self.field) if part)
@@ -744,9 +552,6 @@ class SettingsConflict(Exception):
 
 @dataclass(frozen=True)
 class FieldChange:
-    """One field a change set changes, with its effective value on the board before and after it (a custom rule's
-    definition, or None, for its field `rule`)."""
-
     rule_id: str
     field: str  # enabled | severity | params.<name> | rule | title | description | applies_to
     before: Any
@@ -775,10 +580,6 @@ class Plan:
 
 @dataclass(frozen=True)
 class CustomContext:
-    """What a change to a board's custom rules is checked and made with, beyond its settings: the board's options (what
-    a rule may name: registry.BoardOptions), the next free number of each id prefix across every board, and when and by
-    whom the change is made (storage format, and the viewer's name as the history keeps it)."""
-
     options: BoardOptions
     numbers: Mapping[str, int] = field(default_factory=lambda: {"R": 1, "W": 1})
     at: str = ""
@@ -788,8 +589,6 @@ class CustomContext:
 def custom_context(
     conn: sqlite3.Connection, process: ProcessConfig | None, catalogue: RulesConfig, project: str, *, at: str, by: str
 ) -> CustomContext:
-    """The board's CustomContext through `conn` (a read-only one too): its options from the snapshot and process
-    (none without a process), the next ids across every board, `at` and `by`."""
     options = (board_options(conn, process, project, exclude_types=catalogue.defaults.exclude_types)
                if process is not None else BoardOptions(project))
     return CustomContext(options, next_numbers(conn), at, by)
@@ -801,13 +600,6 @@ _VERB = {"edit": "edited", "delete": "deleted", "restore": "restored"}
 def plan_changes(
     catalogue: RulesConfig, current: BoardSettings, changes: Sequence[Change], board: CustomContext | None = None
 ) -> Plan:
-    """Check a change set against the board's settings, all or nothing: SettingsInvalid naming every problem (no
-    change at all, an unknown rule, a rule named twice, a reset with anything else, a change that names or changes
-    nothing, a param the rule has no setting for, a value that is not a number, out of its bounds or with more than 4
-    decimal places, then the cross-rule rule; for custom rules, each definition against the registry and the board's
-    options (`board`), then the limit of custom rules and the titles), else the Plan. A change other than a create
-    names a rule the board holds already: the id a create in the same change set would be given is no rule on the
-    board yet."""
     if not changes:
         raise SettingsInvalid([Problem(None, "changes", "Name at least one change.")])
     board = board or CustomContext(BoardOptions(current.project))
@@ -958,8 +750,6 @@ def _changed(rule: Rule, row: RuleSetting | None, change: Change) -> tuple[list[
 def _create(
     change: Change, board: CustomContext, numbers: dict[str, int], revision: int, index: int = 0
 ) -> tuple[list[Problem], CustomRule | None]:
-    """The new rule, with the next id of its prefix, created at the revision the change will make; or its problems,
-    each on its field (no rule id: it has none yet; `index`, the create's place in the change set, says which)."""
     definition, found = check_definition(change.rule, board.options)
     if definition is None:
         return [Problem(None, problem.field, problem.message, index) for problem in found], None
@@ -989,7 +779,6 @@ def _create(
 def _custom_change(
     rule: CustomRule, row: RuleSetting | None, change: Change, board: CustomContext
 ) -> tuple[list[Problem], CustomRule, RuleSetting | None, bool]:
-    """A change to a custom rule: its problems, or the rule and its row after it, and whether its title is new."""
     rule_id = rule.rule_id
     if change.op == "delete":
         if not rule.live:
@@ -1026,10 +815,6 @@ def _custom_change(
 
 
 def _edited(rule: CustomRule, fields: Mapping[str, object], board: CustomContext) -> tuple[list[Problem], CustomRule]:
-    """The rule with the given fields edited (title, description, params, applies_to), each validated against the
-    registry and the board's options; the others kept. Never its check. An edit of its params or its scope also checks
-    that each status it names is in a category it applies to (registry.status_problems): otherwise it could never
-    flag anything there."""
     rule_id, spec = rule.rule_id, CHECK_SPECS.get(rule.check)
     problems: list[Problem] = []
     if spec is None:
@@ -1071,8 +856,6 @@ def _edited(rule: CustomRule, fields: Mapping[str, object], board: CustomContext
 
 
 def _custom_row(rule: CustomRule, row: RuleSetting | None, change: Change) -> tuple[list[Problem], RuleSetting | None]:
-    """A custom rule's rule_settings row after a change of its on/off or severity, relative to the rule as created (on,
-    and its severity then); None when nothing is left to store."""
     problems: list[Problem] = []
     enabled = row.enabled if row is not None else None
     severity = row.severity if row is not None else None
@@ -1094,10 +877,6 @@ def _custom_limits(
     catalogue: RulesConfig, current: BoardSettings, customs: Mapping[str, CustomRule], titled: Sequence[str],
     added: Mapping[str, int],
 ) -> list[Problem]:
-    """At most CUSTOM_LIMIT live custom rules on the board (refused only for a change set that adds to them), and each
-    title new on the board unique among its rules, catalogue and custom, as a reader sees it (registry.title_key:
-    ignoring case, and compatibility forms such as a fullwidth letter). `added`: the rules the change set adds, each
-    with its create's place in it."""
     problems: list[Problem] = []
     before = sum(1 for rule in current.custom if rule.live)
     after = sum(1 for rule in customs.values() if rule.live)
@@ -1118,11 +897,6 @@ def _custom_limits(
 
 
 def _cross_rule(catalogue: RulesConfig, proposed: BoardSettings, named: set[str]) -> list[Problem]:
-    """A warning that escalates to a breach rule of the same check, both with a threshold and both on, keeps its
-    threshold strictly below the breach rule's: checked for every pair the change set touches, so an unrelated change
-    is never refused for a pair rules.yaml itself got wrong. The problem is the warning's threshold when the change set
-    names the warning, else the breach rule's, each said with the other rule's value in its unit, in the dashboard's
-    words."""
     rules = effective_rules(catalogue, proposed)
     problems: list[Problem] = []
     for warning in rules.rules:
@@ -1165,8 +939,6 @@ def _field_changes(catalogue: RulesConfig, current: BoardSettings, proposed: Boa
 
 
 def _custom_field_changes(current: BoardSettings, proposed: BoardSettings) -> Iterator[FieldChange]:
-    """Each custom rule's changed fields, in the order the rules were added: rule (added, deleted, restored), else
-    enabled, severity, title, description, applies_to and each param, as the board runs them before and after."""
     for rule in proposed.custom:
         before = current.custom_rule(rule.rule_id)
         enabled, severity = custom_state(rule, proposed.of(rule.rule_id))
@@ -1194,8 +966,6 @@ def _custom_field_changes(current: BoardSettings, proposed: BoardSettings) -> It
 
 @dataclass(frozen=True)
 class SavedChange:
-    """A change written: its id, the board's revision it made, when (storage format), and each field it changed."""
-
     change_id: str
     revision: int
     at: str
@@ -1216,14 +986,6 @@ def save_board_settings(
     undo_of: str | None = None,
     process: ProcessConfig | None = None,
 ) -> SavedChange:
-    """Write one change to a board's rule settings, all or nothing, in one write transaction (BEGIN IMMEDIATE, waiting
-    for the lock as the connection's busy timeout allows): the board's revision read again inside it
-    (SettingsConflict unless it is `revision`), the change set validated against the settings as they are, and its
-    custom rules against the board's options as they are (`process` maps the board; without it a custom rule can name
-    no status, stage or evidence) and, with undo_of, checked to undo that change of this board, its latest, exactly
-    (SettingsInvalid with every problem), then the board's rows upserted or deleted, its custom rules written and the
-    change recorded with the next revision. The viewer is as the access log reads them; the reason is the caller's to
-    clean."""
     at = to_iso(now)
     if at is None:
         raise ValueError("save_board_settings needs an aware datetime for now")
@@ -1294,9 +1056,6 @@ def save_board_settings(
 
 
 def _undo_problems(undone: Sequence[Any], revision: int, plan: Plan) -> list[Problem]:
-    """Why a valid change set named as the undo of a change (its revision and changes_json, as stored) is not one: only
-    the board's latest change can be undone, as the dashboard offers it, and its undo sets each field that change set
-    back to its value before it, and changes nothing else (a custom rule added is deleted, one deleted restored)."""
     if int(undone[0]) != revision:
         return [Problem(None, "undo_of", "Only the board's latest change can be undone.")]
     before = {(change["rule_id"], change["field"]): change["from"] for change in _field_changes_of(undone[1])}
@@ -1318,9 +1077,6 @@ def _words(spec: ParamSpec | None, value: float) -> str:
 
 
 def _same(stored: object, value: object) -> bool:
-    """Whether a value a change recorded (read back from JSON) is `value`: on or off and text as they are, a number by
-    its value (2 and 2.0 alike), never a number for a boolean; None only for None; a list or an object item by item (a
-    custom rule's definition, its scope, its statuses)."""
     if stored is None or value is None:
         return stored is None and value is None
     if isinstance(value, (bool, str)) or isinstance(stored, (bool, str)):

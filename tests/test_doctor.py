@@ -1,8 +1,4 @@
-"""Doctor (Phase 0): every check, its failure paths, the report and the CLI command.
-
-Offline: an AIL-shaped fake Jira site answers the real JiraClient through
-httpx.MockTransport, and retries sleep into a list instead of waiting.
-"""
+"""The doctor checks"""
 from __future__ import annotations
 
 import base64
@@ -34,7 +30,6 @@ from tests.conftest import CONFIG_FIXTURES, JIRA_FIXTURES
 
 BASE_URL = "https://fake.atlassian.net"
 EMAIL = "dev@example.com"
-# Distinctive, so a leak check can't pass by accident.
 TOKEN = "tok-doctor-8e21b4-do-not-leak"
 NOW = datetime(2026, 11, 4, 9, 30, tzinfo=UTC)
 
@@ -63,9 +58,6 @@ MISSING_EVIDENCE = ["code_review", "dev_signoff", "testing", "test_review", "tes
 EVIDENCE_PROBES = [
     f'project in ("AIL") AND cf[{number}] is not EMPTY' for number in (10138, 10139, 10140, 10141)
 ]
-
-
-# --- the fake site ---------------------------------------------------------------------
 
 
 def load_json(name: str) -> Any:
@@ -122,12 +114,7 @@ def system_field(field_id: str, name: str, schema_type: str) -> dict[str, Any]:
 
 
 class FakeJiraSite:
-    """An AIL-shaped Jira Cloud site (tests/fixtures/jira/SHAPES.md) for httpx.MockTransport.
-
-    It checks Basic auth like Jira, answers only the reads doctor makes, and
-    records every request. `fail()` makes one route answer with an error;
-    `unsearchable` holds field ids that JQL rejects with HTTP 400.
-    """
+    """An AIL-shaped Jira Cloud site (tests/fixtures/jira/SHAPES.md) for httpx.MockTransport."""
 
     _PROBE = re.compile(r"project in \((?P<keys>[^)]*)\) AND cf\[(?P<number>[0-9]+)\] is not EMPTY")
 
@@ -150,11 +137,9 @@ class FakeJiraSite:
                 "style": "next-gen",
             }
         }
-        # One entry per issue type, the same three statuses each time (documented shape).
         self.statuses: dict[str, list[dict[str, Any]]] = {
             "AIL": load_json("mapping_project_statuses.json")["response"]
         }
-        # AIL's ids. No Epic Link: the project is team-managed.
         self.fields: list[dict[str, Any]] = [
             system_field("summary", "Summary", "string"),
             system_field("status", "Status", "status"),
@@ -169,8 +154,6 @@ class FakeJiraSite:
             custom_field(10140, "Testers", PEOPLE),
             custom_field(10141, "Test Reviewers", PEOPLE),
         ]
-        # AIL-1140 has story points and a sprint but no evidence fields; as on the
-        # real site, Programmer is set on a few issues and the rest are empty.
         sample = load_json("issue_sample.json")
         with_programmer = copy.deepcopy(sample)
         with_programmer.update(id="52510", key="AIL-1143")
@@ -257,13 +240,9 @@ class FakeJiraSite:
         return httpx.Response(200, json=page)
 
 
-# --- fixtures and helpers -------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def logs() -> Iterator[list[dict[str, Any]]]:
-    """Every structlog event of the test, as dicts; the configuration is restored afterwards,
-    since the CLI tests reconfigure logging."""
+    """Every structlog event of the test, as dicts"""
     saved = structlog.get_config()
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
     try:
@@ -332,9 +311,6 @@ def add_classic_story_points(site: FakeJiraSite) -> None:
     site.fields.append(custom_field(10030, "Story Points", FLOAT, "number"))
 
 
-# --- the AIL site passes -----------------------------------------------------------------------
-
-
 def test_ail_site_passes_with_only_warnings(client: JiraClient, store: Store, tmp_path: Path) -> None:
     report = doctor(client, store, tmp_path)
 
@@ -345,9 +321,7 @@ def test_ail_site_passes_with_only_warnings(client: JiraClient, store: Store, tm
         "process config": "ok",
         "project AIL visible": "ok",
         "statuses AIL mapped": "ok",
-        # Team-managed: no Epic Link field, which is optional.
         "fields": "warn",
-        # No evidence source for any stage after development.
         "evidence": "warn",
         "database": "ok",
     }
@@ -389,7 +363,6 @@ def test_happy_path_makes_exactly_these_reads(
         ("GET", PROJECT_AIL),
         ("GET", STATUSES_AIL),
         ("GET", FIELD),
-        # One probe per candidate evidence field; no duplicates to decide.
         *[("POST", SEARCH)] * 4,
     ]
     assert site.probe_jql() == EVIDENCE_PROBES
@@ -421,11 +394,7 @@ def test_every_request_is_an_allowlisted_read(
     assert site.requests
     for request in site.requests:
         assert (request.method, route_of(request.url.path)) in ALLOWED
-    # The only POST is the search, which is a read.
     assert {path for method, path in site.sent() if method != "GET"} <= {SEARCH}
-
-
-# --- 1. jira auth ---------------------------------------------------------------------------------
 
 
 def test_wrong_credentials_skip_the_jira_checks_and_make_no_more_calls(store: Store, tmp_path: Path) -> None:
@@ -441,7 +410,6 @@ def test_wrong_credentials_skip_the_jira_checks_and_make_no_more_calls(store: St
     for name in JIRA_CHECKS:
         assert result(check(report, name)) == "fail"
         assert check(report, name).detail == "skipped: auth failed"
-    # The checks that don't need Jira still run.
     assert result(check(report, "process config")) == "ok"
     assert result(check(report, "database")) == "ok"
     evidence = check(report, "evidence")
@@ -472,7 +440,6 @@ def test_jira_unavailable_on_myself_skips_the_jira_checks(
 
     report = doctor(client, store, tmp_path)
 
-    # The client retried (1, 2 and 4 s, recorded, not slept); nothing else was asked.
     assert site.sent() == [("GET", MYSELF)] * 4
     assert site.sleeps == [1, 2, 4]
     assert "HTTP 503" in check(report, "jira auth").detail
@@ -483,7 +450,6 @@ def test_jira_unavailable_on_myself_skips_the_jira_checks(
 def test_other_jira_error_on_myself_skips_the_jira_checks(
     site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
-    # What a wrong JIRA_BASE_URL path looks like.
     site.fail("GET", MYSELF, 404, {"errorMessages": ["Not found"], "errors": {}})
 
     report = doctor(client, store, tmp_path)
@@ -515,7 +481,6 @@ def test_missing_or_unknown_account_zone_is_a_warning(
     assert result(auth) == "warn"
     assert expected in auth.detail
     assert report.ok
-    # Signed in, so the Jira checks ran.
     assert result(check(report, "project AIL visible")) == "ok"
 
 
@@ -534,9 +499,6 @@ def test_credentials_never_reach_the_report_or_the_logs(
         assert secret not in json.dumps(logs, default=str)
 
 
-# --- 2. process config -----------------------------------------------------------------------------
-
-
 def test_invalid_process_yaml_fails_with_the_config_error_message(
     site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
@@ -549,16 +511,12 @@ def test_invalid_process_yaml_fails_with_the_config_error_message(
     assert not report.ok
     process = check(report, "process config")
     assert result(process) == "fail"
-    # The same message, on one line.
     assert process.detail == " ".join(str(error.value).split())
     assert "hours_per_point" in process.detail
-    # The mapping and the evidence can't be judged without the config, and a
-    # check that couldn't run hasn't passed ...
     for name in ("statuses AIL mapped", "evidence"):
         assert result(check(report, name)) == "fail"
         assert check(report, name).detail == "skipped: process config did not load"
     assert ("GET", STATUSES_AIL) not in site.sent()
-    # ... but the rest still runs, and story points can't be called required.
     assert result(check(report, "project AIL visible")) == "ok"
     assert result(check(report, "fields")) == "warn"
     assert report.fields_written_to is not None
@@ -579,7 +537,6 @@ def test_unreadable_process_yaml_fails_instead_of_crashing(
     folder = tmp_path / "folder.yaml"
     folder.mkdir()
     utf16 = tmp_path / "utf16.yaml"
-    # Notepad's "Unicode" encoding.
     utf16.write_bytes((CONFIG_FIXTURES / "process.yaml").read_text(encoding="utf-8").encode("utf-16"))
 
     for path in (folder, utf16):
@@ -591,8 +548,6 @@ def test_unreadable_process_yaml_fails_instead_of_crashing(
 def test_project_missing_from_process_yaml_is_mapped_from_its_status_categories(
     site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
-    """JO-17: a board process.yaml leaves out is no failure. The service maps it from Jira's status categories, and
-    doctor shows that mapping (a warning), naming any status in no category."""
     site.projects["OPS"] = {
         "id": "10040",
         "key": "OPS",
@@ -640,16 +595,12 @@ def test_project_missing_from_process_yaml_is_mapped_from_its_status_categories(
     )
     assert report.unmapped_statuses == {"OPS": ["Parked"]}
     assert result(check(report, "statuses AIL mapped")) == "ok"
-    # Probes name every visible project.
     assert site.probe_jql()
     assert all(jql.startswith('project in ("AIL", "OPS") AND ') for jql in site.probe_jql())
     evidence = check(report, "evidence")
     assert "OPS not in process.yaml, so not measurable (no evidence source): code_review" in evidence.detail
     assert report.missing_evidence["OPS"] == ["code_review", "dev_signoff", "testing", "test_review", "test_signoff"]
     assert report.ok  # warnings only: nothing here stops the service
-
-
-# --- 3. project visible --------------------------------------------------------------------------------
 
 
 def test_project_that_is_not_visible_fails_and_skips_its_statuses(
@@ -665,7 +616,6 @@ def test_project_that_is_not_visible_fails_and_skips_its_statuses(
     assert visible.detail == "not visible: the project does not exist or this account cannot browse it"
     assert check(report, "statuses AIL mapped").detail == "skipped: project not visible"
     assert ("GET", STATUSES_AIL) not in site.sent()
-    # JQL naming a project Jira can't see fails outright, so nothing is probed.
     assert site.probe_jql() == []
     assert check(report, "evidence").detail.endswith(
         "candidate evidence fields not checked (no visible project)"
@@ -683,7 +633,6 @@ def test_project_lookup_that_keeps_failing_reports_the_error(
     assert result(visible) == "fail"
     assert "failed after 4 attempts" in visible.detail and "HTTP 502" in visible.detail
     assert site.sleeps == [1, 2, 4]
-    # Later checks still ran.
     assert result(check(report, "fields")) == "warn"
 
 
@@ -710,9 +659,6 @@ def test_project_detail_says_how_it_is_managed(
     assert check(doctor(client, store, tmp_path), "project AIL visible").detail == expected
 
 
-# --- 4. statuses mapped -------------------------------------------------------------------------------
-
-
 def test_unmapped_status_fails_and_is_listed(
     site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
@@ -725,7 +671,6 @@ def test_unmapped_status_fails_and_is_listed(
     assert result(statuses) == "fail"
     assert statuses.detail == 'no stage for "In Review" (add to status_to_stage for AIL in process.yaml)'
     assert report.unmapped_statuses == {"AIL": ["In Review"]}
-    # A failed mapping doesn't stop the later checks.
     assert result(check(report, "fields")) == "warn"
     assert report.fields_written_to is not None
     assert result(check(report, "database")) == "ok"
@@ -767,11 +712,7 @@ def test_status_names_cannot_break_or_fake_report_lines(
     assert len(rendered.splitlines()) == len(report.checks) + 1
     assert "\x1b" not in rendered
     assert '"QA [ OK ] everything is fine [2J"' in check(report, "statuses AIL mapped").detail
-    # The data keeps Jira's exact name.
     assert report.unmapped_statuses == {"AIL": [hostile]}
-
-
-# --- 5. fields -----------------------------------------------------------------------------------------
 
 
 def test_duplicate_story_point_fields_pick_the_populated_one(
@@ -788,7 +729,6 @@ def test_duplicate_story_point_fields_pick_the_populated_one(
     assert report.fields.fields["story_points"].name == "Story Points"
     assert report.fields.fields["story_points"].custom_type == FLOAT
     assert FieldsConfig.load(tmp_path / "config" / "fields.yaml").id_of("story_points") == "customfield_10030"
-    # Preferred name first; the populated one wins.
     assert site.probe_jql()[:2] == [
         'project in ("AIL") AND cf[10016] is not EMPTY',
         'project in ("AIL") AND cf[10030] is not EMPTY',
@@ -797,7 +737,6 @@ def test_duplicate_story_point_fields_pick_the_populated_one(
         "story_points: 2 fields match (customfield_10016, customfield_10030); "
         "using customfield_10030, the one set on in-scope issues"
     ) in check(report, "fields").detail
-    # Many issues match, but one page of one issue answers the question.
     assert all(body["maxResults"] == 1 and "nextPageToken" not in body for body in site.probes())
     assert report.ok
 
@@ -832,7 +771,6 @@ def test_repeated_name_picks_the_populated_field(
 def test_unpopulated_duplicates_go_to_preference_order_whatever_the_listing_order(
     site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
-    # Listed first, matched case-insensitively, empty everywhere, like the original.
     site.fields.insert(
         0, custom_field(10050, "STORY POINT ESTIMATE", f"{GREENHOPPER}:jsw-story-points", "number")
     )
@@ -932,7 +870,6 @@ def test_missing_story_points_fails_when_estimates_are_points(
     assert result(fields) == "fail"
     assert "missing: story_points (required: an in-scope project estimates in points)" in fields.detail
     assert not report.ok
-    # The report still records what the site has; the file is not written.
     assert report.fields is not None and report.fields.id_of("story_points") is None
     assert fields.detail.endswith("; fields.yaml left unchanged")
     assert report.fields_written_to is None
@@ -942,9 +879,6 @@ def test_missing_story_points_fails_when_estimates_are_points(
 def test_missing_story_points_keeps_the_last_good_fields_yaml(
     site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
-    # Regression: a doctor run while the field was invisible (renamed, or a
-    # permission change) wrote story_points: null over the good file, and the
-    # next sync would have blanked story points on every issue.
     path = tmp_path / "config" / "fields.yaml"
     path.parent.mkdir()
     good = (CONFIG_FIXTURES / "fields.yaml").read_text(encoding="utf-8")
@@ -1032,9 +966,6 @@ def test_unwritable_fields_file_fails_the_fields_check(
     assert report.fields is not None
 
 
-# --- 6. evidence ---------------------------------------------------------------------------------------
-
-
 def test_missing_evidence_is_listed_by_name_as_a_warning(
     client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
@@ -1065,8 +996,6 @@ def test_candidate_evidence_fields_are_reported_as_existing_but_empty(
 def test_each_field_is_probed_once_even_when_both_checks_need_it(
     site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
-    # A second "Code Reviewers" field, the one actually in use: the fields check
-    # probes both, and the evidence check reuses the answer for the chosen one.
     site.fields.append(custom_field(10150, "Code Reviewers", PEOPLE))
     site.set_everywhere("customfield_10150", [{"accountId": "acc-dev-2"}])
 
@@ -1106,10 +1035,8 @@ def test_evidence_probe_failure_is_reported_without_failing(
     assert result(evidence) == "warn"
     assert "not checked: Programmer, Code Reviewers, Testers, Test Reviewers (" in evidence.detail
     assert "HTTP 500" in evidence.detail
-    # The first probe's four attempts, then no more: the others would fail the same way.
     assert site.sent().count(("POST", SEARCH)) == 4
     assert site.sleeps == [1, 2, 4]
-    # No duplicates, so the fields themselves were settled without a probe.
     assert result(check(report, "fields")) == "warn"
     assert report.ok
 
@@ -1136,8 +1063,6 @@ def test_evidence_check_passes_when_every_source_is_configured(
 def test_stages_left_out_of_the_evidence_map_are_named_too(
     client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
-    # Regression: only code_review configured, the other stages simply left out,
-    # used to pass as "every evidence source configured".
     path = write_process(
         tmp_path,
         lambda data: data["projects"]["AIL"].update(
@@ -1153,9 +1078,6 @@ def test_stages_left_out_of_the_evidence_map_are_named_too(
     assert evidence.detail.startswith(
         "AIL not measurable (no evidence source): dev_signoff, testing, test_review, test_signoff; "
     )
-
-
-# --- 7. database ---------------------------------------------------------------------------------------
 
 
 def test_database_check_reports_the_schema_version(client: JiraClient, store: Store, tmp_path: Path) -> None:
@@ -1193,9 +1115,6 @@ def test_wrong_schema_version_fails(client: JiraClient, tmp_path: Path) -> None:
     assert database.detail.startswith(f"schema version {SCHEMA_VERSION + 1}, expected {SCHEMA_VERSION}")
 
 
-# --- project keys ----------------------------------------------------------------------------------------
-
-
 def test_project_keys_are_upper_cased_and_deduplicated(
     site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
 ) -> None:
@@ -1213,9 +1132,6 @@ def test_bad_project_keys_are_a_config_error_before_any_call(
         doctor(client, store, tmp_path, projects=projects)
 
     assert site.requests == []
-
-
-# --- the report ----------------------------------------------------------------------------------------
 
 
 def test_render_shows_one_tagged_line_per_check_then_the_verdict(
@@ -1275,7 +1191,6 @@ def test_render_and_ok_for_hand_made_reports() -> None:
 
 
 def test_report_text_is_ascii_for_any_console(client: JiraClient, store: Store, tmp_path: Path) -> None:
-    # Windows writes redirected output in cp1252; the report's own words must fit any code page.
     assert doctor(client, store, tmp_path).render().isascii()
 
 
@@ -1291,9 +1206,6 @@ def test_each_check_is_logged(
     assert finished["ok"] is True and report.ok
     assert finished["warnings"] == ["fields", "evidence"] and finished["failed"] == []
     assert finished["jira_requests"] == 8
-
-
-# --- the CLI command --------------------------------------------------------------------------------------
 
 
 def cli_site(settings: Settings) -> tuple[FakeJiraSite, Callable[[Settings], JiraClient]]:
@@ -1318,7 +1230,6 @@ def test_cli_doctor_prints_the_report_and_rewrites_fields_yaml(
     assert code == EXIT_OK
     assert output.splitlines()[0] == "[ OK ] jira auth: signed in; account time zone America/Chicago"
     assert output.splitlines()[-1] == "Verdict: PASS with 2 warnings"
-    # The settings fixture's copy was replaced by doctor's own file.
     assert settings.fields_file.read_text(encoding="utf-8").startswith(FIELDS_HEADER)
     assert FieldsConfig.load(settings.fields_file).site == settings.jira_base_url
     assert all((request.method, route_of(request.url.path)) in ALLOWED for request in site.requests)

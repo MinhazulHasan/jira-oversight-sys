@@ -1,9 +1,3 @@
-"""Switching boards: GET /projects and ?project=KEY on every route.
-
-Two synthetic boards share one store (DEMO, the default, and AIL), so each
-route can be checked to read only the board it was asked for. A third case
-lists a board in JIRA_PROJECTS that has never synced.
-"""
 from __future__ import annotations
 
 import json
@@ -137,20 +131,17 @@ def test_ask_answers_about_the_picked_board(client: TestClient) -> None:
     ["How many issues are in AIL?", "List open breaches in AIL", "Tell me about AIL-12"],
 )
 def test_ask_never_reads_another_board_named_in_the_question(client: TestClient, question: str) -> None:
-    """The dashboard holds a person to their boards with ?project=; naming another board must not get round it."""
     response = client.post("/api/v1/ask", params={"project": "DEMO"}, json={"question": question})
     assert response.status_code == 200
     body = response.json()
     assert body["meta"]["projects"] == ["DEMO"]
     assert body["outcome"] == "not_understood"
     assert body["facts"] == [] and body["answer"] is None and body["citations"] == []
-    # Only the question itself, the plan made from it and the refusal may name AIL: nothing read from that board.
     read = {name: value for name, value in body.items() if name not in ("question", "plan", "message")}
     assert "AIL" not in json.dumps(read)
 
 
 def test_the_analysts_tools_never_read_another_boards_ticket(tmp_path: Path) -> None:
-    """The analyst (a live model) calls the same catalogue tools: an issue key of another board is refused."""
     from oversight.ask.analyst import QueryError, snapshot_tools
 
     settings = make_settings(tmp_path, "DEMO,AIL")
@@ -174,7 +165,6 @@ def test_the_analysts_tools_never_read_another_boards_ticket(tmp_path: Path) -> 
 
 def test_ask_says_which_board_is_in_scope_when_it_refuses(client: TestClient) -> None:
     body = client.post("/api/v1/ask", params={"project": "AIL"}, json={"question": "How many issues are in DEMO?"}).json()
-    # The board the question named, and the one in scope: never the list of every board the service covers.
     assert body["message"] == "This question is about DEMO, but only AIL is in scope here. Pick another board to ask about it."
 
 
@@ -195,7 +185,6 @@ def test_projects_without_a_snapshot_still_lists_the_boards(tmp_path: Path) -> N
 
 
 def test_a_board_process_yaml_leaves_out_never_stops_the_api_starting(tmp_path: Path) -> None:
-    """JO-17: XYZ has no process.yaml entry. The API starts, lists it, and offers its first sync."""
     settings = make_settings(tmp_path, "AIL,XYZ")
     seed(settings, {"AIL": 20})
     client = make_client(settings)
@@ -212,8 +201,6 @@ def test_projects_needs_the_service_key(client: TestClient) -> None:
 
 
 def test_a_request_connection_works_from_the_route_thread(tmp_path: Path) -> None:
-    """FastAPI opens read_conn in one worker thread and runs the route in another
-    (seen live: 500s under parallel requests). The connection must allow that."""
     import threading
     from dataclasses import replace
 

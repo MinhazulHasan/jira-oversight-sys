@@ -1,18 +1,4 @@
-"""Command line: `python -m oversight <command>`.
-
-Phases 0-2: doctor, sync, derive, baseline. Phases 3-8: rules, digest, ask,
-mcp, insights, api. Plus demo (a synthetic project) and eval (the Q&A eval set),
-and discover (JO-17: every board the Jira account can browse).
-
-Without --project, sync, derive and rules cover the kept boards (JIRA_PROJECTS,
-then every other served board synced before: oversight/boards.py), so the
-scheduled cycle keeps a board synced from the dashboard fresh; every other
-command covers JIRA_PROJECTS. Every command that reads a board's process maps
-each served board process.yaml leaves out from Jira's status categories
-(oversight.boards.board_process), so no command fails for want of a mapping.
-
-Human-readable results go to stdout; structured logs go to stderr.
-"""
+"""Command line: `python -m oversight <command>`."""
 from __future__ import annotations
 
 import argparse
@@ -41,8 +27,6 @@ EXIT_CONFIG = 2
 EXIT_JIRA_AUTH = 3
 EXIT_JIRA = 4
 EXIT_GUARD = 5
-# A delivery channel (SMTP, Teams) or the model API failed after the work was done and
-# recorded (the run says which project); the message says whether a retry could help.
 EXIT_SERVICE = 6
 
 ClientFactory = Callable[[Settings], "JiraClient"]
@@ -191,8 +175,6 @@ def _projects(args: argparse.Namespace, settings: Settings) -> list[str]:
 
 
 def _kept(args: argparse.Namespace, settings: Settings, store: Store) -> list[str]:
-    """sync, derive and rules: the boards --project names, else the kept boards (JIRA_PROJECTS, then every other served
-    board synced before), so the scheduled cycle keeps a board synced from the dashboard fresh."""
     from oversight.boards import kept_boards
 
     return _projects(args, settings) if args.project else kept_boards(store.conn, settings)
@@ -258,11 +240,7 @@ def _cmd_derive(args: argparse.Namespace, settings: Settings, _client_factory: C
 
 
 def _cmd_baseline(args: argparse.Namespace, settings: Settings, _client_factory: ClientFactory, now: Clock) -> int:
-    """The baseline report of each board asked for. --missing: only of each board that has synced and has no report
-    yet, among the boards --project names, else the kept boards (a board synced from the dashboard included), so every
-    synced board gets one (18 Nov 2026: the Baseline page stayed empty for every board but the first three). A board
-    with a report is left as it is, and one never synced has nothing to report yet; none missing is a quiet success.
-    With --missing a board whose report fails leaves the others to be written, and the first failure is raised last."""
+    """The baseline report of each board asked for."""
     from oversight.baseline import load_expected, report_paths, run_baseline
     from oversight.config import ProcessConfig
 
@@ -372,7 +350,6 @@ def _cmd_ask(args: argparse.Namespace, settings: Settings, _client_factory: Clie
     provider = get_provider(settings)
     projects = _projects(args, settings)
     with Store.open(settings.db_file) as store:
-        # The board's own rules, as the dashboard's Ask reads them: rules.yaml with its rule settings (JO-15).
         rules = effective_rules(catalogue, load_board_settings(store.conn, projects[0]))
         response = ask(
             args.question,
@@ -430,8 +407,6 @@ def _cmd_api(args: argparse.Namespace, settings: Settings, _client_factory: Clie
     # The routes never migrate: the snapshot at this version's schema first, as run.py does too.
     prepare_snapshot(settings.db_file, access_log_days=settings.access_log_days)
     app = create_app(settings)
-    # One JSON object per line (LOG_FORMAT=json): uvicorn's own lines through structlog, its access lines (the full
-    # query string, as typed) off; the app logs each request as api_request, without the query.
     uvicorn.run(app, host=args.host or settings.api_host, port=args.port or settings.api_port, log_level="info",
                 log_config=server_log_config(), access_log=False)
     return EXIT_OK
@@ -487,8 +462,6 @@ def _cmd_eval(args: argparse.Namespace, settings: Settings, _client_factory: Cli
                 out_path=out_path, now=now,
             )
     else:
-        # Expected values hold only on the data they were computed on: rebuild it in a
-        # throwaway in-memory store and ask at its time, so the snapshot is never read or written.
         if dataset.project not in process.projects:
             raise ConfigError(f"{questions.name} needs project {dataset.project} in {settings.process_file.name}")
         with Store.open(":memory:") as store:
@@ -556,13 +529,6 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Settings, ClientFactory, Clock
 
 
 def _never_fail_on_output_encoding() -> None:
-    """Print characters the console can't encode as escapes (\\u2713) instead of raising.
-
-    On Windows, redirected output (Task Scheduler, `> file`, a pipe) is encoded
-    in the ANSI code page (cp1252), which lacks characters that Jira names or a
-    user's folder path may hold; a strict encoder would lose the report to a
-    UnicodeEncodeError traceback after the work was done.
-    """
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
@@ -579,7 +545,7 @@ def main(
     client_factory: ClientFactory | None = None,
     now: Clock | None = None,
 ) -> int:
-    """Run one command and return its exit code. Tests inject settings, a client factory and a clock."""
+    """Run one command and return its exit code."""
     _never_fail_on_output_encoding()
     args = build_parser().parse_args(argv)
     try:

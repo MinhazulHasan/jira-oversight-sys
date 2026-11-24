@@ -1,13 +1,4 @@
-"""Phases 0-2 end to end, through the command line, against FakeJira.
-
-doctor -> sync --full -> sync --incremental -> derive -> baseline, then a change
-made in Jira travels through sync and derive into issue_metrics. Every command
-runs through oversight.cli.main with the test settings (every path in tmp_path)
-and a real JiraClient on FakeJira's transport: nothing leaves the process.
-
-The CLI reads the real clock, so the fake projects are built in the days before
-now, and the Jira change is stamped after the sync it must be picked up after.
-"""
+"""Phases 0-2 end to end, through the command line, against FakeJira."""
 from __future__ import annotations
 
 import json
@@ -79,9 +70,8 @@ def test_the_pipeline_from_doctor_to_baseline_and_a_change_reaching_the_metrics(
     fake: FakeJira, run: Callable[..., Run], settings: Settings
 ) -> None:
     cli = run(fake)
-    settings.fields_file.unlink()  # doctor writes it
+    settings.fields_file.unlink()
 
-    # --- Phase 0: doctor ---------------------------------------------------------------
     code, out, _ = cli("doctor")
     assert code == EXIT_OK, out
     assert out.splitlines()[:4] == [
@@ -104,14 +94,13 @@ def test_the_pipeline_from_doctor_to_baseline_and_a_change_reaching_the_metrics(
     assert written.site == settings.jira_base_url
     assert_read_only(fake)
 
-    # --- Phase 1: a full sync, then an incremental one with nothing new ------------------
     code, out, _ = cli("sync", "--full")
     assert code == EXIT_OK
     assert re.search(r"^sync run \w+ \(full requested\): AIL full$", out, re.M)
     assert "  issues: 34 seen, 0 deleted; worklogs from the feed: 0" in out
     assert f"  rows written: {sum(AIL_COUNTS.values())}" in out
     assert counts(settings) == AIL_COUNTS
-    assert all('"OPS"' not in jql for jql in fake.jqls())  # on the site, but not in JIRA_PROJECTS
+    assert all('"OPS"' not in jql for jql in fake.jqls())
 
     code, out, _ = cli("sync", "--incremental")
     assert code == EXIT_OK
@@ -121,21 +110,20 @@ def test_the_pipeline_from_doctor_to_baseline_and_a_change_reaching_the_metrics(
     assert "warnings: none" in out
     assert counts(settings) == AIL_COUNTS
 
-    # --- Phase 2: derive and the baseline report ----------------------------------------
     code, out, _ = cli("derive")
     assert code == EXIT_OK
-    intervals = AIL_COUNTS["status_changes"] + AIL_COUNTS["issues"]  # one more interval than changes, per issue
+    intervals = AIL_COUNTS["status_changes"] + AIL_COUNTS["issues"]
     assert re.search(rf"^derive run \w+: {intervals} status intervals in [0-9.]+ s$", out, re.M)
     assert "  AIL: 34 issues\n  warnings: none" in out
 
-    before = metrics_of(settings, "AIL-15")  # In Progress, 0.5 points, no time logged
+    before = metrics_of(settings, "AIL-15")
     assert (before["done_at"], before["effort_ratio"], before["estimate_basis"]) == (None, 0.0, "points")
 
-    as_of = datetime.now(ZoneInfo(CHICAGO)).date() + timedelta(days=1)  # the window ends after now
+    as_of = datetime.now(ZoneInfo(CHICAGO)).date() + timedelta(days=1)
     code, out, _ = cli("baseline", "--as-of", as_of.isoformat(), "--tz", CHICAGO)
     assert code == EXIT_OK
     resolved = [issue for issue in fake.project_issues("AIL") if issue.resolved is not None]
-    assert len(resolved) == 14  # by hand from AIL_PLAN: every D not followed by an R
+    assert len(resolved) == 14
     assert f"baseline AIL as of {as_of.isoformat()}: 90 days in {CHICAGO}" in out
     assert "  issues: 34 in the snapshot, 34 created before the window end" in out
     assert "  resolved in the window: 14 (" in out
@@ -145,7 +133,7 @@ def test_the_pipeline_from_doctor_to_baseline_and_a_change_reaching_the_metrics(
     figures = json.loads((reports / f"{stem}.json").read_text(encoding="utf-8"))["figures"]
     assert figures["snapshot"]["total_issues"] == 34
     assert figures["resolved"]["in_window"] == 14
-    assert figures["resolved"]["straight_todo_to_done"]["count"] == 2  # AIL-12 and AIL-34
+    assert figures["resolved"]["straight_todo_to_done"]["count"] == 2
     assert figures["resolved"]["with_story_points"]["count"] == sum(1 for i in resolved if i.points)
     logged = figures["resolved"]["with_logged_time"]["timespent"]["count"]
     assert logged == sum(1 for i in resolved if i.time_spent)
@@ -153,11 +141,10 @@ def test_the_pipeline_from_doctor_to_baseline_and_a_change_reaching_the_metrics(
     assert figures["evidence"]["not_measurable"] == missing
     markdown = (reports / f"{stem}.md").read_text(encoding="utf-8")
     assert markdown.startswith(f"# Baseline report: AIL, as of {as_of.isoformat()}")
-    for account in ("acc-dev-1", "acc-dev-2", "app-tempo"):  # team and process level only
+    for account in ("acc-dev-1", "acc-dev-2", "app-tempo"):
         assert account not in markdown
 
-    # --- a change in Jira reaches issue_metrics ------------------------------------------
-    fake.clock = utcnow()  # after the last sync started
+    fake.clock = utcnow()
     fake.log_work("AIL-15", 4 * 3600)
     fake.transition("AIL-15", "Done")
     done_at = to_iso(fake.issue("AIL-15").resolved)
@@ -165,13 +152,13 @@ def test_the_pipeline_from_doctor_to_baseline_and_a_change_reaching_the_metrics(
     code, out, _ = cli("sync", "--incremental")
     assert code == EXIT_OK
     assert "  issues: 1 seen, 0 deleted; worklogs from the feed: 1" in out
-    assert "  rows written: 3\n" in out  # the issue updated, its new status change, its new worklog
+    assert "  rows written: 3\n" in out
     code, out, _ = cli("derive")
     assert code == EXIT_OK
 
     after = metrics_of(settings, "AIL-15")
     assert after["done_at"] == done_at
-    assert after["effort_ratio"] == pytest.approx(1.0)  # 4 h logged / (0.5 points x 8 h)
+    assert after["effort_ratio"] == pytest.approx(1.0)
     assert after["cycle_time_h"] == pytest.approx(hours_between(after["started_at"], done_at))
     assert after["computed_at"] > before["computed_at"]
 
@@ -197,12 +184,11 @@ def test_wrong_credentials_exit_3_from_sync_and_fail_the_doctor(
     assert code == EXIT_JIRA_AUTH
     assert out == ""
     assert "Jira refused the credentials or the permission: GET /rest/api/3/myself returned HTTP 401" in err
-    assert len(fake.requests) == 1  # no retry, no further call
+    assert len(fake.requests) == 1
     with Store.open(settings.db_file) as store:
         assert store.last_run("sync", status="failed") is not None
         assert store.get_cursor("AIL") is None
 
-    # Doctor reports the same failure as a failed check (exit 1), with the rest skipped.
     code, out, err = cli("doctor")
     assert code == EXIT_CHECKS_FAILED
     assert "[FAIL] jira auth: GET /rest/api/3/myself returned HTTP 401" in out
@@ -251,5 +237,5 @@ def test_config_errors_exit_2_before_any_jira_call(
     code = main(["doctor"], settings=insecure, client_factory=lambda s: JiraClient(**fake.client_kwargs()))
     assert code == EXIT_CONFIG
 
-    assert fake.requests == []  # every one of them stopped before Jira
+    assert fake.requests == []
     assert not fake.calls(MYSELF)

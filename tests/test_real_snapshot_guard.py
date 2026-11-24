@@ -1,10 +1,3 @@
-"""The guard that keeps every test off the product owner's real snapshot (tests/conftest.py, _no_real_snapshot).
-
-On 11 Nov 2026 data/oversight.db was found migrated while only agents and their test runs were working (12 Nov,
-12:10 AM). No test may open it, nor anything else under data/: these prove the guard refuses each way in, before
-SQLite sees the file, and lets every other database through. The real file is never opened here: its size and time
-are read from the folder (a stat, not an open) to show it was left as it was.
-"""
 from __future__ import annotations
 
 import os
@@ -23,7 +16,6 @@ REAL = PROJECT_ROOT / "data" / "oversight.db"
 
 
 def stamp(path: Path) -> tuple[int, int] | None:
-    """The file's size and modification time, read from its folder entry: the file itself is never opened."""
     try:
         found = os.stat(path)
     except FileNotFoundError:
@@ -35,9 +27,6 @@ def stamp(path: Path) -> tuple[int, int] | None:
 def test_the_guard_refuses_every_way_into_the_real_snapshot(
     run_sets_db_path: bool, _no_real_snapshot: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Regression (JO-15 review): the default path was read through the environment, so a run that pointed DB_PATH
-    # at a scratch snapshot, as agents' runs do, tried that path instead and the guard rightly let it through. The
-    # defaults alone are built here (model_construct reads no environment and no .env), and the run's DB_PATH stays.
     if run_sets_db_path:
         monkeypatch.setenv("DB_PATH", str(tmp_path / "scratch.db"))
         assert Settings(_env_file=None).db_file == tmp_path / "scratch.db"
@@ -49,26 +38,26 @@ def test_the_guard_refuses_every_way_into_the_real_snapshot(
         lambda: Store.open(str(REAL)),
         lambda: sqlite3.connect(REAL),
         lambda: sqlite3.connect(str(REAL).encode()),
-        lambda: open_readonly(REAL),  # a file: URI, read-only
+        lambda: open_readonly(REAL),
         lambda: sqlite3.connect(REAL.resolve().as_uri() + "?mode=ro", uri=True),
-        lambda: sqlite3.connect(PROJECT_ROOT / "data" / "backups" / "any.db"),  # anything else under data/
-        lambda: Store.open(default_path),  # the default settings' path is the real one
+        lambda: sqlite3.connect(PROJECT_ROOT / "data" / "backups" / "any.db"),
+        lambda: Store.open(default_path),
         lambda: SnapshotQuery(REAL, project="AIL", sprint_field=None, rules=RulesConfig.load(CONFIG_FIXTURES / "rules.yaml")),
     ]
     for attempt in attempts:
         with pytest.raises(RealSnapshotOpened, match="tests never open the real snapshot"):
             attempt()
-    monkeypatch.chdir(PROJECT_ROOT)  # a relative path, read from the working folder as SQLite would read it
+    monkeypatch.chdir(PROJECT_ROOT)
     with pytest.raises(RealSnapshotOpened):
         sqlite3.connect("data/oversight.db")
     assert len(_no_real_snapshot) == len(attempts) + 1
     assert all(Path(path) == REAL_DATA or REAL_DATA in Path(path).parents for path in _no_real_snapshot)
-    _no_real_snapshot.clear()  # tried on purpose: the guard held
-    assert stamp(REAL) == before  # untouched
+    _no_real_snapshot.clear()
+    assert stamp(REAL) == before
 
 
 def test_every_other_database_opens_as_before(tmp_path: Path) -> None:
-    with Store.open(tmp_path / "data" / "oversight.db") as store:  # a data/ folder of the test's own
+    with Store.open(tmp_path / "data" / "oversight.db") as store:
         assert store.count("issues") == 0
     conn = open_readonly(tmp_path / "data" / "oversight.db")
     conn.close()

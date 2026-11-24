@@ -1,33 +1,4 @@
-"""The Ask analyst: Claude answers any question about the snapshot by querying it.
-
-Rules in code decide what counts as a problem; the analyst explains and
-explores. With a live model (ASK_MODE=analyst) the model works in a loop with
-two kinds of tools: the vetted catalogue lookups (oversight_*, catalog.py) and
-oversight_query, a read-only SELECT over curated views of one project's
-snapshot. Every result it reads becomes a fact set (F1, F2, ...) and the
-written answer is checked against them exactly as before (validate.py): a
-number or issue key that no fact holds withholds the answer.
-
-oversight_query is safe by construction:
-- a private in-memory database with the snapshot ATTACHed read-only (mode=ro);
-- the model sees TEMP views scoped to one project that leave out person
-  identifiers (assignee and author account ids), people-picker fields and the
-  raw Jira JSON; "has an assignee" is a 0/1 column;
-- at people level (oversight/ask/people.py) the issues and findings views also
-  carry each ticket's assignee now as a person id and display name, read from
-  a TEMP table the API filled with the person rules, a people view holds
-  GET /people's figures, and a scorecard view the person scorecards' over the
-  last 90 days (JO-11, oversight/ask/scorecards.py: everyone who holds a
-  ticket and the whole board; with comparing people turned off, only the one
-  person the question mentions and the board). Still never an account id, an
-  email address, a picture or its URL, a time zone, a reporter, creator or
-  author, or a name in the changelog;
-- an authorizer allows SELECT and reads through those views (and the rules
-  and people tables) only: a direct read of a snapshot table or of the
-  assignees table, any write, PRAGMA, ATTACH, schema change or extension load
-  is denied;
-- one statement per call, a time limit (progress handler) and a row cap.
-"""
+"""The Ask analyst: the model answers by querying read-only, person-safe views of the snapshot."""
 from __future__ import annotations
 
 import json
@@ -69,9 +40,7 @@ class QueryError(Exception):
 
 
 def _views(project: str, sprint_field: str | None, assignees: str | None = None) -> dict[str, str]:
-    """name -> SELECT, every one scoped to `project` (validated: a literal is safe here). assignees: at people
-    level, the TEMP table holding each ticket's assignee now (issue_key, assignee_id, assignee), which the
-    issues and findings views join; their person columns are NULL for nobody and for a sprint finding."""
+    """name -> SELECT for each view, scoped to `project`; at people level, joined to the assignees table."""
     if not PROJECT_KEY.match(project):
         raise ValueError(f"not a project key: {project!r}")
     if assignees is not None and not _ASSIGNEES_TABLE.match(assignees):
@@ -204,8 +173,7 @@ def data_dictionary(level: str) -> str:
 
 
 class SnapshotQuery:
-    """Read-only SELECTs over the curated views of one project's snapshot. people: the board's people at people
-    level (oversight/ask/people.py), which adds the assignee columns and the people view; None at team level."""
+    """Read-only SELECTs over the curated views of one project's snapshot."""
 
     def __init__(
         self,
@@ -219,13 +187,11 @@ class SnapshotQuery:
         people: PeopleScope | None = None,
         mentioned: Sequence[str] = (),
     ) -> None:
-        """mentioned: the person ids the question mentions who hold a ticket (with comparing people turned off, the
-        scorecard view holds the one of them, when there is one)."""
+        """mentioned: the person ids the question mentions who hold a ticket."""
         self.row_limit = row_limit
         self.time_limit_s = time_limit_s
         self._deadline = 0.0
-        # The snapshot's schema name is random and never shown: a query cannot name it. At people level so is
-        # the assignees table's, which only the issues and findings views read.
+        # The schema name is random and never shown, so a query cannot name it.
         self.schema = f"s{secrets.token_hex(8)}"
         self.assignees = f"a{secrets.token_hex(8)}" if people is not None else None
         self.conn = sqlite3.connect("file::memory:", uri=True, check_same_thread=False)
@@ -243,8 +209,7 @@ class SnapshotQuery:
             "INSERT INTO rules VALUES (?, ?, ?, ?, ?)",
             [(rule.id, rule.title, rule.kind, rule.severity, rule.description) for rule in rules.rules],
         )
-        # What each view reads from the snapshot (and the assignees table), exactly: a look-alike
-        # (a WITH named "issues") reaches nothing beyond what the real view reads.
+        # Each view's exact reads, so a look-alike (a WITH named "issues") reaches nothing more.
         self._reads: dict[str, set[tuple[str, str]]] = {name: set() for name in self.views}
         for name in self.views:
             self.conn.set_authorizer(self._recorder(name))
@@ -254,9 +219,7 @@ class SnapshotQuery:
         self.conn.set_progress_handler(self._over_time, 2000)
 
     def _hold(self, people: PeopleScope, mentioned: Sequence[str]) -> None:
-        """People level: each ticket's assignee now (person id and display name, made by the person rules), for the
-        views to join, the people view's rows (GET /people's figures) and the scorecard view's (JO-11). No account id
-        is ever written here."""
+        """People level: fill the TEMP tables the views join; no account id is ever written here."""
         self.conn.execute(
             f"CREATE TEMP TABLE {self.assignees} (issue_key TEXT PRIMARY KEY, assignee_id TEXT NOT NULL, assignee TEXT NOT NULL)"
         )
@@ -416,8 +379,7 @@ def _cell(value: Any) -> Any:
 
 
 def analyst_tools(level: str = "team", *, comparison: bool = True) -> list[dict[str, Any]]:
-    """The query tool and the catalogue's lookups; at people level the person tools too (the comparison only where
-    people may be compared)."""
+    """The query tool and the catalogue's lookups, plus the person tools at people level."""
     query = {
         "name": QUERY_TOOL,
         "description": (
@@ -538,10 +500,7 @@ def snapshot_tools(
     mentioned: Sequence[str] = (),
     comparison: bool = True,
 ) -> Iterator[Any]:
-    """Run the analyst's tools for one question: yields run(name, input) -> Facts (raises QueryError). people: the
-    board's people at people level (the assignee columns, the people and scorecard views and the person tools); None:
-    team. mentioned: the people the question mentions who hold a ticket. comparison: whether people may be compared
-    (off: no comparison tool, and the scorecard view holds only the one person mentioned)."""
+    """Run the analyst's tools for one question: yields run(name, input) -> Facts (raises QueryError)."""
     query = SnapshotQuery(
         db_path, project=project, sprint_field=fields.id_of("sprint"), rules=rules, row_limit=row_limit, people=people,
         mentioned=mentioned,
@@ -582,8 +541,7 @@ _NUMBERED = re.compile(r"^([ \t]*)\d+[.)][ \t]+", re.MULTILINE)
 
 
 def tidy_markdown(text: str) -> str:
-    """The analyst's Markdown as the interface shows it: links to plain keys (the interface
-    links keys itself), [KEY] to KEY, numbered items to bullets (a list number is not a figure)."""
+    """The analyst's Markdown as the interface shows it: plain keys, and bullets instead of numbered items."""
     text = _MD_LINK.sub(r"\1", text)
     text = _BRACKETED_KEY.sub(r"\1", text)
     text = _NUMBERED.sub(r"\1- ", text)

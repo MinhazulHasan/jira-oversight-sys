@@ -1,15 +1,4 @@
-"""Test doubles for the LLM side of Ask (Phase 6).
-
-FakeProvider answers with whatever each test scripts and records every call,
-so a test can assert what the model was shown (the plan prompt never carries
-ticket text) and what it was asked. No test here talks to a real model.
-
-The audit shim stands in for oversight.llm.audit while that module is still a
-stub: `audit_shim` patches `prompt_hash` and `record_llm_call` with the same
-contract (one llm_calls row per call) only when the real ones raise
-NotImplementedError, so these tests exercise the real audit trail as soon as
-it exists.
-"""
+"""Test doubles for the LLM provider and its audit trail."""
 from __future__ import annotations
 
 import hashlib
@@ -27,14 +16,12 @@ from oversight.llm.provider import Plan, PlanCall, StructuredResult, TextResult,
 from oversight.store.db import Store
 from oversight.timeutil import to_iso, utcnow
 
-# What a scripted step may be: a ready value, an exception to raise, or a
-# function of the user prompt that produces one of those.
 Scripted = Any
 
 
 @dataclass
 class FakeCall:
-    kind: str  # structured | compose
+    kind: str
     system: str
     user: str
     model: str
@@ -45,8 +32,6 @@ class FakeCall:
 
 @dataclass
 class FakeProvider:
-    """An LLMProvider whose structured()/compose() return what the test scripted, in order."""
-
     plans: list[Scripted] = field(default_factory=list)
     answers: list[Scripted] = field(default_factory=list)
     model: str = "fake-model"
@@ -109,7 +94,6 @@ class FakeProvider:
 
 
 def plan(*calls: str | tuple[str, dict[str, Any]], understood: bool = True, reason: str | None = None) -> Plan:
-    """A Plan from call names, or (name, params) pairs."""
     return Plan(
         understood=understood,
         reason=reason,
@@ -118,11 +102,7 @@ def plan(*calls: str | tuple[str, dict[str, Any]], understood: bool = True, reas
 
 
 def cut_off(text: str, model: str = "fake-model") -> TextResult:
-    """A composition the model did not finish (stop_reason max_tokens)."""
     return TextResult(text=text, model=model, stop_reason="max_tokens", usage=Usage(300, 600), latency_ms=1)
-
-
-# --- the audit shim -----------------------------------------------------------------------
 
 
 def fake_prompt_hash(system: str, user: str) -> str:
@@ -167,7 +147,6 @@ def fake_record_llm_call(
 
 
 def _audit_is_stub() -> bool:
-    """True while oversight.llm.audit still raises NotImplementedError (probed on a throwaway database)."""
     try:
         llm_audit.prompt_hash("probe", "probe")
         with Store.open(":memory:") as probe:
@@ -188,7 +167,6 @@ def _audit_is_stub() -> bool:
 
 
 def install_fake_audit(monkeypatch: pytest.MonkeyPatch) -> bool:
-    """Patch the audit functions with the shim when they are still stubs; says whether it did."""
     if not _audit_is_stub():
         return False
     monkeypatch.setattr(llm_audit, "prompt_hash", fake_prompt_hash)
@@ -198,5 +176,4 @@ def install_fake_audit(monkeypatch: pytest.MonkeyPatch) -> bool:
 
 @pytest.fixture
 def audit_shim(monkeypatch: pytest.MonkeyPatch) -> bool:
-    """Use the real audit trail when it exists, the shim until then (see the module docstring)."""
     return install_fake_audit(monkeypatch)

@@ -1,30 +1,3 @@
-"""Where James's later stages leave evidence in Jira, per process.yaml.
-
-process.yaml gives each evidence name (code_review, dev_signoff, testing,
-test_review, test_signoff) either null (not recorded anywhere: "not
-measurable") or one source:
-
-    {field: <logical field name in fields.yaml>}   e.g. {field: code_reviewers}
-    {status: "<status name>"}                       the issue passed through that status
-    {remote_link_contains: "<text>"}                a remote link URL holds the text (e.g. pull-requests)
-    {label: "<label>"}                              the issue carries the label
-
-`evidence_time` returns the earliest storage-format UTC time at which the
-evidence existed for the issue, or None:
-- field: the earliest field_changes row for that logical field whose to_value
-  is non-empty -> changed_at; else, if the issue's raw_json holds a non-empty
-  value under the field's id (fields.yaml) -> created_at (set at creation, no
-  history); else None.
-- status: created_at when the issue was created in that status (the first
-  change's from_status, or the current status with no changes); else the
-  earliest status_changes row whose to_status equals the name
-  (case-insensitive) -> changed_at.
-- remote_link_contains: a links row of kind remote_link whose target contains
-  the text -> created_at (links carry no timestamp in the snapshot: a
-  documented limitation).
-- label: raw_json fields.labels contains it -> created_at.
-An unknown source shape raises ConfigError.
-"""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -58,7 +31,6 @@ def evidence_source(ctx: RuleContext, name: str) -> tuple[str, str] | None:
 
 
 def evidence_time(ctx: RuleContext, issue_key: str, name: str) -> str | None:
-    """Earliest time the named evidence existed for the issue (see the module docstring)."""
     source = evidence_source(ctx, name)
     if source is None:
         return None

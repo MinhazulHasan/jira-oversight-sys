@@ -88,7 +88,6 @@ def test_sort_changes_puts_non_numeric_ids_after_numeric_ones() -> None:
 
 
 def test_sort_changes_compares_instants_not_text() -> None:
-    # As text "2026-11-03T22:54..." sorts first, but at -06:00 it is 04:54 UTC on 4 Nov.
     changes = [
         _change("1", "2026-11-03T22:54:38.662-0600", "a", "b"),
         _change("2", "2026-11-04T01:00:00.000Z", "a", "b"),
@@ -128,14 +127,13 @@ def test_every_inconsistent_change_is_counted(process: ProcessConfig) -> None:
         "Done",
         [
             _change("1", "2026-10-01T10:00:00.000Z", "To Do", "In Progress"),
-            _change("2", "2026-10-01T11:00:00.000Z", "Done", "To Do"),  # was In Progress
-            _change("3", "2026-10-01T12:00:00.000Z", "In Progress", "Done"),  # was To Do
+            _change("2", "2026-10-01T11:00:00.000Z", "Done", "To Do"),
+            _change("3", "2026-10-01T12:00:00.000Z", "In Progress", "Done"),
         ],
         process.project("AIL").stage_of,
         warnings,
     )
     assert warnings.inconsistent_transitions == 2
-    # The timeline follows each change's to_status regardless.
     assert [i.status for i in intervals] == ["To Do", "In Progress", "To Do", "Done"]
 
 
@@ -150,7 +148,6 @@ def test_warnings_are_optional(process: ProcessConfig) -> None:
 
 
 def test_only_the_negative_interval_is_clamped(process: ProcessConfig) -> None:
-    # Two changes before created_at: only created -> first change runs backwards.
     warnings = TimelineWarnings()
     intervals = build_intervals(
         "2026-10-01T12:00:00.000Z",
@@ -167,8 +164,6 @@ def test_only_the_negative_interval_is_clamped(process: ProcessConfig) -> None:
 
 
 def test_any_jira_timestamp_form_is_stored_in_the_storage_format(process: ProcessConfig) -> None:
-    # AIL-1140 in the forms Jira sends: -0600 offsets (observed) and epoch
-    # milliseconds (the documented bulk changelog form).
     intervals = build_intervals(
         "2026-11-02T23:08:12.832-0600",
         "Done",
@@ -200,7 +195,7 @@ def test_missing_status_names_become_unknown(process: ProcessConfig) -> None:
         (UNKNOWN_STATUS, None),
         ("Done", "done"),
     ]
-    assert asdict(warnings) == NO_WARNINGS  # "" and " " are both the unknown status
+    assert asdict(warnings) == NO_WARNINGS
 
     stage_of = process.project("AIL").stage_of
     only = build_intervals("2026-10-01T09:00:00.000Z", None, [], stage_of)  # type: ignore[arg-type]

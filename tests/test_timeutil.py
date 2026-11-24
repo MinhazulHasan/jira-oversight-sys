@@ -21,13 +21,13 @@ from oversight.timeutil import (
 @pytest.mark.parametrize(
     "raw",
     [
-        "2026-11-03T22:54:38.662-0600",  # Jira's usual form, offset without a colon
+        "2026-11-03T22:54:38.662-0600",
         "2026-11-03T22:54:38.662-06:00",
         "2026-11-04T04:54:38.662Z",
         "2026-11-04T04:54:38.662+0000",
-        1793768078662,  # epoch milliseconds
+        1793768078662,
         "1793768078662",
-        1793768078.662,  # epoch seconds
+        1793768078.662,
     ],
 )
 def test_parse_ts_accepts_every_jira_form(raw: object) -> None:
@@ -77,11 +77,10 @@ def test_jql_datetime_uses_the_account_zone_and_drops_seconds() -> None:
 
 
 def test_local_midnight_matches_the_ticket4_window() -> None:
-    # Ticket 4 window: 2026-08-04 to 2026-11-02 (exclusive) in America/Chicago.
     start = local_midnight(date(2026, 11, 2) - timedelta(days=90), "America/Chicago")
     end = local_midnight(date(2026, 11, 2), "America/Chicago")
-    assert to_iso(start) == "2026-08-04T05:00:00.000Z"  # CDT, UTC-5
-    assert to_iso(end) == "2026-11-02T06:00:00.000Z"  # CST, UTC-6 after the 1 Nov change
+    assert to_iso(start) == "2026-08-04T05:00:00.000Z"
+    assert to_iso(end) == "2026-11-02T06:00:00.000Z"
 
 
 def test_zone_blank_is_utc_and_unknown_is_a_config_error() -> None:

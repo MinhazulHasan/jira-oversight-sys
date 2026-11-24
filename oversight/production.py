@@ -1,57 +1,4 @@
-"""`python -m oversight doctor --production`: is this deployment ready to serve the client? Read-only and offline.
-
-It reads the backend's own settings (the environment and .env, as every command does), the config files, the backups
-folder and the snapshot's schema version. It never calls Jira or the model, never writes anything that stays, and never
-migrates the snapshot: its version is read through a read-only connection. The one write is the folder check, which
-makes and deletes an empty file in data/ and logs/. Plain `python -m oversight doctor` is the check of Jira itself
-(access, statuses, fields); run both before going live.
-
-The dashboard's own settings (sign-in, APP_URL, AUTH_SECRET, the allowed domains) live in the dashboard's env file. When
-the doctor can find it, it reads that file too (never the process's environment, and nothing from it is printed): the
-file named by the DASHBOARD_ENV_FILE environment variable, else deploy/dashboard.env (the Docker pack), else
-dashboard.env in the folder above this one (the IIS pack, docs/DEPLOYMENT_IIS.md). Without it the last line says so and
-the dashboard's checks are the checklist in docs/DEPLOYMENT.md, "Production checklist".
-
-Checks, in this order. [FAIL] fails the verdict (exit 1); [WARN] and [INFO] never do.
-- "service key": FAIL when API_SERVICE_KEY is blank (the API refuses to start, or with API_ALLOW_INSECURE answers
-  anyone), shorter than 32 characters or made of a few repeated characters; WARN when API_ALLOW_INSECURE is still true
-  beside a key (it has no effect).
-- "jira": FAIL unless JIRA_BASE_URL (https), JIRA_EMAIL, JIRA_API_TOKEN and JIRA_PROJECTS are set.
-- "jira account": WARN when JIRA_EMAIL looks like a person's (a first.last address, a free mail provider, or an
-  admin's address from the dashboard's file); OK when it names a service (svc, readonly, bot, oversight, ...); INFO
-  when the address says neither. It can only tell from the address: the account's permissions are the client's to
-  check (docs/DEPLOYMENT_IIS.md, section 6).
-- "config": FAIL unless process.yaml and rules.yaml load and fields.yaml (written by `doctor`) loads: the API and the
-  sync would stop on each of these. WARN when a board in JIRA_PROJECTS has no process.yaml entry: the service maps it
-  from Jira's status categories (JO-17), so it runs, but code review, testing and sign-off go unmeasured there.
-- "model": with LLM_MODE=live, FAIL without the provider's keys (as `ask` requires them), and through Bedrock WARN
-  when neither keys nor a profile are set (the host's role must then supply them; in a container it also needs an
-  instance-metadata hop limit of 2 or more); the line names the provider and, for Bedrock, the region the questions
-  are processed in. With stub, INFO.
-- "snapshot": FAIL when it is unreadable or from a newer version; WARN when there is none yet; INFO when it is
-  older (the API brings it to this version when it starts).
-- "backups": WARN when there is none, or the newest is older than the sync service ever leaves it: it makes one
-  after the first cycle of each UTC day, so a day, SYNC_INTERVAL_MINUTES and an hour's margin for a long full
-  sync (backup_max_age). The IIS pack's daily task is inside that.
-- "data folder" and "logs folder": FAIL when the folder exists and the account running the doctor cannot create a
-  file in it; WARN when it does not exist. That account is not the app pool's: the installer's folder permissions
-  (docs/DEPLOYMENT_IIS.md) are what the app pool needs.
-- "api docs" (WARN when API_DOCS is on), "time zone" (WARN when REPORT_TIMEZONE is blank: days would be cut in
-  UTC), "log format" (WARN unless json, which log collectors read).
-- "web address": with the dashboard's file, FAIL unless APP_URL is an https origin on a real host (no path, no
-  trailing slash, not localhost); it names the callback URL the Atlassian app must carry, which only the Atlassian
-  console can confirm, and WARN when CORS_ALLOW_ORIGINS does not list it. Without the file, WARN when
-  CORS_ALLOW_ORIGINS is blank, http or localhost.
-- With the dashboard's file only: "sign-in" (FAIL when it is off, a test stand-in or the sample is set),
-  "auth secret" (FAIL when blank, under 32 characters, repeated characters, or the service key), "shared key" (FAIL
-  when the dashboard's OVERSIGHT_SERVICE_KEY is not API_SERVICE_KEY), "atlassian app" (FAIL without the client id,
-  secret and an https Jira site; WARN when the site is not JIRA_BASE_URL), "allowed domains" (FAIL when blank or not
-  domains) and "admins" (INFO with ACCESS_MODE=everyone-admin, the default; with admin-list WARN when there are none
-  or one is outside the allowed domains).
-- INFO, as set: "people comparison", "ask rate limit", "model budget", "access log", "sync interval", then
-  "dashboard" (whether its file was read, and where the checks of it are otherwise).
-No line names a secret, an email address or a key's value.
-"""
+"""`python -m oversight doctor --production`: is this deployment ready to serve the client?"""
 from __future__ import annotations
 
 import hmac
@@ -76,8 +23,6 @@ from oversight.timeutil import utcnow
 
 # The same floor as the dashboard's AUTH_SECRET.
 MIN_KEY_LENGTH = 32
-# A secret of fewer different characters than this is a repeated or typed one, not a random one (32 hex digits
-# carry 16).
 MIN_DISTINCT_CHARACTERS = 10
 # A full sync may run long before the day's backup follows it.
 BACKUP_MARGIN = timedelta(hours=1)
@@ -85,8 +30,6 @@ _DETAIL_LIMIT = 300
 
 
 def backup_max_age(settings: Settings) -> timedelta:
-    """The oldest the newest backup gets on a healthy stack: the sync service makes one after the first cycle of each
-    UTC day (oversight/cycle.py), and that cycle starts up to SYNC_INTERVAL_MINUTES after midnight."""
     return timedelta(days=1, minutes=settings.sync_interval_minutes) + BACKUP_MARGIN
 
 
@@ -112,8 +55,7 @@ _DOMAIN = re.compile(r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z
 def run_production_checks(
     settings: Settings, *, now: Callable[[], datetime] = utcnow, environ: Mapping[str, str] | None = None
 ) -> DoctorReport:
-    """Every production check, in order. See the module docstring. `environ` is where DASHBOARD_ENV_FILE is looked
-    up (the process's environment by default)."""
+    """Every production check, in order."""
     report = DoctorReport()
     add = report.checks.append
     dashboard = _read_dashboard(os.environ if environ is None else environ)
@@ -200,9 +142,6 @@ def _config(settings: Settings) -> Check:
     except ConfigError as exc:
         return _fail(name, str(exc))
     loaded = f"process.yaml, rules.yaml and fields.yaml load from {settings.resolve(settings.config_dir)}"
-    # A board process.yaml leaves out is mapped by the service from Jira's status categories (JO-17), so it never stops
-    # the API or the sync; but code review, testing and sign-off then go unmeasured, so a board in JIRA_PROJECTS
-    # (one the client chose to keep in sync) without its own entry is worth a look before going live.
     unmapped = [key for key in settings.jira_projects if key not in process.projects]
     if unmapped:
         return _warn(name, f"{loaded}; not in process.yaml, so mapped from Jira's status categories: "
@@ -291,8 +230,7 @@ def _settings_as_set(settings: Settings) -> list[tuple[str, str]]:
 
 
 def _jira_account(settings: Settings, dashboard: dict[str, str] | None) -> Check | None:
-    """Whether JIRA_EMAIL is a dedicated account, as far as its address can tell. None when it is blank (the "jira"
-    check fails that). The address itself is never printed."""
+    """Whether JIRA_EMAIL is a dedicated account, as far as its address can tell."""
     name = "jira account"
     email = settings.jira_email.strip().lower()
     if not email:
@@ -315,7 +253,6 @@ def _jira_account(settings: Settings, dashboard: dict[str, str] | None) -> Check
 
 
 def _folder(name: str, folder: Path, missing: str) -> Check:
-    """The folder exists and the account running the doctor can create a file in it (the file is deleted again)."""
     if not folder.is_dir():
         return _warn(name, f"{folder} does not exist: {missing}")
     try:
@@ -359,7 +296,6 @@ def _web_address(settings: Settings, dashboard: dict[str, str] | None) -> Check:
 
 
 def _origin_problem(value: str) -> str:
-    """What is wrong with `value` as an https address people open, or "" when nothing is."""
     try:
         parts = urlsplit(value)
         host = (parts.hostname or "").lower()
@@ -474,8 +410,6 @@ def _admins(dashboard: dict[str, str]) -> Check:
 
 
 class _Dashboard:
-    """The dashboard's env file as far as it could be read: its values (None when not read) and the doctor's last
-    line about it."""
 
     def __init__(self, values: dict[str, str] | None, note: Check) -> None:
         self.values = values
@@ -505,8 +439,6 @@ def _read_dashboard(environ: Mapping[str, str]) -> _Dashboard:
 
 
 def read_env_file(path: Path) -> dict[str, str]:
-    """NAME=value lines as node's --env-file reads them (the dashboard's own start-up): a # starts a comment, in an
-    unquoted value too; a value may be in single, double or back quotes. Later lines win."""
     found: dict[str, str] = {}
     for raw in path.read_text(encoding="utf-8-sig").splitlines():
         line = raw.strip()

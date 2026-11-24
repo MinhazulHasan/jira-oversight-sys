@@ -60,9 +60,6 @@ def _metrics(key: str, process: ProcessConfig, now: datetime = NOW) -> dict:
     )
 
 
-# --- fixtures against the hand-computed labels ---------------------------------
-
-
 @pytest.mark.parametrize("key", sorted(CASES))
 def test_metrics_match_the_hand_computed_labels(key: str, process: ProcessConfig) -> None:
     metrics = _metrics(key, process)
@@ -76,12 +73,8 @@ def test_metrics_rows_have_exactly_the_issue_metrics_columns(store: Store, proce
     assert list(_metrics("AIL-101", process)) == columns
 
 
-# --- has_estimate_value --------------------------------------------------------
-
-
 @pytest.mark.parametrize("value", [1, 0.5, 3.0, "0.5", "3", " 2 ", "1e1", -1])
 def test_numbers_other_than_zero_are_estimates(value: object) -> None:
-    # The contract only rules out zero; a negative estimate still counts as one.
     assert has_estimate_value(value)
 
 
@@ -92,9 +85,6 @@ def test_empty_zero_and_non_numbers_are_no_estimate(value: object) -> None:
     assert not has_estimate_value(value)
 
 
-# --- skipped_stages --------------------------------------------------------------
-
-
 def test_todo_to_done_skips_development_in_ail(process: ProcessConfig) -> None:
     skips = skipped_stages("AIL", [_change("5", "To Do", "Done")], process)
     assert skips == [{"changelog_id": "5", "from": "To Do", "to": "Done", "skipped": ["development"]}]
@@ -103,13 +93,13 @@ def test_todo_to_done_skips_development_in_ail(process: ProcessConfig) -> None:
 @pytest.mark.parametrize(
     ("from_status", "to_status"),
     [
-        ("To Do", "In Progress"),  # one step forward
+        ("To Do", "In Progress"),
         ("In Progress", "Done"),
-        ("Done", "To Do"),  # backwards
+        ("Done", "To Do"),
         ("Done", "In Progress"),
-        ("In Progress", "In Progress"),  # no move
-        ("To Do", "In Review"),  # unmapped target
-        ("In Review", "Done"),  # unmapped source
+        ("In Progress", "In Progress"),
+        ("To Do", "In Review"),
+        ("In Review", "Done"),
         (None, "Done"),
     ],
 )
@@ -120,8 +110,6 @@ def test_steps_backwards_and_unmapped_moves_are_not_skips(
 
 
 def test_skips_are_judged_on_the_change_as_recorded(process: ProcessConfig) -> None:
-    # Change 2 says To Do -> Done although the issue was In Progress. It counts,
-    # as JQL `status CHANGED FROM "To Do" TO "Done"` would count it.
     changes = [_change("1", "To Do", "In Progress"), _change("2", "To Do", "Done", "2026-10-02T10:00:00.000Z")]
     assert [skip["changelog_id"] for skip in skipped_stages("AIL", changes, process)] == ["2"]
 
@@ -130,7 +118,7 @@ def test_skips_use_the_projects_own_stage_order(process: ProcessConfig) -> None:
     ops = with_ops(process)
     changes = [
         _change("3", "Code Review", "Closed", "2026-10-03T10:00:00.000Z"),
-        _change("1", "open", "TESTING", "2026-10-01T10:00:00.000Z"),  # names match ignoring case
+        _change("1", "open", "TESTING", "2026-10-01T10:00:00.000Z"),
         _change("2", "Testing", "In Development", "2026-10-02T10:00:00.000Z"),
     ]
     assert skipped_stages("OPS", changes, ops) == [
@@ -144,17 +132,14 @@ def test_skipped_stages_needs_a_configured_project(process: ProcessConfig) -> No
         skipped_stages("XYZ", [], process)
 
 
-# --- reopen_count ---------------------------------------------------------------------
-
-
 def test_reopens_count_moves_out_of_done() -> None:
     changes = [
         _change("1", "To Do", "Done"),
-        _change("2", "Done", "In Progress"),  # reopen
+        _change("2", "Done", "In Progress"),
         _change("3", "In Progress", "Done"),
-        _change("4", "Done", "Closed"),  # done -> done: not a reopen
-        _change("5", "Closed", "To Do"),  # reopen
-        _change("6", "To Do", "In Review"),  # unknown category, but not from done
+        _change("4", "Done", "Closed"),
+        _change("5", "Closed", "To Do"),
+        _change("6", "To Do", "In Review"),
     ]
     assert reopen_count(changes, category_of) == 2
 
@@ -163,9 +148,6 @@ def test_a_move_from_done_to_an_unknown_status_is_a_reopen() -> None:
     assert reopen_count([_change("1", "Done", "Mystery")], category_of) == 1
     assert reopen_count([_change("1", "Mystery", "To Do")], category_of) == 0
     assert reopen_count([], category_of) == 0
-
-
-# --- estimate_set_at --------------------------------------------------------------------
 
 
 ISSUE = {"issue_key": "AIL-1", "project_key": "AIL", "created_at": "2026-10-01T09:00:00.000Z", "story_points": 3.0}
@@ -184,9 +166,9 @@ def test_estimate_set_at_ignores_other_fields() -> None:
 def test_estimate_set_at_orders_changes_by_time_then_numeric_id() -> None:
     at = "2026-10-01T09:30:00.000Z"
     changes = [
-        _field_change("10", at, "2", "3"),  # an estimate already existed by now...
-        _field_change("9", at, None, "2"),  # ...because 9 came first and set it
-        _field_change("8", "2026-10-01T09:45:00.000Z", None, "1"),  # later, even with a lower id
+        _field_change("10", at, "2", "3"),
+        _field_change("9", at, None, "2"),
+        _field_change("8", "2026-10-01T09:45:00.000Z", None, "1"),
     ]
     assert estimate_set_at(ISSUE, changes, POINTS) == at
 
@@ -194,7 +176,7 @@ def test_estimate_set_at_orders_changes_by_time_then_numeric_id() -> None:
 def test_estimate_set_at_without_a_current_estimate_still_reports_the_first_setting() -> None:
     changes = [
         _field_change("1", "2026-10-01T10:00:00.000Z", None, "3"),
-        _field_change("2", "2026-10-02T10:00:00.000Z", "3", None),  # removed again
+        _field_change("2", "2026-10-02T10:00:00.000Z", "3", None),
     ]
     assert estimate_set_at(ISSUE | {"story_points": None}, changes, POINTS) == "2026-10-01T10:00:00.000Z"
 
@@ -210,18 +192,15 @@ def test_estimate_set_at_returns_the_storage_format() -> None:
     assert estimate_set_at(ISSUE, changes, POINTS) == "2026-10-01T09:30:00.000Z"
 
 
-# --- effort_ratio ---------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("issue", "estimate", "expected"),
     [
-        ({"time_spent_s": 72000, "story_points": 2.0}, POINTS, 1.25),  # 20 h / (2 x 8 h)
-        ({"time_spent_s": None, "story_points": 2.0}, POINTS, 0.0),  # nothing logged yet
+        ({"time_spent_s": 72000, "story_points": 2.0}, POINTS, 1.25),
+        ({"time_spent_s": None, "story_points": 2.0}, POINTS, 0.0),
         ({"time_spent_s": 3600, "story_points": None}, POINTS, None),
         ({"time_spent_s": 3600, "story_points": 0.0}, POINTS, None),
         ({"time_spent_s": 3600, "story_points": -1.0}, POINTS, None),
-        ({"time_spent_s": 45000, "original_estimate_s": 36000}, HOURS, 1.25),  # 12.5 h / 10 h
+        ({"time_spent_s": 45000, "original_estimate_s": 36000}, HOURS, 1.25),
         ({"time_spent_s": 45000, "original_estimate_s": 0}, HOURS, None),
         ({"time_spent_s": 45000, "original_estimate_s": None, "story_points": 5.0}, HOURS, None),
         ({"time_spent_s": 45000, "original_estimate_s": 36000, "story_points": None}, POINTS, None),
@@ -233,10 +212,7 @@ def test_effort_ratio(issue: dict, estimate: EstimateConfig, expected: float | N
 
 def test_effort_ratio_uses_the_configured_hours_per_point() -> None:
     six_hour_points = EstimateConfig(basis="points", field="story_points", hours_per_point=6)
-    assert effort_ratio({"time_spent_s": 43200, "story_points": 1.0}, six_hour_points) == 2.0  # 12 h / 6 h
-
-
-# --- compute_metrics edge cases ---------------------------------------------------------
+    assert effort_ratio({"time_spent_s": 43200, "story_points": 1.0}, six_hour_points) == 2.0
 
 
 def _interval(status: str, stage: str | None, entered_at: str, left_at: str | None = None) -> Interval:
@@ -254,7 +230,6 @@ def test_status_age_is_never_negative(process: ProcessConfig) -> None:
 
 
 def test_cycle_time_is_none_when_done_comes_before_the_start(process: ProcessConfig) -> None:
-    # Created In Progress at 12:00, moved to Done by a change dated 11:00.
     intervals = [
         _interval("In Progress", "development", "2026-10-01T12:00:00.000Z", "2026-10-01T11:00:00.000Z"),
         _interval("Done", "done", "2026-10-01T11:00:00.000Z"),

@@ -1,17 +1,3 @@
-"""Full and incremental sync, end to end against an in-memory Jira.
-
-A real JiraClient talks through httpx.MockTransport to FakeJira
-(tests/fakes/fake_jira.py), which answers the allowlisted endpoints in the
-shapes of tests/fixtures/jira/SHAPES.md (observed and documented forms: ISO and
-epoch-ms changelog times, -0500 and -0600 offsets, token and startAt paging).
-Every change in the fake is dated by its own clock, never the wall clock, and
-retries never really sleep.
-
-Expected rows come from the mapping functions applied to the fake's current
-state: what a perfect sync would store. The counts are also spelled out by
-hand from the plans in tests/fakes/builders.py, so an empty fake can't pass by
-accident.
-"""
 from __future__ import annotations
 
 import json
@@ -80,13 +66,11 @@ from tests.fakes.fake_jira import (
 
 @pytest.fixture
 def fake() -> FakeJira:
-    """AIL (34 issues, every type) and OPS (3 issues) on one site; the clock at START."""
     return ail_and_ops()
 
 
 @pytest.fixture(autouse=True)
 def logs() -> Iterator[list[dict[str, Any]]]:
-    """Every structlog event of the test, as dicts; the configuration is restored after."""
     saved = structlog.get_config()
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
     try:
@@ -94,9 +78,6 @@ def logs() -> Iterator[list[dict[str, Any]]]:
             yield captured
     finally:
         structlog.configure(**saved)
-
-
-# --- helpers ------------------------------------------------------------------------------
 
 
 def sync(
@@ -107,14 +88,12 @@ def sync(
     projects: tuple[str, ...] = ("AIL",),
     **options: Any,
 ) -> SyncResult:
-    """One run through a real client, with the fake's clock as `now`."""
     return run_sync(
         fake.client(), store, fields, projects=list(projects), mode=mode, now=lambda: fake.clock, **options
     )
 
 
 def stored(store: Store) -> dict[str, list[dict[str, Any]]]:
-    """Every synced table's rows, in primary-key order."""
     return {
         table: [dict(row) for row in store.query(f"SELECT * FROM {table} ORDER BY {', '.join(pk)}")]
         for table, pk in TABLE_PKS.items()
@@ -125,7 +104,6 @@ def stored(store: Store) -> dict[str, list[dict[str, Any]]]:
 def expected(
     fake: FakeJira, fields: FieldsConfig, projects: tuple[str, ...] = ("AIL",)
 ) -> dict[str, list[dict[str, Any]]]:
-    """What a perfect sync stores for the fake's current state, via the mapping functions."""
     rows: dict[str, list[dict[str, Any]]] = {table: [] for table in SYNC_TABLES}
     for project in projects:
         rows["statuses"] += map_statuses(project, fake.project_statuses())
@@ -141,7 +119,6 @@ def expected(
 
 
 def _as_stored(table: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Mapped rows as the store returns them: values encoded, in primary-key order."""
     encoded = [{column: encode(value) for column, value in row.items()} for row in rows]
     return sorted(encoded, key=lambda row: tuple(row[column] for column in TABLE_PKS[table]))
 
@@ -155,7 +132,6 @@ def stats_of(result: SyncResult) -> dict[str, dict[str, int]]:
 
 
 def write_stats(**by_table: WriteStats) -> dict[str, dict[str, int]]:
-    """Per-table counts, every table not named being all zero."""
     return {table: by_table.get(table, WriteStats()).as_dict() for table in SYNC_TABLES}
 
 
@@ -178,13 +154,9 @@ def chicago_minute(at: datetime) -> str:
     return at.astimezone(ZoneInfo(CHICAGO)).strftime("%Y-%m-%d %H:%M")
 
 
-# --- full sync ----------------------------------------------------------------------------
-
-
 def test_a_full_sync_stores_exactly_what_jira_holds(
     fake: FakeJira, store: Store, fields: FieldsConfig
 ) -> None:
-    # Several pages everywhere: 8 issues per search page, 7 histories per bulk page.
     fake.search_page_cap = 8
     fake.bulk_page_size = 7
 
@@ -199,7 +171,6 @@ def test_a_full_sync_stores_exactly_what_jira_holds(
     assert result.warnings == []
     assert result.requests == len(fake.requests)
 
-    # 34 issues -> 5 search pages; a later bulk page shows the bulk paging ran.
     assert len(fake.calls(SEARCH)) == 5
     assert any(is_later_page(r) for r in fake.calls(BULK))
     assert sorted(fake.keys_called(REMOTE_LINKS)) == sorted(i.key for i in fake.project_issues("AIL"))
@@ -231,7 +202,6 @@ def test_synced_rows_keep_the_shapes_jira_sent(fake: FakeJira, store: Store, fie
     assert task["sprint_ids"] == "[4400]" and task["time_spent_s"] == 7200
     subtask = store.query_one("SELECT * FROM issues WHERE issue_key = 'AIL-29'")
     assert (subtask["parent_key"], subtask["epic_key"]) == ("AIL-4", None)
-    # Built on 28 Oct (CDT, -0500) and 1 Nov (CST, -0600): both stored in UTC.
     epic = store.query_one("SELECT created_at FROM issues WHERE issue_key = 'AIL-1'")
     assert epic["created_at"] == "2026-10-28T17:00:00.000Z"
     assert fake.payload(fake.issue("AIL-1"))["fields"]["created"] == "2026-10-28T12:00:00.000-0500"
@@ -263,11 +233,8 @@ def test_a_second_full_sync_and_then_an_incremental_one_write_nothing(
     assert incremental.issues_seen == 0
     assert stored(store) == before
     assert fake.calls(UPDATED_FEED) and fake.calls(DELETED_FEED)
-    assert not fake.calls(WORKLOG_LIST)  # the feed listed nothing, so nothing to fetch
+    assert not fake.calls(WORKLOG_LIST)
     assert store.get_cursor("AIL").last_synced_at == to_iso(START + timedelta(minutes=30))
-
-
-# --- incremental sync ------------------------------------------------------------------------
 
 
 def test_an_incremental_sync_writes_exactly_what_changed(
@@ -277,12 +244,12 @@ def test_an_incremental_sync_writes_exactly_what_changed(
     before = stored(store)
 
     fake.clock = START + timedelta(minutes=30)
-    fake.transition("AIL-15", "Done")  # a status change in a new history...
-    fake.set_points("AIL-15", 3)  # ...and a points change
-    fake.log_work("AIL-10", 3600)  # a new worklog
+    fake.transition("AIL-15", "Done")
+    fake.set_points("AIL-15", 3)
+    fake.log_work("AIL-10", 3600)
     gone_worklog = fake.worklogs_of("AIL-5")[0].id
-    fake.delete_worklog(gone_worklog)  # a deleted worklog
-    new_issue = fake.create("AIL", "Task", parent="AIL-2").key  # a new issue
+    fake.delete_worklog(gone_worklog)
+    new_issue = fake.create("AIL", "Task", parent="AIL-2").key
     fake.clock += timedelta(minutes=2)
     before_requests = len(fake.requests)
 
@@ -301,7 +268,6 @@ def test_an_incremental_sync_writes_exactly_what_changed(
     assert stored(store) == expected(fake, fields)
     assert result.requests == len(fake.requests) - before_requests
 
-    # Exactly those rows changed; every other row is byte-for-byte what it was.
     after = stored(store)
     changed = {"AIL-5", "AIL-10", "AIL-15"}
     assert [r for r in after["issues"] if r["issue_key"] not in changed | {new_issue}] == [
@@ -324,14 +290,11 @@ def test_an_incremental_sync_writes_exactly_what_changed(
     }
     assert after["links"] == before["links"] and after["statuses"] == before["statuses"]
 
-    # The JQL reads the cursor (START) less 5 minutes as Chicago wall-clock time.
     cutoff = chicago_minute(START - timedelta(minutes=5))
-    assert cutoff == "2026-11-04 08:55"  # 14:55:30 UTC is 08:55:30 CST
+    assert cutoff == "2026-11-04 08:55"
     assert fake.jqls()[-1] == f'project = "AIL" AND updated >= "{cutoff}" ORDER BY updated ASC'
     feed_since = {r.url.params["since"] for r in fake.calls(UPDATED_FEED) + fake.calls(DELETED_FEED)}
     assert feed_since == {str(epoch_ms(START - timedelta(minutes=5)))}
-    # Incremental runs take worklogs from the feed, not issue by issue: every
-    # per-issue worklog call is still the first full sync's.
     assert len(fake.calls(WORKLOGS)) == len(AIL_WITH_TIME)
 
 
@@ -346,12 +309,10 @@ def test_a_custom_overlap_widens_the_window(fake: FakeJira, store: Store, fields
 def test_the_cursor_is_the_run_start_so_changes_during_a_run_reach_the_next_one(
     fake: FakeJira, store: Store, fields: FieldsConfig
 ) -> None:
-    # Each request takes a minute, so the run lasts far longer than the overlap.
     fake.request_tick = timedelta(minutes=1)
     changed: list[str] = []
 
     def change_ail7(request: httpx.Request) -> None:
-        # After the search has been read: this run can't see the change.
         if route_of(request.url.path) == REMOTE_LINKS and not changed:
             fake.transition("AIL-7", "In Progress")
             changed.append(str(fake.log_work("AIL-7")))
@@ -362,7 +323,7 @@ def test_the_cursor_is_the_run_start_so_changes_during_a_run_reach_the_next_one(
     assert changed
     assert first.started_at == to_iso(START)
     assert first.finished_at == to_iso(fake.clock)
-    assert fake.clock - START >= first.requests * timedelta(minutes=1)  # over an hour
+    assert fake.clock - START >= first.requests * timedelta(minutes=1)
     assert store.get_cursor("AIL").last_synced_at == to_iso(START)
     assert store.query_one("SELECT status FROM issues WHERE issue_key = 'AIL-7'")[0] == "To Do"
     assert store.count("worklogs", {"issue_key": "AIL-7"}) == 0
@@ -384,7 +345,7 @@ def test_an_issue_that_changes_mid_search_is_read_again_and_counted_once(
 
     def change_after_page_1(request: httpx.Request) -> None:
         if route_of(request.url.path) == SEARCH and not is_later_page(request):
-            fake.assign(first_on_page_1, "acc-dev-2")  # now the newest: it comes back on the last page
+            fake.assign(first_on_page_1, "acc-dev-2")
 
     fake.after_request.append(change_after_page_1)
     result = sync(fake, store, fields)
@@ -404,7 +365,6 @@ def test_requests_count_only_the_run_when_a_client_is_reused(
     sent_by_first = len(fake.requests)
     second = run_sync(client, store, fields, projects=["AIL"], mode="incremental", now=lambda: fake.clock)
     assert first.requests == sent_by_first
-    # myself, statuses, search, two feeds, the site-size probe, and the board's members (ten ranges: none yet)
     assert second.requests == len(fake.requests) - sent_by_first == 16
 
 
@@ -416,7 +376,7 @@ def test_a_failure_on_a_later_page_fails_the_run_keeps_the_cursor_and_the_next_r
     for key in ("AIL-16", "AIL-23", "AIL-26"):
         fake.transition(key, "In Progress")
     fake.log_work("AIL-16")
-    fake.search_page_cap = 2  # the three changed issues take two pages
+    fake.search_page_cap = 2
     undo = fake.fail(SEARCH, status=503, when=is_later_page)
     fake.sleeps.clear()
 
@@ -428,11 +388,9 @@ def test_a_failure_on_a_later_page_fails_the_run_keeps_the_cursor_and_the_next_r
     assert run["stats"]["error_type"] == "JiraUnavailable"
     assert "HTTP 503" in run["stats"]["error"]
     assert run["finished_at"] is not None
-    assert store.get_cursor("AIL").last_synced_at == to_iso(START)  # the cursor didn't move
-    assert fake.sleeps == [1, 2, 4]  # retried with backoff, never really sleeping
-    assert not fake.calls(UPDATED_FEED)  # the run stopped before the worklog feed
-    # Oldest change first: AIL-23 and AIL-26 made page 1 (committed); AIL-16,
-    # changed twice, was on the failed page and wrote nothing.
+    assert store.get_cursor("AIL").last_synced_at == to_iso(START)
+    assert fake.sleeps == [1, 2, 4]
+    assert not fake.calls(UPDATED_FEED)
     rows = store.query(
         "SELECT issue_key, status FROM issues WHERE issue_key IN ('AIL-16', 'AIL-23', 'AIL-26')"
     )
@@ -446,7 +404,6 @@ def test_a_failure_on_a_later_page_fails_the_run_keeps_the_cursor_and_the_next_r
     undo()
     fake.clock += timedelta(minutes=30)
     recovered = sync(fake, store, fields, "incremental")
-    # Still reading from the old cursor, so nothing from the failed window is lost.
     assert f'updated >= "{chicago_minute(START - timedelta(minutes=5))}"' in fake.jqls()[-1]
     assert stored(store) == expected(fake, fields)
     assert recovered.worklogs_from_feed == 1
@@ -458,7 +415,7 @@ def test_a_page_is_written_all_or_nothing(fake: FakeJira, store: Store, fields: 
     fake.search_page_cap = 8
     order = sorted(fake.project_issues("AIL"), key=lambda i: (i.updated, int(i.id)))
     first_page = {i.key for i in order[:8]}
-    broken = order[9].key  # second page
+    broken = order[9].key
     fake.fail(REMOTE_LINKS, status=500, when=lambda r: r.url.path.split("/")[5] == broken)
 
     with pytest.raises(JiraUnavailable):
@@ -472,7 +429,7 @@ def test_a_page_is_written_all_or_nothing(fake: FakeJira, store: Store, fields: 
     }
     assert child_keys and child_keys <= first_page
     assert store.get_cursor("AIL") is None
-    assert last_run(store)["stats"]["tables"]["issues"]["inserted"] == 8  # committed writes only
+    assert last_run(store)["stats"]["tables"]["issues"]["inserted"] == 8
 
 
 def test_a_database_error_rolls_back_the_page_and_its_counts(
@@ -481,7 +438,7 @@ def test_a_database_error_rolls_back_the_page_and_its_counts(
     fake.search_page_cap = 8
     order = sorted(fake.project_issues("AIL"), key=lambda i: (i.updated, int(i.id)))
     first_page = {i.key for i in order[:8]}
-    broken = order[10].key  # its links are written after two second-page issues
+    broken = order[10].key
     replace_rows = store.replace_rows
 
     def failing_replace_rows(table: str, where: dict[str, Any], rows: Any) -> WriteStats:
@@ -493,10 +450,10 @@ def test_a_database_error_rolls_back_the_page_and_its_counts(
     with pytest.raises(sqlite3.OperationalError):
         sync(fake, store, fields)
 
-    assert store.issue_keys("AIL") == first_page  # the second page's issues were rolled back
+    assert store.issue_keys("AIL") == first_page
     run = last_run(store)
     assert (run["status"], run["stats"]["error_type"]) == ("failed", "OperationalError")
-    assert run["stats"]["tables"]["issues"]["inserted"] == 8  # rolled-back writes aren't counted
+    assert run["stats"]["tables"]["issues"]["inserted"] == 8
     assert run["stats"]["rows_written"] == sum(counts(store).values())
 
 
@@ -511,7 +468,7 @@ def test_an_incremental_run_without_a_cursor_runs_full_with_a_warning(
     fallbacks = [e for e in logs if e["event"] == "sync_full_fallback"]
     assert [(e["log_level"], e["project"]) for e in fallbacks] == [("warning", "AIL")]
     assert fake.jqls() == ['project = "AIL" ORDER BY updated ASC']
-    assert not fake.calls(UPDATED_FEED)  # no project ran incremental
+    assert not fake.calls(UPDATED_FEED)
     assert stored(store) == expected(fake, fields)
     assert store.get_cursor("AIL").last_synced_at == to_iso(START)
 
@@ -534,7 +491,7 @@ def test_an_unreadable_cursor_is_treated_as_missing_and_rewritten(
 def test_each_project_keeps_its_own_cursor_and_mode(
     fake: FakeJira, store: Store, fields: FieldsConfig
 ) -> None:
-    sync(fake, store, fields, projects=("AIL",))  # AIL's cursor: START
+    sync(fake, store, fields, projects=("AIL",))
     fake.clock = START + timedelta(hours=2)
     fake.transition("OPS-3", "In Progress")
     fake.log_work("OPS-1")
@@ -554,7 +511,6 @@ def test_each_project_keeps_its_own_cursor_and_mode(
     cursors = {p: store.get_cursor(p).last_synced_at for p in ("AIL", "OPS")}
     assert cursors == {"AIL": run_start, "OPS": run_start}
 
-    # From now on both have a cursor, so both run incremental.
     fake.clock += timedelta(hours=1)
     again = sync(fake, store, fields, "incremental", projects=("AIL", "OPS"))
     assert again.project_modes == {"AIL": "incremental", "OPS": "incremental"}
@@ -565,11 +521,11 @@ def test_each_project_keeps_its_own_cursor_and_mode(
 def test_the_worklog_feed_starts_at_the_earliest_incremental_cursor(
     fake: FakeJira, store: Store, fields: FieldsConfig
 ) -> None:
-    sync(fake, store, fields, projects=("AIL",))  # AIL's cursor: START
+    sync(fake, store, fields, projects=("AIL",))
     fake.clock = START + timedelta(minutes=30)
-    worklog_id = fake.log_work("AIL-10", 3600)  # after AIL's cursor, before OPS's
+    worklog_id = fake.log_work("AIL-10", 3600)
     fake.clock = START + timedelta(hours=1)
-    sync(fake, store, fields, projects=("OPS",))  # OPS's cursor: START + 1 h
+    sync(fake, store, fields, projects=("OPS",))
     fake.clock = START + timedelta(hours=2)
 
     result = sync(fake, store, fields, "incremental", projects=("AIL", "OPS"))
@@ -578,9 +534,6 @@ def test_the_worklog_feed_starts_at_the_earliest_incremental_cursor(
     assert fake.calls(UPDATED_FEED)[-1].url.params["since"] == str(epoch_ms(START - timedelta(minutes=5)))
     assert store.count("worklogs", {"worklog_id": str(worklog_id)}) == 1
     assert stored(store) == expected(fake, fields, ("AIL", "OPS"))
-
-
-# --- deletions and moves -----------------------------------------------------------------------
 
 
 def test_a_full_sync_deletes_issues_gone_from_jira_but_never_after_a_failed_search(
@@ -596,7 +549,7 @@ def test_a_full_sync_deletes_issues_gone_from_jira_but_never_after_a_failed_sear
     undo = fake.fail(SEARCH, status=503, when=is_later_page)
     with pytest.raises(JiraUnavailable):
         sync(fake, store, fields)
-    assert store.count("issues", {"issue_key": "AIL-18"}) == 1  # a partial search deletes nothing
+    assert store.count("issues", {"issue_key": "AIL-18"}) == 1
     assert store.count("issues") == 34
 
     undo()
@@ -619,10 +572,10 @@ def test_an_incremental_sync_does_not_delete_issues(
 ) -> None:
     sync(fake, store, fields)
     fake.clock += timedelta(hours=1)
-    fake.delete_issue("AIL-16")  # no worklogs, nothing else changes
+    fake.delete_issue("AIL-16")
     result = sync(fake, store, fields, "incremental")
     assert result.issues_deleted == 0 and result.rows_written == 0
-    assert store.count("issues", {"issue_key": "AIL-16"}) == 1  # only a full sync can notice
+    assert store.count("issues", {"issue_key": "AIL-16"}) == 1
 
 
 @pytest.mark.parametrize("mode", ["full", "incremental"])
@@ -644,31 +597,25 @@ def test_a_moved_issue_is_stored_under_its_new_key_only(
     moved = {table: store.count(table, {"issue_key": "OPS-4"}) for table in child_tables}
     assert moved == {"status_changes": 3, "field_changes": 3, "worklogs": 2}
     assert stored(store) == expected(fake, fields, both)
-    # The old key's rows go and the new key's arrive, whichever way it is noticed.
     tables = stats_of(result)
     issues = tables["issues"]
     assert (issues["inserted"], issues["updated"], issues["deleted"]) == (1, 0, 1)
     for table, moved in (("status_changes", 3), ("field_changes", 3), ("worklogs", 2)):
         assert (tables[table]["inserted"], tables[table]["deleted"]) == (moved, moved)
-    # A full sync sees AIL-11 vanish from AIL; an incremental one sees OPS-4 re-keyed.
     assert result.issues_deleted == (1 if mode == "full" else 0)
-    # Its older worklogs aren't in the feed, so they are read for the new key.
     assert "OPS-4" in fake.keys_called(WORKLOGS)
 
 
 def test_an_issue_moved_in_from_outside_the_snapshot_brings_its_worklogs(
     fake: FakeJira, store: Store, fields: FieldsConfig
 ) -> None:
-    sync(fake, store, fields)  # AIL only: OPS is not in the snapshot
+    sync(fake, store, fields)
     fake.clock += timedelta(hours=1)
     new_key = fake.move("OPS-1", "AIL")
     result = sync(fake, store, fields, "incremental")
-    assert result.worklogs_from_feed == 0  # its worklog was logged long ago
+    assert result.worklogs_from_feed == 0
     assert store.count("worklogs", {"issue_key": new_key}) == 1
     assert stored(store) == expected(fake, fields)
-
-
-# --- worklogs ------------------------------------------------------------------------------------
 
 
 def test_a_full_sync_asks_for_worklogs_only_where_time_was_logged(
@@ -677,7 +624,7 @@ def test_a_full_sync_asks_for_worklogs_only_where_time_was_logged(
     sync(fake, store, fields)
     assert set(fake.keys_called(WORKLOGS)) == AIL_WITH_TIME
     assert len(fake.calls(WORKLOGS)) == len(AIL_WITH_TIME)
-    assert fake.issue("AIL-14").time_spent == 0  # logged and removed: 0, not null, and no call either
+    assert fake.issue("AIL-14").time_spent == 0
     assert "AIL-14" not in fake.keys_called(WORKLOGS)
 
 
@@ -686,8 +633,8 @@ def test_a_full_sync_removes_worklogs_deleted_in_jira(
 ) -> None:
     sync(fake, store, fields)
     fake.clock += timedelta(hours=1)
-    fake.delete_worklog(fake.worklogs_of("AIL-5")[0].id)  # AIL-5 keeps one worklog
-    fake.delete_worklog(fake.worklogs_of("AIL-6")[0].id)  # AIL-6's only one: timespent 0
+    fake.delete_worklog(fake.worklogs_of("AIL-5")[0].id)
+    fake.delete_worklog(fake.worklogs_of("AIL-6")[0].id)
     calls_before = len(fake.calls(WORKLOGS))
 
     result = sync(fake, store, fields)
@@ -701,7 +648,7 @@ def test_a_full_sync_removes_worklogs_deleted_in_jira(
 def test_the_worklog_feed_ignores_issues_outside_the_snapshot(
     fake: FakeJira, store: Store, fields: FieldsConfig
 ) -> None:
-    sync(fake, store, fields)  # OPS exists in Jira but is not synced
+    sync(fake, store, fields)
     fake.clock += timedelta(hours=1)
     ours = fake.log_work("AIL-10", 3600)
     theirs = fake.log_work("OPS-1", 3600)
@@ -710,8 +657,8 @@ def test_the_worklog_feed_ignores_issues_outside_the_snapshot(
     result = sync(fake, store, fields, "incremental")
 
     listed = json.loads(fake.calls(WORKLOG_LIST)[-1].content)["ids"]
-    assert sorted(listed) == sorted([ours, theirs])  # the feed covers every project...
-    assert result.worklogs_from_feed == 1  # ...but only stored issues keep theirs
+    assert sorted(listed) == sorted([ours, theirs])
+    assert result.worklogs_from_feed == 1
     assert stats_of(result)["worklogs"] == {"inserted": 1, "updated": 0, "deleted": 0, "unchanged": 0}
     assert store.query_one("SELECT issue_key FROM worklogs WHERE worklog_id = ?", (str(ours),))[0] == "AIL-10"
     assert store.count("worklogs", {"worklog_id": str(theirs)}) == 0
@@ -727,7 +674,6 @@ def test_a_worklog_deleted_while_the_feed_is_read_ends_up_deleted(
     worklog_id = fake.log_work("AIL-10", 3600)
 
     def delete_after_listing(request: httpx.Request) -> None:
-        # Listed as updated, then deleted before the deleted feed is read.
         if route_of(request.url.path) == WORKLOG_LIST and worklog_id in fake.worklogs:
             fake.delete_worklog(worklog_id)
 
@@ -737,13 +683,9 @@ def test_a_worklog_deleted_while_the_feed_is_read_ends_up_deleted(
     assert result.worklogs_from_feed == 1
     assert stats_of(result)["worklogs"] == {"inserted": 1, "updated": 0, "deleted": 1, "unchanged": 0}
     assert store.count("worklogs", {"worklog_id": str(worklog_id)}) == 0
-    # The issue changed again after it was read; the next run catches up.
     fake.after_request.clear()
     sync(fake, store, fields, "incremental")
     assert stored(store) == expected(fake, fields)
-
-
-# --- changelogs ----------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("status", [400, 404, 405])
@@ -751,12 +693,12 @@ def test_without_bulk_fetch_changelogs_are_read_per_issue_with_one_warning(
     fake: FakeJira, store: Store, fields: FieldsConfig, logs: list[dict[str, Any]], status: int
 ) -> None:
     fake.search_page_cap = 8
-    fake.changelog_page_cap = 2  # several changelog pages per issue
+    fake.changelog_page_cap = 2
     fake.bulkfetch_unavailable(status)
 
     result = sync(fake, store, fields)
 
-    assert len(fake.calls(BULK)) == 1  # tried once, then never again this run
+    assert len(fake.calls(BULK)) == 1
     assert set(fake.keys_called(CHANGELOG)) == {i.key for i in fake.project_issues("AIL")}
     assert any(r.url.params.get("startAt") not in (None, "0") for r in fake.calls(CHANGELOG))
     assert result.warnings == [
@@ -767,7 +709,6 @@ def test_without_bulk_fetch_changelogs_are_read_per_issue_with_one_warning(
     ]
     assert stored(store) == expected(fake, fields)
 
-    # The same rows the bulk fetch gives, on an identical site.
     other = FakeJira()
     build(other, "AIL", AIL_PLAN, AIL_LINKS)
     other.clock = START
@@ -827,15 +768,12 @@ def test_an_entry_without_its_id_fails_the_run_instead_of_dropping_data(
     assert store.get_cursor("AIL").last_synced_at == to_iso(START)
 
 
-# --- read-only end to end -------------------------------------------------------------------------
-
-
 def test_every_request_is_an_allowlisted_read_and_feeds_never_follow_next_page(
     fake: FakeJira, store: Store, fields: FieldsConfig
 ) -> None:
     fake.search_page_cap = 8
     fake.bulk_page_size = 7
-    fake.feed_page_size = 1  # one worklog per feed page
+    fake.feed_page_size = 1
     sync(fake, store, fields)
     fake.clock += timedelta(hours=1)
     first = fake.log_work("AIL-10", 3600)
@@ -850,7 +788,6 @@ def test_every_request_is_an_allowlisted_read_and_feeds_never_follow_next_page(
         assert (request.method, route_of(request.url.path)) in ALLOWED
         assert (request.url.scheme, request.url.host) == ("https", "fake.atlassian.net")
         assert "nextPage" not in str(request.url)
-    # Feed pages follow `until` as `since`: never the absolute nextPage URL.
     since = epoch_ms(START - timedelta(minutes=5))
     assert [r.url.params["since"] for r in fake.calls(UPDATED_FEED)] == [
         str(since),
@@ -884,9 +821,6 @@ def test_render_names_modes_issues_tables_and_requests(
         "    - OPS: no earlier successful sync, so it was read in full\n"
         "    - bulk changelog fetch answered HTTP 404: changelogs were read one issue at a time"
     )
-
-
-# --- account zone and arguments ------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("reported", [None, "", "Mars/Olympus_Mons"])
@@ -949,25 +883,17 @@ def test_an_auth_failure_records_a_failed_run_and_sets_no_cursor(
     assert all(TOKEN not in json.dumps(e, default=str) for e in logs)
 
 
-# --- each board's members (step 6) -------------------------------------------------------------------
-
-# Every range of the site's users Jira's assignable-user search serves: the members read asks for each of them.
 RANGES = ["0", "100", "200", "300", "400", "500", "600", "700", "800", "900"]
-# users/search lists accounts of every kind, so the warning says what was counted: never "users", which an admin
-# looking at the site's people could rightly dispute.
 OVER_THE_SCAN = ("Jira lists more than 1,000 accounts on this site (people, apps and former users), and the board "
                  "members read can scan only the first 1,000 of them, so some people may be missing from the @ list")
 
 
 def members_of(store: Store, project: str) -> dict[str, str]:
-    """account -> seen_at, the board's board_members rows."""
     return {row[0]: row[1] for row in store.query(
         "SELECT account_id, seen_at FROM board_members WHERE project_key = ?", (project,))}
 
 
 def team(fake: FakeJira) -> None:
-    """AIL's assignable users as Jira lists them: its two assignees, two people with no tickets, and the
-    accounts that are never members (an app, a customer, a deactivated person)."""
     fake.add_member("AIL", "acc-dev-1")
     fake.add_member("AIL", "acc-dev-2")
     fake.add_member("AIL", "acc-m1", "Noor Haddad", avatarUrls={"48x48": "https://example.invalid/m1/48"})
@@ -992,19 +918,17 @@ def test_a_sync_stores_each_boards_members_and_their_names(
         "SELECT account_id, display_name, active, updated_at, avatar_url, avatar FROM people")}
     assert people["acc-m1"] == ("Noor Haddad", 1, seen, "https://example.invalid/m1/48", None)
     assert people["acc-o1"] == ("Tomás Ferreira", 1, seen, None, None)
-    assert not {"app-tempo", "acc-c1", "acc-gone"} & set(people)  # never members, so never people either
-    # One paged read a board, of every range Jira serves, the empty ones too; before them, one site-size probe a run.
+    assert not {"app-tempo", "acc-c1", "acc-gone"} & set(people)
     assert [(r.url.params["project"], r.url.params["startAt"]) for r in fake.calls(ASSIGNABLE)] == [
         (board, start) for board in ("AIL", "OPS") for start in RANGES]
     [probe] = fake.calls(SITE_USERS)
     assert dict(probe.url.params) == {"startAt": "1000", "maxResults": "1"}
     assert fake.requests.index(probe) < fake.requests.index(fake.calls(ASSIGNABLE)[0])
-    assert stored(store) == expected(fake, fields, ("AIL", "OPS"))  # the snapshot as before
+    assert stored(store) == expected(fake, fields, ("AIL", "OPS"))
     assert result.members.as_dict() == {"boards": 2, "members": 6, "failed_boards": 0}
     assert last_run(store)["stats"]["members"] == {"boards": 2, "members": 6, "failed_boards": 0}
     assert "  members: 2 boards refreshed, 0 failed; 6 members\n" in result.render()
     assert result.warnings == []
-    # Nothing of the user objects but the people row's columns is kept, and the log names no one.
     everything = json.dumps([[*row] for table in ("people", "board_members") for row in store.query(f"SELECT * FROM {table}")])
     assert "example.invalid/rest" not in everything and "@example.invalid" not in everything
     assert "Europe/Berlin" not in everything and "de_DE" not in everything
@@ -1015,17 +939,17 @@ def test_a_sync_stores_each_boards_members_and_their_names(
 def test_a_complete_fetch_replaces_the_boards_members(fake: FakeJira, store: Store, fields: FieldsConfig) -> None:
     team(fake)
     sync(fake, store, fields)
-    fake.members["AIL"] = [user for user in fake.members["AIL"] if user["accountId"] != "acc-m2"]  # left the team
-    fake.add_member("AIL", "acc-m3", "Ines Duarte")  # joined it
+    fake.members["AIL"] = [user for user in fake.members["AIL"] if user["accountId"] != "acc-m2"]
+    fake.add_member("AIL", "acc-m3", "Ines Duarte")
     fake.clock += timedelta(hours=1)
 
-    again = sync(fake, store, fields, "incremental")  # incremental too: every sync reads the members
+    again = sync(fake, store, fields, "incremental")
 
     assert set(members_of(store, "AIL")) == {"acc-dev-1", "acc-dev-2", "acc-m1", "acc-m3"}
-    assert set(members_of(store, "AIL").values()) == {again.started_at}  # seen by this run
-    assert store.count("people", {"account_id": "acc-m2"}) == 1  # an account stays; only its membership goes
+    assert set(members_of(store, "AIL").values()) == {again.started_at}
+    assert store.count("people", {"account_id": "acc-m2"}) == 1
     assert again.members.as_dict() == {"boards": 1, "members": 4, "failed_boards": 0}
-    assert len(fake.calls(ASSIGNABLE)) == 20 and len(fake.calls(SITE_USERS)) == 2  # ten ranges and a probe a sync
+    assert len(fake.calls(ASSIGNABLE)) == 20 and len(fake.calls(SITE_USERS)) == 2
 
 
 def test_a_members_page_never_touches_a_stored_picture(fake: FakeJira, store: Store, fields: FieldsConfig) -> None:
@@ -1036,7 +960,7 @@ def test_a_members_page_never_touches_a_stored_picture(fake: FakeJira, store: St
                            " avatar_source = 'https://example.invalid/m1/48', avatar_fetched_at = ? WHERE account_id = 'acc-m1'",
                            (b"\x89PNG\r\n\x1a\n", to_iso(fake.clock)))
     before = dict(store.query_one("SELECT * FROM people WHERE account_id = 'acc-m1'"))
-    fake.members["AIL"][2]["displayName"] = "Noor Haddad-Lee"  # renamed in Jira
+    fake.members["AIL"][2]["displayName"] = "Noor Haddad-Lee"
     fake.clock += timedelta(hours=1)
     sync(fake, store, fields, "incremental")
     after = dict(store.query_one("SELECT * FROM people WHERE account_id = 'acc-m1'"))
@@ -1077,8 +1001,8 @@ def test_a_board_whose_fetch_fails_keeps_its_members_and_never_fails_the_sync(
 
     result = sync(fake, store, fields, "incremental", projects=("AIL", "OPS"))
 
-    assert members_of(store, "AIL") == kept  # the rows it had, as they were
-    assert "acc-o2" in members_of(store, "OPS")  # the next board was read all the same
+    assert members_of(store, "AIL") == kept
+    assert "acc-o2" in members_of(store, "OPS")
     assert last_run(store)["status"] == "succeeded" and store.get_cursor("AIL").last_run_id == result.run_id
     assert result.members.as_dict() == {"boards": 1, "members": 3, "failed_boards": 1}
     assert last_run(store)["stats"]["members"] == {"boards": 1, "members": 3, "failed_boards": 1}
@@ -1107,7 +1031,7 @@ def test_a_database_error_storing_the_members_keeps_the_ones_stored(
     monkeypatch.setattr(store, "upsert", failing)
     fake.clock += timedelta(hours=1)
     result = sync(fake, store, fields, "incremental")
-    assert members_of(store, "AIL") == kept  # the board's rows and the people rows are one transaction
+    assert members_of(store, "AIL") == kept
     assert store.count("people", {"account_id": "acc-m9"}) == 0
     assert result.warnings == ["AIL: the board's members were not refreshed (not stored (OperationalError)); the stored ones stay"]
 
@@ -1115,9 +1039,6 @@ def test_a_database_error_storing_the_members_keeps_the_ones_stored(
 def answers_take(
     fake: FakeJira, seconds: float, when: Callable[[httpx.Request], bool], *, waiting_for: str = "read"
 ) -> None:
-    """The requests `when` accepts take `seconds` each on the fake clock, as a real transport takes them: an attempt
-    whose timeout comes first ends there instead, with that timeout. `waiting_for`: "read" (connected, the answer
-    slow) or "connect" (no connection made)."""
     timeout_error = httpx.ReadTimeout if waiting_for == "read" else httpx.ConnectTimeout
 
     def slow(request: httpx.Request) -> httpx.Response | None:
@@ -1128,7 +1049,7 @@ def answers_take(
             fake.clock += timedelta(seconds=limit)
             raise timeout_error("no answer in time", request=request)
         fake.clock += timedelta(seconds=seconds)
-        return None  # then answered as ever
+        return None
 
     fake.faults.append(slow)
 
@@ -1153,8 +1074,6 @@ def test_the_members_step_has_thirty_seconds_a_board_and_ten_for_the_size_check_
 def test_three_boards_whose_pages_take_two_seconds_are_all_refreshed(
     fake: FakeJira, store: Store, fields: FieldsConfig
 ) -> None:
-    """Three boards, as the example .env syncs, each read in its ten pages, at two seconds a page: 62 seconds in all,
-    which one minute for every board together could never hold (the third board's last page met it)."""
     team(fake)
     fake.add_project("CORE")
     fake.add_member("CORE", "acc-k1", "Core Member")
@@ -1163,7 +1082,7 @@ def test_three_boards_whose_pages_take_two_seconds_are_all_refreshed(
 
     result = sync(fake, store, fields, projects=("AIL", "OPS", "CORE"), clock=lambda: fake.clock.timestamp())
 
-    assert fake.clock - start == timedelta(seconds=62)  # the size check and thirty pages, two seconds each
+    assert fake.clock - start == timedelta(seconds=62)
     assert result.members.as_dict() == {"boards": 3, "members": 7, "failed_boards": 0}
     assert set(members_of(store, "CORE")) == {"acc-k1"}
     assert result.warnings == []
@@ -1177,23 +1096,21 @@ def test_a_board_that_hangs_never_takes_the_time_of_the_boards_after_it(
     kept = members_of(store, "AIL")
     fake.add_member("AIL", "acc-m9", "Not Yet Seen")
     fake.add_member("OPS", "acc-o2", "Ines Duarte")
-    answers_take(fake, 600, pages_of("AIL"))  # AIL's answers never come: each attempt waits out its timeout
+    answers_take(fake, 600, pages_of("AIL"))
     fake.clock += timedelta(hours=1)
     start = fake.clock
 
     result = sync(fake, store, fields, "incremental", projects=("AIL", "OPS"), clock=lambda: fake.clock.timestamp())
 
-    assert fake.clock - start == timedelta(seconds=35)  # AIL's share: half the step's 70 seconds, and no more
+    assert fake.clock - start == timedelta(seconds=35)
     assert members_of(store, "AIL") == kept
-    assert "acc-o2" in members_of(store, "OPS")  # OPS had the time AIL could not take
+    assert "acc-o2" in members_of(store, "OPS")
     assert result.members.as_dict() == {"boards": 1, "members": 3, "failed_boards": 1}
     assert result.warnings == ["AIL: the board's members were not refreshed (time budget spent); the stored ones stay"]
     assert last_run(store)["status"] == "succeeded"
 
 
 def test_the_members_step_never_runs_past_its_time(fake: FakeJira, store: Store, fields: FieldsConfig) -> None:
-    """When no answer ever comes, the size check stops at its 10 seconds and each board at its equal share of what
-    is left: the step ends at its 70 seconds for two boards, and every board keeps its rows."""
     team(fake)
     sync(fake, store, fields, projects=("AIL", "OPS"))
     kept = {"AIL": members_of(store, "AIL"), "OPS": members_of(store, "OPS")}
@@ -1205,9 +1122,8 @@ def test_the_members_step_never_runs_past_its_time(fake: FakeJira, store: Store,
 
     result = sync(fake, store, fields, "incremental", projects=("AIL", "OPS"), clock=lambda: fake.clock.timestamp())
 
-    assert fake.clock - start == timedelta(seconds=70)  # 10 for the size check, then 30 for each board
+    assert fake.clock - start == timedelta(seconds=70)
     assert len(fake.calls(SITE_USERS)) - probed == 1
-    # One attempt a board, its share ending inside it: never AIL's retries eating the time OPS was owed.
     assert [r.url.params["project"] for r in fake.calls(ASSIGNABLE)[asked:]] == ["AIL", "OPS"]
     assert {"AIL": members_of(store, "AIL"), "OPS": members_of(store, "OPS")} == kept
     assert result.members.as_dict() == {"boards": 0, "members": 0, "failed_boards": 2}
@@ -1234,7 +1150,7 @@ def test_jira_asking_for_a_wait_past_the_budget_ends_the_board_at_once(
 
     result = sync(fake, store, fields, "incremental", projects=("AIL", "OPS"), clock=lambda: fake.clock.timestamp())
 
-    assert fake.sleeps[slept:] == []  # neither board waited two minutes of the step's one
+    assert fake.sleeps[slept:] == []
     assert {"AIL": members_of(store, "AIL"), "OPS": members_of(store, "OPS")} == kept
     assert result.members.as_dict() == {"boards": 0, "members": 0, "failed_boards": 2}
     assert result.warnings == [
@@ -1266,21 +1182,15 @@ def test_a_failed_sync_reads_no_members(fake: FakeJira, store: Store, fields: Fi
     assert fake.calls(ASSIGNABLE) == [] and fake.calls(SITE_USERS) == [] and store.count("board_members") == 0
 
 
-# --- members far apart on the site, and a site past the 1,000 users the read can scan ---------------------------
-
-
 def test_members_far_apart_among_the_sites_users_are_all_found(
     fake: FakeJira, store: Store, fields: FieldsConfig, logs: list[dict[str, Any]]
 ) -> None:
-    """The product owner's "I cannot see all the people on the board", end to end: on a real site app accounts,
-    customers and other teams sit between a board's people, so whole ranges of the site's users come back empty,
-    and the people after them are read all the same."""
     team(fake)
-    fake.members_spread = 150  # AIL's seven at places 0, 150, ..., 900: the ranges at 200, 500 and 800 are empty
+    fake.members_spread = 150
 
     result = sync(fake, store, fields, projects=("AIL", "OPS"))
 
-    assert set(members_of(store, "AIL")) == {"acc-dev-1", "acc-dev-2", "acc-m1", "acc-m2"}  # m1 and m2 after a gap
+    assert set(members_of(store, "AIL")) == {"acc-dev-1", "acc-dev-2", "acc-m1", "acc-m2"}
     assert set(members_of(store, "OPS")) == {"acc-dev-1", "acc-o1"}
     assert [r.url.params["startAt"] for r in fake.calls(ASSIGNABLE)] == RANGES * 2
     assert result.members.as_dict() == {"boards": 2, "members": 6, "failed_boards": 0}
@@ -1291,18 +1201,15 @@ def test_members_far_apart_among_the_sites_users_are_all_found(
 def test_a_member_sent_again_as_the_sites_users_move_never_cuts_the_boards_members_short(
     fake: FakeJira, store: Store, fields: FieldsConfig, logs: list[dict[str, Any]]
 ) -> None:
-    """The site's users move while a board is read: an account joins ahead of everyone once the first page is sent,
-    so AIL's first member comes again, alone, at the top of the next range. The read goes on, and every member is
-    stored again: never a list cut short at the repeat standing in for the board's members, with no warning."""
     team(fake)
-    fake.members_first_place, fake.members_spread = 99, 150  # AIL's seven at places 99, 249, ..., 999
+    fake.members_first_place, fake.members_spread = 99, 150
     sync(fake, store, fields)
     everyone = {"acc-dev-1", "acc-dev-2", "acc-m1", "acc-m2"}
     assert set(members_of(store, "AIL")) == everyone
 
     def someone_joins(request: httpx.Request) -> None:
         if route_of(request.url.path) == ASSIGNABLE and request.url.params["startAt"] == "0":
-            fake.members_first_place += 1  # once the first page is sent: AIL's seven at 100, 250, ..., 1000
+            fake.members_first_place += 1
 
     fake.after_request.append(someone_joins)
     fake.clock += timedelta(hours=1)
@@ -1310,45 +1217,41 @@ def test_a_member_sent_again_as_the_sites_users_move_never_cuts_the_boards_membe
 
     result = sync(fake, store, fields, "incremental")
 
-    assert set(members_of(store, "AIL")) == everyone  # acc-dev-2, acc-m1 and acc-m2 come after the repeat
+    assert set(members_of(store, "AIL")) == everyone
     assert [r.url.params["startAt"] for r in fake.calls(ASSIGNABLE)[asked:]] == RANGES
     assert result.members.as_dict() == {"boards": 1, "members": 4, "failed_boards": 0}
     assert result.warnings == []
     repeated = [(e["board"], e["pages"], e["kept"]) for e in logs if e["event"] == "board_members_page_repeated"]
-    assert repeated == [("AIL", 1, 6)]  # logged once; the read's six include the app and the customer, never members
+    assert repeated == [("AIL", 1, 6)]
 
 
 def test_a_site_of_more_than_1000_users_warns_that_people_may_be_missing(
     fake: FakeJira, store: Store, fields: FieldsConfig, logs: list[dict[str, Any]]
 ) -> None:
-    """Jira's assignable-user search never reads past the site's 1,000th user, so a member there cannot be found:
-    the sync says the @ list may be incomplete, once a run, and stores what it found all the same. The size check
-    counts accounts, people, apps and former users alike (users/search lists them all), and the warning says so."""
     team(fake)
-    fake.add_member("AIL", "acc-m8", "Past The Scan")  # AIL's eighth: at place 1,050 once spread
+    fake.add_member("AIL", "acc-m8", "Past The Scan")
     fake.members_spread = 150
     fake.site_user_count = 1200
 
     result = sync(fake, store, fields, projects=("AIL", "OPS"))
 
     assert set(members_of(store, "AIL")) == {"acc-dev-1", "acc-dev-2", "acc-m1", "acc-m2"}
-    assert store.count("people", {"account_id": "acc-m8"}) == 0  # never sent by Jira
+    assert store.count("people", {"account_id": "acc-m8"}) == 0
     assert max(int(r.url.params["startAt"]) for r in fake.calls(ASSIGNABLE)) == 900
     assert result.warnings == [OVER_THE_SCAN]
     run = last_run(store)
     assert run["status"] == "succeeded" and run["stats"]["warnings"] == [OVER_THE_SCAN]
-    assert run["stats"]["members"] == {"boards": 2, "members": 6, "failed_boards": 0}  # the same counts, no new key
+    assert run["stats"]["members"] == {"boards": 2, "members": 6, "failed_boards": 0}
     assert result.render().endswith(f"  warnings:\n    - {OVER_THE_SCAN}")
     over = [e for e in logs if e["event"] == "board_members_site_over_scan_limit"]
     assert over == [{"event": "board_members_site_over_scan_limit", "logger": "sync", "scan_limit": 1000,
                      "log_level": "warning"}]
-    assert len(fake.calls(SITE_USERS)) == 1  # once a run, whatever the number of boards
+    assert len(fake.calls(SITE_USERS)) == 1
     text = json.dumps(logs, default=str) + json.dumps(run["stats"])
-    assert "acc-site-" not in text and "Site User" not in text  # nothing of the probe's user is logged or kept
+    assert "acc-site-" not in text and "Site User" not in text
 
 
 def answer_on(route: str, answer: Any) -> Callable[[FakeJira], object]:
-    """A setup that makes the fake answer `answer(request)` on `route`."""
     return lambda fake: fake.faults.append(lambda r: answer(r) if route_of(r.url.path) == route else None)
 
 
@@ -1379,7 +1282,7 @@ def test_a_site_within_the_scan_or_one_jira_will_not_size_gets_no_warning(
     result = sync(fake, store, fields, projects=("AIL", "OPS"))
 
     assert result.warnings == []
-    assert [e["status"] for e in logs if e["event"] == "site_user_count_unknown"] == unknown  # a log line only
+    assert [e["status"] for e in logs if e["event"] == "site_user_count_unknown"] == unknown
     assert not [e for e in logs if e["event"] == "board_members_site_over_scan_limit"]
     assert result.members.as_dict() == {"boards": 2, "members": 6, "failed_boards": 0}
     assert last_run(store)["status"] == "succeeded"
@@ -1409,10 +1312,10 @@ def test_a_failing_site_probe_never_fails_the_sync_or_the_members_step(
     assert last_run(store)["status"] == "succeeded" and store.get_cursor("AIL").last_run_id == result.run_id
     assert result.members.as_dict() == {"boards": 2, "members": 6, "failed_boards": 0}
     assert set(members_of(store, "AIL")) == {"acc-dev-1", "acc-dev-2", "acc-m1", "acc-m2"}
-    assert result.warnings == []  # Jira has not said: a log line, never a warning
+    assert result.warnings == []
     unknown = [e for e in logs if e["event"] == "site_user_count_unknown"]
     assert unknown == [{"event": "site_user_count_unknown", "logger": "sync", "reason": reason, "log_level": "warning"}]
-    assert str(failure) not in json.dumps(logs, default=str)  # a short reason, never the error's text
+    assert str(failure) not in json.dumps(logs, default=str)
 
 
 @pytest.mark.parametrize(
@@ -1425,10 +1328,6 @@ def test_a_failing_site_probe_never_fails_the_sync_or_the_members_step(
 def test_a_size_check_that_times_out_spends_its_own_ten_seconds_and_is_logged_so(
     fake: FakeJira, store: Store, fields: FieldsConfig, logs: list[dict[str, Any]], waiting_for: str, attempts: int
 ) -> None:
-    """A size check whose answer never comes waits out each attempt's timeout, as a real one does, each cut to what
-    is left of its SITE_PROBE_BUDGET_S, so its time runs out before Jira's retries do. The sync logs that reason,
-    never a status, and the boards have the rest of the step's time: a hung question costs a log line, never a
-    board's members."""
     team(fake)
     answers_take(fake, 600, size_check, waiting_for=waiting_for)
     start = fake.clock
@@ -1436,7 +1335,7 @@ def test_a_size_check_that_times_out_spends_its_own_ten_seconds_and_is_logged_so
     result = sync(fake, store, fields, projects=("AIL", "OPS"), clock=lambda: fake.clock.timestamp())
 
     assert len(fake.calls(SITE_USERS)) == attempts
-    assert fake.clock - start == timedelta(seconds=SITE_PROBE_BUDGET_S)  # the boards answered at once
+    assert fake.clock - start == timedelta(seconds=SITE_PROBE_BUDGET_S)
     unknown = [e for e in logs if e["event"] == "site_user_count_unknown"]
     assert unknown == [{"event": "site_user_count_unknown", "logger": "sync", "reason": "time budget spent",
                         "log_level": "warning"}]
@@ -1446,9 +1345,6 @@ def test_a_size_check_that_times_out_spends_its_own_ten_seconds_and_is_logged_so
 
 
 def test_the_docs_quote_the_over_the_scan_warning_as_the_sync_gives_it() -> None:
-    """The reference (docs/REFERENCE.md) and the demo's presenter notes quote the warning word for word, so what an
-    operator or the client reads there is what the sync says. Both are kept out of git (.gitignore): only the ones
-    this machine has are checked."""
     root = Path(__file__).resolve().parent.parent
     docs = [doc for doc in ("docs/REFERENCE.md", "docs/DEMO_SECURITY_AND_PEOPLE.md") if (root / doc).exists()]
     if not docs:

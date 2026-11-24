@@ -1,17 +1,3 @@
-"""Ask at two levels (the product owner's decision of 11 Nov 2026, oversight/ask/people.py): team level as before
-but for its decline, and people level, where Ask names the people tickets are assigned to, counts and ranks their
-tickets and findings, takes @ mentions by person id, and never judges anyone.
-
-Against the seeded DEMO store (fictional people, Ada Brooks to Hana Mori, two of them with a picture) through
-POST /ask with the scripted provider, and through the service with scripted models: the request's 422 rules, a
-mention of someone with no ticket on the board, the team-level decline and its facts with no person in them, the
-catalogue's person answers and judgement declines, qa_log, the analyst's views at each level (the people view
-against GET /people, the assignee columns against the Issue page), the person tools, the name check beside the
-number check, and the response's people; and (JO-10) mentions of the board's members who hold none of its
-tickets (the demo's Noor Haddad, Tomás Ferreira and Yuki Tanabe), answered in code with the contract's sentence.
-Last, on the hand-built store of test_api_people, whose user objects carry an email address, picture URLs and a
-time zone: the model is never shown any of them, nor an account id. Nothing here calls a model or the network.
-"""
 from __future__ import annotations
 
 import json
@@ -84,7 +70,6 @@ from tests.test_router import ROUTING_TABLE
 NOW = datetime(2026, 11, 4, 14, 30, tzinfo=UTC)
 PEOPLE = [*CATALOG_NAMES, *PEOPLE_NAMES]  # a people-level catalogue
 NOBODY = "p000000000000"  # a person id nobody on any board has
-# What a person's facts and the people view may hold about someone, and nothing else.
 PERSON_COLUMNS = {"assignee_id", "assignee", "person_id", "name"}
 
 
@@ -153,9 +138,6 @@ def llm_calls(settings: Settings, qa_id: str) -> int:
     return rows(settings, "SELECT COUNT(*) FROM llm_calls WHERE qa_id = ?", (qa_id,))[0][0]
 
 
-# --- the request ----------------------------------------------------------------------------------
-
-
 def test_the_level_is_team_unless_the_request_says_people(client: TestClient, demo: Settings) -> None:
     body = post(client, {"question": "Where do tickets get stuck most?"})
     assert body["outcome"] == "answered" and body["people"] == []
@@ -220,9 +202,6 @@ def test_ten_people_can_be_mentioned(client: TestClient) -> None:
     assert body["message"] == UNKNOWN_MENTION_MESSAGE  # accepted, and none of them is on the board
 
 
-# --- team level: as before, but for its decline ----------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "question",
     ["Who has the most open breaches?", "Who is the slowest developer?", "Which developer has the most open tickets?",
@@ -252,9 +231,6 @@ def test_team_level_answers_hold_no_person(client: TestClient, question: str) ->
     assert not [row for row in board(client) if row["person"] and row["person"]["id"] in text]
 
 
-# --- people level, the catalogue (the scripted model) ----------------------------------------------
-
-
 def holder(row: dict[str, Any]) -> str:
     return row["person"]["name"] if row["person"] else "Unassigned tickets"
 
@@ -263,8 +239,6 @@ def holder(row: dict[str, Any]) -> str:
                                                   ("Who has the most open warnings?", "open_warnings")])
 def test_who_has_the_most_open_breaches_or_warnings(client: TestClient, question: str, figure: str) -> None:
     everyone = board(client)
-    # A "who" ranking ranks people only, ties in the directory's order; the tickets nobody holds come after it, never
-    # ranked (JO-12 G5).
     ranked = sorted((row for row in everyone if row["person"]),
                     key=lambda row: (-row[figure], fold(row["person"]["name"]), row["person"]["id"]))
     (nobody,) = [row for row in everyone if row["person"] is None]
@@ -280,7 +254,6 @@ def test_who_has_the_most_open_breaches_or_warnings(client: TestClient, question
     assert body["answer"] == (
         f"{holder(top)} has the most {words}: {top[figure]}, then {holder(after)} with {after[figure]}. "
         f"Unassigned: {nobody[figure]} {words}. Findings follow the ticket's current assignee.")
-    # The people the answer names, as GET /people sends them, in order of first appearance: never Unassigned.
     assert body["people"] == [top["person"], after["person"]]
     (facts,) = body["facts"]
     assert [column["key"] for column in facts["columns"]] == list(PEOPLE_COLUMNS)
@@ -294,8 +267,6 @@ def test_who_has_the_most_open_breaches_or_warnings(client: TestClient, question
 
 
 def test_what_a_mentioned_person_is_working_on(client: TestClient, demo: Settings) -> None:
-    """Their tickets in progress, Epics left out, as the dashboard's sample and the contract (section 7) mean it:
-    not every ticket they hold that is not done, since nobody is working on what is still To Do."""
     ada = named(client, "Ada Brooks")
     in_progress = {key for (key,) in rows(
         demo, "SELECT issue_key FROM issues WHERE project_key = 'DEMO' AND assignee_id = 'acc-01'"
@@ -314,12 +285,10 @@ def test_what_a_mentioned_person_is_working_on(client: TestClient, demo: Setting
         assert facts["rows"] and {row["issue_key"] for row in facts["rows"]} <= in_progress
         assert {(row["assignee_id"], row["assignee"]) for row in facts["rows"]} == {(ada["person"]["id"], "Ada Brooks")}
 
-    # Her open tickets are still there to ask for, by that name.
     body = post(client, {"question": "@Ada Brooks's open tickets", "level": "people", "mentions": [ada["person"]["id"]]})
     assert body["plan"] == [{"tool": "oversight_person_tickets", "params": {"person": ada["person"]["id"], "state": "open"}}]
     open_now = {key for (key,) in rows(demo, "SELECT issue_key FROM issues WHERE project_key = 'DEMO' AND assignee_id = 'acc-01'"
                                              " AND status_category != 'done' AND issue_type != 'Epic'")}
-    # Her backlog leaves Epics out, as the scorecard's Open tickets does (GET /people counts them too).
     assert body["answer"].startswith(f"Ada Brooks has {len(open_now)} open tickets, including ")
     assert len(open_now) <= ada["open_tickets"] and in_progress < open_now
 
@@ -355,7 +324,6 @@ def test_a_mentioned_persons_open_findings(client: TestClient, demo: Settings, q
 @pytest.mark.parametrize(
     ("question", "mention", "call", "personnel_question"),
     [
-        # The other side of the process: further from it first (the JO-14 review), never called the slowest.
         ("Who is the slowest developer?", False,
          ("oversight_people_compare", {"measure": "overall", "days": 90, "order": "fewest"}), False),
         ("Which team member is best at estimating?", False,
@@ -375,9 +343,6 @@ def test_a_judgement_is_answered_with_figures_and_never_declined(
     client: TestClient, demo: Settings, question: str, mention: bool, call: tuple[str, dict[str, Any]],
     personnel_question: bool,
 ) -> None:
-    """JO-09 declined these. Since 11 Nov 2026 (the product owner's decision, JO-11) people level answers them with the
-    scorecard of the person mentioned or the comparison of everyone, planned and written in code (no model asked),
-    a personnel question ending with the decision sentence, every one with the caveat last."""
     ada = named(client, "Ada Brooks")["person"]
     mentions = [ada["id"]] if mention else []
     body = post(client, {"question": question, "level": "people", "mentions": mentions})
@@ -415,9 +380,6 @@ def test_a_judgement_is_answered_with_figures_and_never_declined(
 def test_a_full_name_typed_in_the_question_is_answered_as_if_picked_with_at(
     client: TestClient, demo: Settings, question: str, who: str, tool: str, params: dict[str, Any]
 ) -> None:
-    """JO-11 decision 8: at people level a person's full display name, typed in any case and with or without its
-    accents, is a mention, as if picked from the @ list (JO-10 pointed to @ instead). Team level still declines it,
-    and no name reaches a model there."""
     team = post(client, {"question": question})
     assert (team["outcome"], team["message"], team["plan"], team["facts"], team["people"]) == (
         "not_understood", TEAM_DECLINE, [], [], [])
@@ -441,15 +403,11 @@ def test_a_typed_member_with_no_tickets_gets_the_no_tickets_sentence(client: Tes
 
 
 def test_part_of_a_name_after_a_typed_at_still_points_to_the_at_list(client: TestClient) -> None:
-    """An @ typed before part of a name that is no one's names someone, but not who: the catalogue cannot know, so it
-    points to @ rather than answer with the whole board's figures."""
     for question in ("What are @Ad's open findings?", "Is @Bro lazy?"):
         body = post(client, {"question": question, "level": "people"})
         assert (body["outcome"], body["message"], body["plan"], body["facts"], body["people"]) == (
             "not_understood", PICK_WITH_AT, [], [], [])
         assert body["suggestions"] == PEOPLE_SUGGESTED_QUESTIONS
-    # A first name only one person on the board has is that person, after an @ or without one (found by the JO-11
-    # review: "Is Ada doing well?" was told the data could not answer it).
     ada = named(client, "Ada Brooks")["person"]
     for question in ("Is @Ada lazy?", "Is Ada lazy?"):
         body = post(client, {"question": question, "level": "people"})
@@ -473,7 +431,6 @@ def test_typed_names_get_the_answer_a_picked_mention_would(client: TestClient) -
         "board, by each ticket's current assignee. Code review isn't recorded on this board, so reviewers' work "
         "doesn't show.")
     assert post(client, {"question": "Is Ada Brooks lazy?"})["message"] == TEAM_DECLINE
-    # A question that names no one is answered as before, at both levels, an everyday "will" included.
     for level in ("team", "people"):
         body = post(client, {"question": "Will the open breaches by epic go down? Which epics have the most?", "level": level})
         assert body["outcome"] == "answered" and [step["tool"] for step in body["plan"]] == ["oversight_hot_spots"]
@@ -493,9 +450,6 @@ def test_a_people_level_question_it_cannot_plan_suggests_questions_about_people(
     assert body["outcome"] == "not_understood" and body["suggestions"] == PEOPLE_SUGGESTED_QUESTIONS
     assert body["suggestions"][:3] == ["Who follows the process most closely?", "Who has the most open breaches?",
                                        "Who finished the most work this month?"]
-    # A question about people that nothing places is never turned away (JO-12 G3): the overall comparison, with a
-    # sentence first saying so. The help, which points to what is answered and to @ in the words the dashboard's
-    # sample uses (contract section 7), is left for where comparing people is off (test_jo11_leftovers).
     cycle = post(client, {"question": "Show cycle time per person", "level": "people"})
     assert cycle["outcome"] == "answered" and cycle["answer"].startswith(LAST_RESORT_OVERALL + "\n\n")
     assert PEOPLE_HELP == (
@@ -510,8 +464,6 @@ def plural(figure: str, value: int) -> str:
 
 
 def test_every_mentioned_person_is_answered_with_their_open_breaches_and_warnings(client: TestClient) -> None:
-    """Two to ten people mentioned: each one's open breaches and warnings, from one read of their rows (contract
-    section 7), never the first three alone, nor one severity of two."""
     everyone = [row for row in board(client) if row["person"]]  # GET /people's order: most open breaches first
     assert len(everyone) == 8
     for picked in (everyone[:2], everyone[:4], everyone[:5], everyone):
@@ -527,7 +479,6 @@ def test_every_mentioned_person_is_answered_with_their_open_breaches_and_warning
             f" and {first['open_warnings']} {plural('open_warnings', first['open_warnings'])}"
             + "".join(f"; {row['person']['name']} has {row['open_breaches']} and {row['open_warnings']}" for row in rest)
             + ". Findings follow the ticket's current assignee.")
-        # Every one of them named, verified, most open breaches first; nobody else.
         assert body["people"] == [row["person"] for row in picked]
         (facts,) = body["facts"]
         assert [row["person_id"] for row in facts["rows"]] == [row["person"]["id"] for row in picked]
@@ -538,7 +489,6 @@ def test_qa_log_records_the_level_and_the_mention_ids_never_names(client: TestCl
     ada, ben = named(client, "Ada Brooks")["person"], named(client, "Ben Okafor")["person"]
     body = post(client, {"question": "Open breaches for @Ada Brooks and @Ben Okafor", "level": "people",
                          "mentions": [ada["id"], ben["id"]]})
-    # Named most open breaches first, as GET /people orders them.
     assert body["outcome"] == "answered" and sorted(body["people"], key=lambda who: who["id"]) == sorted(
         [ada, ben], key=lambda who: who["id"])
     row = qa_row(demo, body["qa_id"])
@@ -546,9 +496,6 @@ def test_qa_log_records_the_level_and_the_mention_ids_never_names(client: TestCl
     assert "Ada" not in row["mentions_json"] and "acc-" not in json.dumps(row)
     ranking = post(client, {"question": "Who has the most open breaches?", "level": "people"})
     assert (qa_row(demo, ranking["qa_id"])["level"], qa_row(demo, ranking["qa_id"])["mentions_json"]) == ("people", None)
-
-
-# --- the person tools --------------------------------------------------------------------------------
 
 
 def test_the_person_tools_are_offered_at_people_level_only() -> None:
@@ -592,8 +539,6 @@ def test_the_person_tools_read_the_board_as_get_people_does(demo: Settings, clie
     finally:
         conn.close()
 
-
-# --- the analyst's views ------------------------------------------------------------------------------
 
 TEAM_VIEWS: dict[str, list[str]] = {
     "issues": ["issue_key", "issue_type", "summary", "status", "status_category", "parent_key", "epic_key", "created_at",
@@ -656,7 +601,6 @@ def test_the_people_level_views_gain_exactly_the_assignee_columns_and_the_people
     assert {view: columns_of(people, view) for view in expected} == expected
     assert list(PEOPLE_COLUMNS) == ["person_id", "name", "tickets", "open_tickets", "open_breaches", "open_warnings",
                                     "tickets_with_findings"]
-    # Still never the reporter, the creator, who logged time or a name in the changelog.
     for sql in ("SELECT reporter FROM issues", "SELECT author_id FROM worklogs", "SELECT author_id FROM status_changes"):
         with pytest.raises(QueryError, match="no such column"):
             people.run(sql)
@@ -711,9 +655,6 @@ def test_the_assignees_table_holds_no_account_id_and_is_out_of_reach(views: tupl
     assert not [row for row in held if "acc-" in " ".join(row)]
 
 
-# --- the name check, beside the number check ----------------------------------------------------------
-
-
 def everyone(*names: str) -> PeopleScope:
     """A board of these people (an account apiece, made up), as the person rules name them."""
     return PeopleScope(
@@ -765,7 +706,6 @@ def test_names_are_whole_words_as_the_data_writes_them_longest_first_in_order_of
 
 
 def test_an_everyday_word_is_never_someone_with_a_one_word_name() -> None:
-    """"will" is not Will: a correct answer is neither withheld for naming him nor padded with him."""
     board_ = everyone("Will", "Ada Brooks")
     will, ada = board_.people
     answer = "Ada Brooks has 3 open breaches, and that will change after the next sync."
@@ -773,7 +713,6 @@ def test_an_everyday_word_is_never_someone_with_a_one_word_name() -> None:
     assert only_ada.ok and only_ada.people == [ada]
     both = check_names(answer, facts({"name": "Ada Brooks", "n": 3}, {"name": "Will", "n": 3}), board_, [])
     assert both.ok and both.people == [ada]
-    # Written as the data writes it, he is named, and needs his facts like anyone.
     assert check_names("Will has 3.", facts({"assignee": "Ada Brooks", "n": 3}), board_, []).problems == ["unverified name Will"]
     assert check_names("Will has 3.", facts({"assignee": "Will", "n": 3}), board_, []).people == [will]
 
@@ -819,9 +758,6 @@ def test_a_person_id_in_an_answer_is_a_problem_and_a_name_is_no_figure() -> None
     assert check.ok and check.people == [agent]
     assert validate(check.masked, held, None).ok  # names are blanked before the numbers are read
     assert validate("Agent 47 has 3 open breaches.", held, None).problems == ["unverified number 47"]
-
-
-# --- the service at people level, with scripted models ------------------------------------------------
 
 
 def _ask(demo: Settings, provider: Any, question: str, **kw: Any) -> Any:
@@ -876,7 +812,7 @@ def test_the_analyst_is_told_the_mentions_and_the_people_level_rules(demo: Setti
     opening = provider.calls[0]["messages"][0]["content"]
     assert opening.startswith(f'<mentions>[{{"id": "{ada["person"]["id"]}", "name": "Ada Brooks"}}]</mentions>\n<question>')
     system = provider.calls[0]["system"]
-    assert JUDGEMENT_DECLINE not in system and TEAM_DECLINE not in system  # people level declines nothing (JO-11)
+    assert JUDGEMENT_DECLINE not in system and TEAM_DECLINE not in system
     assert "Answer every question about people with data, never refuse one." in system
     assert "never insult anyone or label their character" in system.lower()
     assert ("oversight_people_compare (everyone, in the order the question asks: order most, the figure highest first"
@@ -912,8 +848,6 @@ def test_the_analyst_naming_someone_not_in_its_results_is_rewritten_then_withhel
 
 
 def test_a_reply_with_no_facts_names_no_one_the_question_did_not_mention(demo: Settings, client: TestClient) -> None:
-    """With nothing looked up, nothing can verify a name: a reply naming someone the question did not mention
-    gives way to the plain message. The person it was asked about may be named."""
     from oversight.ask.service import ANALYST_DECLINED
 
     ada = named(client, "Ada Brooks")["person"]
@@ -935,20 +869,15 @@ def test_the_analysts_decline_is_the_contracts_sentence_alone_at_team_level(demo
 
 
 def test_at_people_level_a_judgement_the_analyst_declines_is_answered_in_code(demo: Settings) -> None:
-    """People level declines nothing (JO-11): when the model still refuses, the comparison is planned and written in
-    code, with the caveat; JO-09's sentence never reaches the reader."""
     provider = FakeAnalyst([turn(text=f"I'm sorry. {JUDGEMENT_DECLINE} Ask me something else.")])
     response = _ask(demo, provider, "Who is the slowest developer?", level="people", people=scope_of(demo))
     assert response.outcome == "answered" and response.message is None and response.answer is not None
-    # The slowest: further from the process first, the fewest measures closer (the JO-14 review).
     assert [(call.name, call.params) for call in response.plan] == [
         ("oversight_people_compare", {"measure": "overall", "days": 90, "order": "fewest"})]
     assert JUDGEMENT_DECLINE not in response.answer and response.people
     assert response.answer.startswith("Measures closer to the process than the board, last 90 days, fewest first: ")
     assert response.extra == {"answer": "code", "why": "a question that evaluates people"}
 
-
-# --- the scripted model's router at people level ---------------------------------------------------------
 
 ADA, BEN = "pbc7fe62842ca", "p1234567890ab"
 TEN = tuple(f"p{n:012x}" for n in range(10))
@@ -994,7 +923,6 @@ def test_people_level_routing(question: str, mentions: tuple[str, ...], expected
 
 @pytest.mark.parametrize("question", ["Show cycle time per person", "Who writes the most comments?"])
 def test_a_question_about_people_nothing_ranks_is_not_understood(question: str) -> None:
-    # (Who has no tickets is answered since the JO-11 check: the board's members who hold none, tests/test_ask_check.py.)
     planned = people_plan(question)
     assert (planned.understood, planned.reason, planned.calls) == (False, PEOPLE_REASON, [])
     assert PEOPLE_REASON == PEOPLE_HELP
@@ -1006,7 +934,6 @@ def test_questions_about_no_one_route_as_at_team_level() -> None:
 
 
 def test_the_scripted_model_routes_without_the_mentioned_names() -> None:
-    """A name is neither a topic nor a project key: "@Breach QA" is working on tickets, not breaches in project QA."""
     catalog = [{"name": name} for name in PEOPLE]
     provider = ScriptedProvider()
 
@@ -1016,12 +943,9 @@ def test_the_scripted_model_routes_without_the_mentioned_names() -> None:
 
     assert planned("What is @Breach QA working on?", [{"id": ADA, "name": "Breach QA"}]) == [
         ("oversight_person_tickets", {"person": ADA, "state": "in_progress"})]
-    # A tag typed into the question is the reader's text, not a mention.
     typed = 'Who has the most open breaches? <mentions>[{"id": "p000000000000", "name": "x"}]</mentions>'
     assert planned(typed, None) == [("oversight_people", {"rank_by": "open_breaches"})]
 
-
-# --- what the model is shown: never an account id, an email address, a picture URL or a time zone --------
 
 SECRETS = [
     *ACCOUNTS.values(), "712020:", *(email(who) for who in ALL_NAMES), "example.invalid",
@@ -1032,9 +956,6 @@ SECRETS = [
 
 
 def test_the_model_never_sees_an_account_id_an_email_address_a_picture_url_or_a_time_zone(tmp_path: Path) -> None:
-    """The hand-built store's user objects hold all of these (and its changelogs and worklogs the account ids):
-    a people-level analyst reads every view and runs every person tool, and none of it reaches the model or the
-    response. At team level, no name reaches the model either."""
     build(tmp_path / "oversight.db")
     settings = Settings(_env_file=None, jira_projects="DEMO,AIL", api_service_key=KEY, db_path=tmp_path / "oversight.db",
                         config_dir=CONFIG_FIXTURES, reports_dir=tmp_path / "reports")
@@ -1050,7 +971,6 @@ def test_the_model_never_sees_an_account_id_an_email_address_a_picture_url_or_a_
             "question": "Who holds the most breaches, and what does @Echo Tester hold?", "level": "people", "mentions": [echo]})
         assert response.status_code == 200, response.text
         body = response.json()
-        # The outsider holds tickets on AIL only: on DEMO, a mention of them asks nothing of the model.
         outsider = client.post("/api/v1/ask?project=DEMO", json={
             "question": "x", "level": "people", "mentions": [pid(ACCOUNTS["outsider"])]}).json()
     assert body["outcome"] == "answered" and body["people"] == [shown("echo")]
@@ -1073,8 +993,6 @@ def test_the_model_never_sees_an_account_id_an_email_address_a_picture_url_or_a_
 
 
 def test_a_member_with_no_tickets_reaches_the_model_by_name_only(tmp_path: Path) -> None:
-    """A member of DEMO who holds none of its tickets, mentioned beside someone who does: the model is told their
-    name, to leave out, and nothing else of them; the answer ends with the sentence about them."""
     build(tmp_path / "oversight.db")
     settings = Settings(_env_file=None, jira_projects="DEMO,AIL", api_service_key=KEY, db_path=tmp_path / "oversight.db",
                         config_dir=CONFIG_FIXTURES, reports_dir=tmp_path / "reports")
@@ -1098,8 +1016,6 @@ def test_a_member_with_no_tickets_reaches_the_model_by_name_only(tmp_path: Path)
         assert not [secret for secret in SECRETS if secret in text]
     assert on_ail["message"] == UNKNOWN_MENTION_MESSAGE  # a member of DEMO is no one on AIL
 
-
-# --- members who hold no ticket on the board (JO-10) -----------------------------------------------------
 
 NOOR, TOMAS, YUKI = "Noor Haddad", "Tomás Ferreira", "Yuki Tanabe"
 
@@ -1140,7 +1056,6 @@ def test_mentions_of_members_with_no_tickets_are_answered_in_code_and_ask_no_mod
     question = "What " + ("is" if len(names) == 1 else "are") + " " + " and ".join(f"@{name}" for name in names) + " working on?"
     with TestClient(create_app(demo, provider=NoModel(), now=lambda: NOW), headers={"X-Service-Key": KEY, **VIEWER_HEADERS}) as quiet:
         body = post(quiet, {"question": question, "level": "people", "mentions": [who["id"] for who in people]})
-    # message is null (contract 4.6): the answer says it, and names stay in the answer.
     assert (body["outcome"], body["answer"], body["message"], body["model"]) == ("no_data", sentence, None, None)
     assert body["people"] == people  # in the order mentioned; no pictures, so initials
     assert all(who["avatar"] is None for who in people)
@@ -1167,8 +1082,6 @@ def test_a_mention_of_someone_not_on_the_board_is_still_refused_beside_a_member(
 
 
 def test_a_member_with_tickets_and_one_without_are_answered_together(demo: Settings, client: TestClient) -> None:
-    """Some mentions hold tickets: the question is answered about them as it would be alone, and the answer ends with
-    one more paragraph, the sentence for the rest. people names everyone, in order of first appearance."""
     ada = named(client, "Ada Brooks")["person"]
     noor = person_of(member(client, NOOR))
     alone = post(client, {"question": "What is @Ada Brooks working on?", "level": "people", "mentions": [ada["id"]]})
@@ -1202,7 +1115,6 @@ def test_the_model_is_told_the_members_with_no_tickets_to_leave_out_and_their_na
     provider = FakeProvider(plans=[findings], answers=[written])
     response = _ask(demo, provider, "Open findings of @Ada Brooks, @Noor Haddad and @Tomás Ferreira?", level="people",
                     mentions=[ada["person"]["id"], noor["id"], tomas["id"]], people=scope_of(demo))
-    # The name and number checks pass their names: they are mentions, and the sentence holds no figure.
     assert response.outcome == "answered"
     assert response.answer == written + "\n\nNoor Haddad and Tomás Ferreira have no tickets on this board."
     assert response.people == [ada["person"], tomas, noor]  # in order of first appearance in the whole answer
@@ -1216,7 +1128,6 @@ def test_the_model_is_told_the_members_with_no_tickets_to_leave_out_and_their_na
     assert "<no_tickets> lists people the question mentions" in planned.system
     assert "<no_tickets> lists people the question mentions" in composed.system
 
-    # Someone else on the board, neither in the facts nor mentioned, is still no name to write.
     wrong = FakeProvider(plans=[findings], answers=[f"Ben Okafor has {total} open findings."] * 2)
     response = _ask(demo, wrong, "Open findings of @Ada Brooks and @Noor Haddad?", level="people",
                     mentions=[ada["person"]["id"], noor["id"]], people=scope_of(demo))
@@ -1241,7 +1152,6 @@ def test_the_analyst_answer_ends_with_the_sentence_and_is_told_to_leave_them_out
 
 
 def test_members_are_in_the_scope_but_in_no_view_or_tool(demo: Settings, client: TestClient) -> None:
-    """Ask's views and person tools count exactly as GET /people: a member with no tickets is in no row of them."""
     scope = scope_of(demo)
     assert [who["name"] for who in scope.members] == [NOOR, TOMAS, YUKI]
     assert not {who["id"] for who in scope.members} & {who["id"] for who in scope.people}

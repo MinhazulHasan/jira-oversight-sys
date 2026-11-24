@@ -1,9 +1,3 @@
-"""The plan schema the model sees must let it pass parameters.
-
-Structured outputs close every object (additionalProperties: false), so a
-free-form dict field would only ever accept {}. PlanCall.params is therefore a
-JSON object written in a string on the wire, and a dict everywhere in code.
-"""
 from __future__ import annotations
 
 import pydantic

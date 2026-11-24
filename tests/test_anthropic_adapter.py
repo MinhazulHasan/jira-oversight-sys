@@ -1,8 +1,3 @@
-"""AnthropicProvider against a fake client with the SDK's method shapes.
-
-Nothing here touches the network: the fake records the keyword arguments it
-was called with and hands back a canned response or raises a canned SDK error.
-"""
 from __future__ import annotations
 
 import inspect
@@ -27,11 +22,7 @@ SYSTEM = "You answer from facts only."
 USER = "<facts>[]</facts>\n<question>SECRET PROMPT TEXT</question>"
 MODEL = "claude-sonnet-5-5"
 
-# Parameters the current API rejects: never sent, in any form.
 FORBIDDEN = ("temperature", "top_p", "top_k", "thinking", "tool_choice", "tools")
-
-
-# --- the fake client ----------------------------------------------------------------
 
 
 class _Messages:
@@ -113,9 +104,6 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-# --- the installed SDK really has the documented call shapes --------------------------
-
-
 def test_installed_sdk_exposes_the_documented_call_shapes() -> None:
     client = anthropic.Anthropic(api_key="sk-ant-offline")
     parse_params = inspect.signature(client.messages.parse).parameters
@@ -145,9 +133,6 @@ def test_an_injected_client_is_used_as_is() -> None:
     provider = AnthropicProvider(settings_with(), client=client)
     assert provider._client is client
     assert provider.name == "anthropic"
-
-
-# --- structured() ---------------------------------------------------------------------
 
 
 def test_structured_sends_the_documented_request_and_nothing_forbidden() -> None:
@@ -224,8 +209,6 @@ def test_structured_coercion_failure_is_final() -> None:
     (parsed_response({"understood": "not a bool"}, input_tokens=900, output_tokens=60), "end_turn"),
 ], ids=["refusal", "cut-off", "not-the-schema"])
 def test_a_failed_structured_call_carries_the_tokens_its_response_reported(response: Any, stop_reason: str) -> None:
-    """A refusal, a reply cut off and one that does not fit are billed: the error says what was spent, so the caller
-    records it and the day's budget counts it."""
     with pytest.raises(LLMError) as err:
         AnthropicProvider(settings_with(), client=FakeClient(response)).structured(SYSTEM, USER, Plan, model=MODEL)
     assert err.value.usage == Usage(response.usage.input_tokens, response.usage.output_tokens)
@@ -247,9 +230,6 @@ def test_a_refused_composition_or_turn_carries_its_tokens() -> None:
     with pytest.raises(LLMRefusal) as turned:
         provider.converse(SYSTEM, [{"role": "user", "content": USER}], [], model=MODEL)
     assert composed.value.usage == turned.value.usage == Usage(700, 12)
-
-
-# --- compose() ------------------------------------------------------------------------
 
 
 def test_compose_uses_the_beta_endpoint_with_default_fallbacks() -> None:
@@ -329,9 +309,6 @@ def test_compose_passes_max_tokens_through_with_the_partial_text() -> None:
     assert result.text == "Tickets wait longest in"
 
 
-# --- error mapping, most specific first ------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("error", "retryable", "fragment"),
     [
@@ -376,9 +353,6 @@ def test_exception_text_never_includes_the_key_or_the_prompt() -> None:
         text = str(err.value)
         assert KEY not in text and "SECRET" not in text and "sk-ant" not in text
         assert "SECRET PROMPT TEXT" not in text and USER not in text
-
-
-# --- logging: one line per call, counts only --------------------------------------------
 
 
 def _flat_values(event: dict[str, Any]) -> str:

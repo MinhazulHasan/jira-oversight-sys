@@ -1,9 +1,4 @@
-"""JO-12, the access log: every read of person-level data through the API is recorded (who viewed whose figures, and
-when), GET /access-log (contract 4.16) reads it back, people level only, and an entry that cannot be written means
-nothing is served. Retention: ACCESS_LOG_DAYS, at the start and once a day.
-
-The demo's fictional people only, and a fictional admin as the viewer. No network.
-"""
+"""The access log: every read of person-level data through the API is recorded and read back."""
 from __future__ import annotations
 
 import json
@@ -42,11 +37,11 @@ from tests.test_api_overview import KEY, make_settings
 from tests.test_db import VERSION_8
 
 NOW = datetime(2026, 11, 4, 14, 30, tzinfo=UTC)
-ADMIN = "0123456789abcdef0123456789abcdef"  # a viewer hash, as the dashboard's server makes one
+ADMIN = "0123456789abcdef0123456789abcdef"
 OTHER = "fedcba9876543210fedcba9876543210"
-ADMIN_NAME = "Morgan Reyes"  # a fictional admin
+ADMIN_NAME = "Morgan Reyes"
 UNAVAILABLE = {"detail": "the access log could not be written, so nothing was served", "code": "access_log_unavailable"}
-GONE = "p000000000000"  # a person id on no board
+GONE = "p000000000000"
 
 
 class Clock:
@@ -132,9 +127,6 @@ def add(settings: Settings, *rows: dict[str, Any]) -> None:
             })
 
 
-# --- what is recorded -------------------------------------------------------------------------------------------
-
-
 def test_one_persons_scorecard_is_a_scorecard_view_and_everyone_or_several_a_comparison(
     client: TestClient, log: Settings
 ) -> None:
@@ -174,7 +166,7 @@ def test_with_comparison_off_the_boards_figures_alone_record_nothing(client: Tes
     board_only = off.get("/api/v1/people/scorecard", params={"level": "people"})
     assert board_only.status_code == 200
     assert board_only.json()["comparison"] == "off" and board_only.json()["people"] == []
-    assert entries(log) == []  # no person's figures went out: not "Compared people" naming no one
+    assert entries(log) == []
 
     assert off.get("/api/v1/people/scorecard", params={"level": "people", "person": ada}).status_code == 200
     assert [(row["action"], row["subjects"]) for row in entries(log)] == [("scorecard_view", [ada])]
@@ -183,12 +175,12 @@ def test_with_comparison_off_the_boards_figures_alone_record_nothing(client: Tes
 def test_findings_for_a_person_are_recorded_and_other_lists_are_not(client: TestClient, log: Settings) -> None:
     ada = people(client)["Ada Brooks"]["id"]
     assert client.get("/api/v1/findings").status_code == 200
-    assert client.get("/api/v1/findings", params={"person": "unassigned"}).status_code == 200  # no one's
+    assert client.get("/api/v1/findings", params={"person": "unassigned"}).status_code == 200
     assert entries(log) == []
 
     assert client.get("/api/v1/findings", params=[("person", ada), ("person", "unassigned"), ("state", "all"),
                                                   ("level", "people")]).status_code == 200
-    assert client.get("/api/v1/findings", params={"person": ada, "page": 2}).status_code == 200  # team level
+    assert client.get("/api/v1/findings", params={"person": ada, "page": 2}).status_code == 200
     found = entries(log)
     assert [(row["action"], row["level"], row["subjects"], row["detail"]) for row in found] == [
         ("person_findings_view", "people", [ada], {"state": "all", "page": 1}),
@@ -204,7 +196,7 @@ def test_a_people_level_question_about_people_is_recorded_with_its_qa_id(client:
     assert ranked["outcome"] == "answered" and ranked["people"]
     carmen = people(client)["Carmen Ruiz"]["id"]
     typed = client.post("/api/v1/ask", json={"question": "How many open breaches does Carmen Ruiz have?",
-                                             "level": "people"}).json()  # a name typed, as if picked with @
+                                             "level": "people"}).json()
 
     found = entries(log)
     assert [row["action"] for row in found] == ["person_ask", "person_ask", "person_ask"]
@@ -212,12 +204,10 @@ def test_a_people_level_question_about_people_is_recorded_with_its_qa_id(client:
     assert found[0]["subjects"][0] == ada
     assert found[0]["detail"] == {"qa_id": mentioned["qa_id"], "outcome": mentioned["outcome"]}
     assert found[1]["detail"] == {"qa_id": ranked["qa_id"], "outcome": "answered"}
-    assert {who["id"] for who in ranked["people"]} <= set(found[1]["subjects"])  # everyone the answer names, at least
+    assert {who["id"] for who in ranked["people"]} <= set(found[1]["subjects"])
     assert all(row["project_key"] == "DEMO" and row["level"] == "people" for row in found)
 
 
-# The analyst (ASK_MODE=analyst with a live model, the shipped default) may read people with its own SQL at people
-# level and select names without ids: those reads are recorded too, whatever the answer names or its outcome.
 TOP_THREE = ("SELECT name, open_breaches FROM people WHERE person_id IS NOT NULL"
              " ORDER BY open_breaches DESC, name LIMIT 3")
 EVERYONE = "SELECT name, open_breaches FROM people WHERE person_id IS NOT NULL ORDER BY open_breaches DESC, name"
@@ -243,7 +233,7 @@ def test_an_analysts_names_without_ids_are_recorded_as_the_people_they_name(clie
     quiet = ask_the_analyst(log, "Who has the most open breaches?",
                             turn(uses=[use(QUERY_TOOL, {"sql": TOP_THREE})]),
                             turn(text="The table lists them, most open breaches first."))
-    assert quiet["outcome"] == "answered" and quiet["people"] == []  # the answer names no one
+    assert quiet["outcome"] == "answered" and quiet["people"] == []
     top = named_in_facts(quiet, board, "name")
     assert len(top) == 3
 
@@ -261,7 +251,7 @@ def test_an_analysts_names_without_ids_are_recorded_as_the_people_they_name(clie
     found = entries(log)
     assert [(row["action"], row["detail"]["outcome"]) for row in found] == [("person_ask", "answered")] * 3
     assert found[0]["subjects"] == top and found[0]["detail"]["qa_id"] == quiet["qa_id"]
-    assert found[1]["subjects"] == everyone and len(everyone) >= 5  # every figure sent, not only the one named
+    assert found[1]["subjects"] == everyone and len(everyone) >= 5
     assert sorted(found[2]["subjects"]) == sorted(holders) and len(holders) >= 5
 
 
@@ -292,9 +282,9 @@ def test_an_analysts_query_over_people_is_recorded_even_when_it_names_no_one(cli
                             turn(text="The count is in the table."))
     assert listed["outcome"] == counted["outcome"] == epics["outcome"] == "answered"
     found = entries(log)
-    assert [row["detail"]["qa_id"] for row in found] == [listed["qa_id"], counted["qa_id"]]  # the epics read no one
-    assert len(found[0]["subjects"]) >= 5  # every name in the one cell the query made
-    assert found[1]["subjects"] == []  # a count over people: recorded, naming no one
+    assert [row["detail"]["qa_id"] for row in found] == [listed["qa_id"], counted["qa_id"]]
+    assert len(found[0]["subjects"]) >= 5
+    assert found[1]["subjects"] == []
 
 
 def test_questions_that_read_no_ones_data_are_not_recorded(client: TestClient, log: Settings) -> None:
@@ -319,7 +309,6 @@ def test_a_read_that_names_no_viewer_is_refused_before_anything_is_read(demo: Se
         assert response.json()["detail"][0]["loc"] == ["header", "X-Oversight-Viewer"]
         assert "Ada Brooks" not in response.text
     assert entries(log) == [] and count(demo, "qa_log") == questions
-    # A list that holds no one's figures needs no viewer; nor does a team-level question while no limit is set.
     assert unnamed.get("/api/v1/findings").status_code == 200
     assert unnamed.post("/api/v1/ask", json={"question": "Where do tickets get stuck most?"}).status_code == 200
 
@@ -339,18 +328,18 @@ def test_sign_in_off_is_the_local_viewer_whatever_name_is_sent(demo: Settings, l
 
 
 @pytest.mark.parametrize(("sent", "kept"), [
-    (quote("Zoë O'Brien"), "Zoë O'Brien"),  # percent-encoded UTF-8
-    (quote("  Morgan \t Reyes\n"), "Morgan Reyes"),  # controls read as spaces, spaces collapsed
-    (quote("Morgan‮Reyes"), "MorganReyes"),  # a bidirectional override taken out
-    ("Morgan Reyes", "Morgan Reyes"),  # already plain
-    (None, SIGNED_IN),  # a session from before the name was kept
+    (quote("Zoë O'Brien"), "Zoë O'Brien"),
+    (quote("  Morgan \t Reyes\n"), "Morgan Reyes"),
+    (quote("Morgan‮Reyes"), "MorganReyes"),
+    ("Morgan Reyes", "Morgan Reyes"),
+    (None, SIGNED_IN),
     ("", SIGNED_IN),
-    (quote("morgan.reyes@example.com"), SIGNED_IN),  # never an email address
+    (quote("morgan.reyes@example.com"), SIGNED_IN),
     (quote("Morgan (morgan@example.com)"), SIGNED_IN),
-    ("5b10ac8d82e05b22cc7d4ef5", SIGNED_IN),  # never an account id
+    ("5b10ac8d82e05b22cc7d4ef5", SIGNED_IN),
     ("557058%3Af58131cb-b67d-43c7-b30d-6b58d40bd077", SIGNED_IN),
-    ("%FF%FE", SIGNED_IN),  # not UTF-8
-    (quote("M" * 129), SIGNED_IN),  # longer than any name
+    ("%FF%FE", SIGNED_IN),
+    (quote("M" * 129), SIGNED_IN),
 ])
 def test_the_viewer_is_kept_by_display_name_never_by_address_or_id(sent: str | None, kept: str) -> None:
     assert viewer_name(sent, ADMIN) == kept
@@ -378,11 +367,9 @@ def test_when_the_entry_cannot_be_written_nothing_is_served(
     ):
         assert response.status_code == 500 and response.json() == UNAVAILABLE, response.text
         assert "Ada Brooks" not in response.text and ada not in response.text
-    # The question itself is kept in qa_log, as the record of what was asked; its answer was not sent.
     assert count(log, "qa_log") == questions + 1
     monkeypatch.setattr(access_log_module, "_connect", writable)
     assert entries(log) == []
-    # Reads that hold no one's figures are served as ever.
     assert client.get("/api/v1/overview").status_code == 200
 
 
@@ -399,9 +386,6 @@ def test_the_log_lines_carry_ids_and_counts_never_a_name(client: TestClient, log
     assert not [line for line in captured if "Ada Brooks" in repr(line) or ADMIN_NAME in repr(line)]
 
 
-# --- GET /access-log ---------------------------------------------------------------------------------------------
-
-
 def at(minutes: int) -> str:
     """A stored time, minutes before NOW."""
     return to_iso(NOW - timedelta(minutes=minutes)) or ""
@@ -410,7 +394,7 @@ def at(minutes: int) -> str:
 def test_the_log_newest_first_a_page_at_a_time(client: TestClient, log: Settings) -> None:
     board = people(client)
     ada, carmen = board["Ada Brooks"], board["Carmen Ruiz"]
-    add(log, *({"id": f"{n:032x}", "at": at(60 - 10 * (n // 2))} for n in range(7)))  # pairs share a time
+    add(log, *({"id": f"{n:032x}", "at": at(60 - 10 * (n // 2))} for n in range(7)))
     add(log, {"id": "f" * 32, "at": at(5), "action": "people_compare_view", "subject_ids_json": [carmen["id"], GONE,
                                                                                                   ada["id"]]})
     expected = sorted((row["at"], row["id"]) for row in entries(log))[::-1]
@@ -423,13 +407,12 @@ def test_the_log_newest_first_a_page_at_a_time(client: TestClient, log: Settings
         assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
         body = response.json()
         assert set(body) == {"meta", "entries", "next_cursor", "facets"}
-        assert (body["facets"] is None) is (cursor is not None)  # the filters' menus come with a first page only
+        assert (body["facets"] is None) is (cursor is not None)
         seen.extend(body["entries"])
         cursor = body["next_cursor"]
-    assert cursor is None  # the last page
-    assert [(entry["at"], entry["id"]) for entry in seen] == expected  # newest first, each once
-    # A page never holds its own entry: the read is recorded after it, newer than every page; turning the pages
-    # within ten minutes is the same read (18 Nov 2026).
+    assert cursor is None
+    assert [(entry["at"], entry["id"]) for entry in seen] == expected
+    # A page never holds its own entry: the read is recorded after it.
     assert [row["action"] for row in entries(log)][-2:] == ["people_compare_view", "access_log_view"]
 
     first = seen[0]
@@ -437,7 +420,6 @@ def test_the_log_newest_first_a_page_at_a_time(client: TestClient, log: Settings
     assert first["viewer"] == {"hash": ADMIN, "name": ADMIN_NAME}
     assert (first["level"], first["project"], first["action"], first["detail"]) == (
         "people", "DEMO", "people_compare_view", {"days": 90})
-    # Subjects by name and picture, as everywhere; someone on no board as a former member, with no picture.
     assert first["subjects"] == [carmen, {"id": GONE, "name": FORMER_MEMBER, "avatar": None}, ada]
 
 
@@ -457,7 +439,7 @@ def test_the_filters(client: TestClient, log: Settings) -> None:
         return [entry["id"][0] for entry in response.json()["entries"] if entry["action"] != "access_log_view"]
 
     assert ids() == ["d", "c", "b", "a"]
-    assert ids(**{"from": "2026-11-03", "to": "2026-11-03"}) == ["c", "b"]  # both days whole, in the report zone
+    assert ids(**{"from": "2026-11-03", "to": "2026-11-03"}) == ["c", "b"]
     assert ids(**{"from": "2026-11-03"}) == ["d", "c", "b"] and ids(to="2026-11-02") == ["a"]
     assert ids(person=ada) == ["c", "a"]
     assert ids(viewer=OTHER) == ["b"]
@@ -476,13 +458,12 @@ def test_a_first_page_offers_every_viewer_and_person_the_log_holds_whatever_the_
          "subject_ids_json": [carmen["id"]]},
         {"id": "c" * 32, "at": at(30), "viewer_hash": OTHER, "viewer_name": "Sam Lee", "action": "person_ask",
          "detail_json": {"qa_id": "c" * 32, "outcome": "answered"}})
-    # Filtered to one viewer and one action, the menus still hold everyone the log does.
     first = client.get("/api/v1/access-log", params={"level": "people", "viewer": OTHER, "action": "person_ask",
                                                      "limit": 1}).json()
     assert [entry["id"] for entry in first["entries"]] == ["c" * 32]
     assert first["facets"] == {
-        "viewers": [{"hash": ADMIN, "name": ADMIN_NAME}, {"hash": OTHER, "name": "Sam Lee"}],  # the latest name
-        "subjects": [ada, carmen, {"id": GONE, "name": FORMER_MEMBER, "avatar": None}],  # a former member last
+        "viewers": [{"hash": ADMIN, "name": ADMIN_NAME}, {"hash": OTHER, "name": "Sam Lee"}],
+        "subjects": [ada, carmen, {"id": GONE, "name": FORMER_MEMBER, "avatar": None}],
     }
     assert client.get("/api/v1/access-log", params={"level": "people", "export": "true"}).json()["facets"] is None
 
@@ -495,7 +476,7 @@ def test_a_day_no_zone_can_hold_is_a_422_not_a_fault(demo: Settings, log: Settin
         assert "must be a day from 2000-01-01 to 2100-12-31" in response.text
     assert tokyo.get("/api/v1/access-log", params={"level": "people", "from": "2000-01-01",
                                                    "to": "2100-12-31"}).status_code == 200
-    assert [row["action"] for row in entries(log)] == ["access_log_view"]  # the refusals read and recorded nothing
+    assert [row["action"] for row in entries(log)] == ["access_log_view"]
 
 
 def test_the_days_are_cut_in_the_organisations_zone(demo: Settings, log: Settings) -> None:
@@ -507,9 +488,6 @@ def test_the_days_are_cut_in_the_organisations_zone(demo: Settings, log: Setting
 
 
 def test_reloading_the_log_never_fills_it_with_its_own_views(demo: Settings, log: Settings) -> None:
-    """18 Nov 2026, live: every load of the access log added "Viewed the access log", and after a short session 20 of
-    the first 50 rows were those, pushing the reads of people's figures off the first page. A page is recorded at most
-    once per viewer and person filtered by in any ten minutes, as a person card is; an export, every time."""
     clock = Clock(NOW)
     reader = client_of(demo, clock=clock)
     ada = people(reader)["Ada Brooks"]["id"]
@@ -518,22 +496,22 @@ def test_reloading_the_log_never_fills_it_with_its_own_views(demo: Settings, log
         return [(row["action"], row["viewer_hash"], row["subjects"]) for row in entries(log)
                 if row["action"] in ("access_log_view", "access_log_export")]
 
-    for _reload in range(5):  # loads, reloads, another filter, the next page: one read
+    for _reload in range(5):
         assert reader.get("/api/v1/access-log", params={"level": "people"}).status_code == 200
     assert reader.get("/api/v1/access-log", params={"level": "people", "action": "person_ask"}).status_code == 200
     assert views() == [("access_log_view", ADMIN, [])]
-    assert reader.get("/api/v1/access-log", params={"level": "people", "person": ada}).status_code == 200  # whose
+    assert reader.get("/api/v1/access-log", params={"level": "people", "person": ada}).status_code == 200
     other = client_of(demo, clock=clock, viewer=OTHER, name="Sam Lee")
-    assert other.get("/api/v1/access-log", params={"level": "people"}).status_code == 200  # another viewer
-    for _export in range(2):  # the data leaves: each export is recorded
+    assert other.get("/api/v1/access-log", params={"level": "people"}).status_code == 200
+    for _export in range(2):
         assert reader.get("/api/v1/access-log", params={"level": "people", "export": "true"}).status_code == 200
     assert views() == [("access_log_view", ADMIN, []), ("access_log_view", ADMIN, [ada]),
                        ("access_log_view", OTHER, []), ("access_log_export", ADMIN, []),
                        ("access_log_export", ADMIN, [])]
     first = next(row for row in entries(log) if row["action"] == "access_log_view")
-    assert first["detail"]["actions"] == []  # the entry kept is the first read's
+    assert first["detail"]["actions"] == []
 
-    clock.at = NOW + timedelta(minutes=10, milliseconds=1)  # more than ten minutes on: a read of its own
+    clock.at = NOW + timedelta(minutes=10, milliseconds=1)
     assert reader.get("/api/v1/access-log", params={"level": "people"}).status_code == 200
     assert views()[-1] == ("access_log_view", ADMIN, []) and len(views()) == 6
 
@@ -545,7 +523,7 @@ def test_reading_the_log_is_recorded_and_an_export_as_an_export(client: TestClie
                                                     "from": "2026-10-01", "to": "2026-11-04"}).json()
     assert len(page["entries"]) == 50 and page["next_cursor"] is not None
     export = client.get("/api/v1/access-log", params={"level": "people", "person": ada, "export": "true"}).json()
-    assert len(export["entries"]) == 261 and export["next_cursor"] is None  # the page's own entry too, in one answer
+    assert len(export["entries"]) == 261 and export["next_cursor"] is None
 
     view, exported = entries(log)[-2:]
     assert (view["action"], view["subjects"], view["project_key"], view["level"]) == (
@@ -556,8 +534,7 @@ def test_reading_the_log_is_recorded_and_an_export_as_an_export(client: TestClie
     assert exported["detail"] == {"from": None, "to": None, "actions": [], "viewer": None, "entries": 261}
 
 
-# The dashboard's contract (docs/API_CONTRACT.md 4.16 in jira-oversight-ui, beside this repository): the detail
-# each action is recorded with, in its table. The dashboard reads `days`, `qa_id` and `entries` off it.
+# The detail each action is recorded with, in its table.
 UI_CONTRACT = Path(__file__).resolve().parents[2] / "jira-oversight-ui" / "docs" / "API_CONTRACT.md"
 
 
@@ -569,7 +546,7 @@ def test_each_actions_detail_has_exactly_the_keys_of_the_dashboards_contract(cli
                              "access_log_view", "access_log_export", "person_card_view"}
     ada = people(client)["Ada Brooks"]["id"]
     assert client.get("/api/v1/people/scorecard", params={"level": "people", "person": ada}).status_code == 200
-    assert client.get(f"/api/v1/people/{ada}/card", params={"level": "people"}).status_code == 200  # JO-13
+    assert client.get(f"/api/v1/people/{ada}/card", params={"level": "people"}).status_code == 200
     assert client.get("/api/v1/people/scorecard", params={"level": "people"}).status_code == 200
     assert client.get("/api/v1/findings", params={"person": ada, "level": "people"}).status_code == 200
     assert client.post("/api/v1/ask", json={"question": "What is @Ada Brooks working on?", "level": "people",
@@ -616,9 +593,6 @@ def test_a_cursor_names_one_entry_and_nothing_else() -> None:
         assert decode_cursor(bad) is None
 
 
-# --- retention -------------------------------------------------------------------------------------------------
-
-
 def small(tmp_path: Path, **update: Any) -> Settings:
     settings = Settings(_env_file=None, jira_projects="DEMO", api_service_key=KEY, db_path=tmp_path / "oversight.db",
                         config_dir=CONFIG_FIXTURES, reports_dir=tmp_path / "reports", **update)
@@ -639,12 +613,12 @@ def test_and_once_a_day_while_the_api_runs(tmp_path: Path) -> None:
     clock = Clock(NOW)
     api = client_of(settings, clock=clock)
     add(settings, {"id": "a" * 32, "at": to_iso(NOW - timedelta(days=31))})
-    assert api.get("/api/v1/health").status_code == 200  # the day's first request purges
+    assert api.get("/api/v1/health").status_code == 200
     assert entries(settings) == []
     add(settings, {"id": "b" * 32, "at": to_iso(NOW - timedelta(days=31))})
     clock.at = NOW + timedelta(hours=23)
     assert api.get("/api/v1/health").status_code == 200
-    assert [row["id"][0] for row in entries(settings)] == ["b"]  # once a day, no more
+    assert [row["id"][0] for row in entries(settings)] == ["b"]
     clock.at = NOW + timedelta(days=1)
     assert api.get("/api/v1/health").status_code == 200
     assert entries(settings) == []
@@ -669,13 +643,7 @@ def test_access_log_days_is_a_year_by_default_and_never_under_30(tmp_path: Path)
         Settings(_env_file=None, access_log_days=29)
 
 
-# --- the snapshot as the cut-off JO-12 build left it (12 Nov 2026) ----------------------------------------------------
-
-
 def test_a_version_8_snapshot_with_entries_keeps_them_through_this_version_and_serves_them(tmp_path: Path) -> None:
-    """The product owner's snapshot reached version 8 under the first, cut-off JO-12 build, and holds entries it
-    wrote (three comparisons, one question). Versions 9 (JO-15's rule settings) and 10 (JO-17's boards) only add tables
-    and columns: the snapshot is brought to this version when the API starts, keeps every entry and serves them."""
     settings = small(tmp_path)
     question = {"qa_id": "e" * 32, "outcome": "answered"}
     add(settings, *({"id": f"{n:032x}", "at": at(10 - n), "action": "people_compare_view", "viewer_hash": "local",

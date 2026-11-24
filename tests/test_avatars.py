@@ -1,10 +1,3 @@
-"""Jira pictures (oversight/ingest/avatars.py): the fetch rules, the refresh after every sync, and its counts.
-
-Nothing here touches the network. Every fetcher is given an httpx.MockTransport standing in for Gravatar
-and Atlassian's picture store, and conftest.py fails any test whose fetcher would have gone out. The
-URLs are made up, on the real site's two hosts, and no picture is anyone's: a few bytes after each
-format's signature, since the rules read the signature.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -49,10 +42,8 @@ GRAVATAR = "https://secure.gravatar.com"
 STORED = f"{ATLASSIAN}/712020:0f0f0f0f-aaaa-4bbb-8ccc-000000000001/5e5e5e5e-1111/48"
 ON_GRAVATAR = f"{GRAVATAR}/avatar/0123456789abcdef0123456789abcdef?d={ATLASSIAN.replace(':', '%3A').replace('/', '%2F')}"
 INITIALS = f"{ATLASSIAN}/initials/DO-4.png"
-# As Jira writes a Gravatar URL: the default (d=) is the person's Atlassian initials picture.
 WITH_DEFAULT = f"{GRAVATAR}/avatar/0123456789abcdef0123456789abcdef?d={quote(INITIALS, safe='')}"
 NO_DEFAULT = f"{GRAVATAR}/avatar/0123456789abcdef0123456789abcdef"
-# Where Gravatar sends someone with no Gravatar of their own: its image proxy, holding the default picture.
 PROXY = f"https://i0.wp.com/{INITIALS.removeprefix('https://')}?ssl=1"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 16
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00\x10JFIF" + b"\x00" * 16
@@ -129,9 +120,6 @@ def logs() -> Iterator[list[dict[str, Any]]]:
         structlog.configure(**saved)
 
 
-# --- which URLs: https, the two hosts exactly, no user name, port or IP address -----------------------
-
-
 @pytest.mark.parametrize(
     "url",
     [
@@ -202,9 +190,6 @@ def test_any_other_url_is_refused_before_anything_is_sent(url: Any, reason: str)
     assert refused(hosts, url) == reason and hosts.requests == []
 
 
-# --- what: PNG, JPEG, GIF or WebP by the bytes, never SVG --------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("data", "kind"),
     [(PNG, "image/png"), (JPEG, "image/jpeg"), (GIF, "image/gif"), (b"GIF87a" + b"\x00" * 8, "image/gif"), (WEBP, "image/webp")],
@@ -237,9 +222,6 @@ def test_svg_and_everything_else_are_refused(data: bytes) -> None:
     assert sniff(data) is None
     for said in ("image/png", "image/svg+xml"):
         assert refused(Hosts({STORED: ok(data, said)})) == "not a PNG, JPEG, GIF or WebP picture"
-
-
-# --- how much: 256 KB, counted while reading ----------------------------------------------------------
 
 
 def test_a_picture_of_exactly_256_kb_is_kept() -> None:
@@ -297,16 +279,12 @@ def test_a_declared_length_that_is_not_a_plain_number_is_ignored_and_the_count_d
 
 
 def test_a_compressed_body_is_refused() -> None:
-    """The body is taken as sent, so 256 KB is what arrives: a picture never needs a content coding."""
     for coding in ("gzip", "br", "deflate", "gzip, identity"):
         def coded(_request: httpx.Request, coding: str = coding) -> httpx.Response:
             return httpx.Response(200, content=iter([PNG]), headers={"Content-Encoding": coding})
 
         assert refused(Hosts({STORED: coded})) == "compressed body", coding
     assert fetch(Hosts({STORED: ok(PNG, "image/png", **{"Content-Encoding": "identity"})})).data == PNG
-
-
-# --- redirects: by hand, at most 3, each checked ------------------------------------------------------
 
 
 def test_gravatar_sends_someone_without_one_on_to_their_atlassian_initials() -> None:
@@ -357,12 +335,10 @@ def test_a_redirect_to_a_url_the_rules_refuse_is_never_followed(location: str, r
 
 
 def test_gravatar_s_image_proxy_is_never_asked_and_the_default_picture_is_fetched_instead() -> None:
-    # Gravatar's answer for someone without a Gravatar: a redirect to its image proxy, off the two hosts.
     hosts = Hosts({WITH_DEFAULT: moved(PROXY), INITIALS: ok(PNG)})
     picture = fetch(hosts, WITH_DEFAULT)
     assert picture.data == PNG and picture.content_type == "image/png"
     assert hosts.asked() == [str(httpx.URL(WITH_DEFAULT)), INITIALS]  # never the proxy
-    # Whatever off-host place Gravatar names, and with the parameter's long name too.
     long_name = WITH_DEFAULT.replace("?d=", "?s=48&default=")
     hosts = Hosts({long_name: moved("https://evil.example/x.png"), INITIALS: ok(GIF)})
     assert fetch(hosts, long_name).data == GIF and hosts.asked()[-1] == INITIALS
@@ -386,18 +362,15 @@ def test_a_default_picture_the_rules_refuse_is_never_asked_either(default: str) 
 
 
 def test_the_default_picture_is_tried_once_and_held_to_the_same_rules() -> None:
-    # The default redirecting off the hosts in turn: refused there, with no second try.
     hosts = Hosts({WITH_DEFAULT: moved(PROXY), INITIALS: moved(PROXY)})
     assert refused(hosts, WITH_DEFAULT) == "redirected: not a picture host"
     assert hosts.asked() == [str(httpx.URL(WITH_DEFAULT)), INITIALS]
-    # And failing as any picture can.
     assert refused(Hosts({WITH_DEFAULT: moved(PROXY), INITIALS: ok(SVG, "image/svg+xml")}), WITH_DEFAULT) == (
         "not a PNG, JPEG, GIF or WebP picture")
     assert refused(Hosts({WITH_DEFAULT: moved(PROXY)}), WITH_DEFAULT) == "HTTP 404"
 
 
 def test_only_gravatar_s_own_redirect_falls_back_to_the_default() -> None:
-    # Gravatar sends the person on to an Atlassian URL, which then wanders off the hosts: refused there.
     hosts = Hosts({WITH_DEFAULT: moved(f"{ATLASSIAN}/elsewhere"), f"{ATLASSIAN}/elsewhere": moved(PROXY), INITIALS: ok(PNG)})
     assert refused(hosts, WITH_DEFAULT) == "redirected: not a picture host"
     assert INITIALS not in hosts.asked()
@@ -414,9 +387,6 @@ def test_a_chain_that_wanders_off_the_two_hosts_on_its_third_hop_is_refused_ther
 
 def test_a_redirect_without_a_location_is_refused() -> None:
     assert refused(Hosts({STORED: lambda _r: httpx.Response(302)})) == "HTTP 302 without a Location"
-
-
-# --- errors and the 5 seconds -----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -468,7 +438,6 @@ def test_the_five_seconds_cover_the_whole_picture_redirects_included() -> None:
     hosts = Hosts({ON_GRAVATAR: slow_redirect, INITIALS: initials, STORED: ok(PNG)})
     assert refused(hosts, ON_GRAVATAR, clock=clock) == "took longer than 5 s"
     assert len(hosts.requests) == 2  # 6 seconds gone: the third is never sent
-    # Each network step may take what is left of the five seconds, and no more.
     assert seen == [dict.fromkeys(("connect", "read", "write", "pool"), 5.0),
                     dict.fromkeys(("connect", "read", "write", "pool"), 2.0)]
 
@@ -487,12 +456,7 @@ def test_a_picture_that_trickles_in_past_five_seconds_is_refused() -> None:
     assert refused(Hosts({STORED: trickle}), clock=clock) == "took longer than 5 s"
 
 
-# --- no credentials -------------------------------------------------------------------------------
-
-
 def test_a_picture_request_carries_no_credential_and_keeps_no_cookie() -> None:
-    """No Authorization, no Cookie: not from the URL, not from a cookie a host sets on the way, and the Jira
-    token never. Each request carries exactly these headers."""
     hosts = Hosts({
         ON_GRAVATAR: moved(INITIALS, **{"Set-Cookie": "gravatar=1; Domain=.gravatar.com; Path=/"}),
         INITIALS: moved(STORED, **{"Set-Cookie": "session=abc; Path=/"}),
@@ -510,14 +474,10 @@ def test_a_picture_request_carries_no_credential_and_keeps_no_cookie() -> None:
 
 
 def test_a_fetcher_without_a_stub_never_reaches_the_internet_in_tests(_no_picture_from_the_internet: list[str]) -> None:
-    """The safety net in conftest.py: a fetcher made without a transport, as a sync makes its own, is refused."""
     with PictureFetcher() as pictures, pytest.raises(PictureError, match="ConnectError"):
         pictures.fetch(STORED)
     assert _no_picture_from_the_internet == ["avatar-management--avatars.us-west-2.prod.public.atl-paas.net"]
     _no_picture_from_the_internet.clear()  # asked on purpose: the net held
-
-
-# --- the refresh after a sync ----------------------------------------------------------------------
 
 
 def board(store: Store, project: str, *accounts: str) -> None:
@@ -632,7 +592,6 @@ def test_only_the_synced_boards_people_and_at_most_the_limit_missing_ones_first(
 
 
 def members(store: Store, project: str, *accounts: str) -> None:
-    """The accounts as the board's members, from its last member fetch (they need hold none of its tickets)."""
     with store.transaction():
         for account in accounts:
             store.upsert("board_members", {"project_key": project, "account_id": account, "seen_at": to_iso(NOW)})
@@ -718,12 +677,7 @@ def test_something_unforeseen_with_one_picture_does_not_stop_the_others(
     assert refresh(store, Hosts({url_of("acc-b"): ok(PNG)}), "AIL") == {"fetched": 1, "unchanged": 0, "failed": 1}
 
 
-# --- every sync: full and incremental, and the command that "sync now" runs ----------------------------
-
-
 def carrying_pictures(fake: FakeJira, monkeypatch: pytest.MonkeyPatch, urls: dict[str, str]) -> None:
-    """Make the fake's assignees carry avatarUrls as Jira's do, from `urls` (account -> 48x48 URL) as it is
-    when each payload is made, so a test can change someone's picture in Jira."""
     payload = fake.payload
 
     def with_pictures(issue: Any, fields: list[str] | None = None) -> dict[str, Any]:
@@ -765,7 +719,6 @@ def test_a_sync_keeps_the_picture_url_and_then_fetches_the_picture(
     run = json.loads(store.query_one("SELECT stats_json FROM runs WHERE run_id = ?", (result.run_id,))[0])
     assert run["pictures"] == {"failed": 0, "fetched": 1, "unchanged": 0, "failures": []}
     assert "  pictures: 1 fetched, 0 unchanged, 0 failed\n  requests:" in result.render()
-    # The pictures went to their host, never through Jira, and Jira's token went nowhere near them.
     assert all(request.url.host == "fake.atlassian.net" for request in fake.requests)
     assert all("authorization" not in request.headers for request in hosts.requests)
 
@@ -801,7 +754,6 @@ def test_a_picture_that_fails_never_fails_the_sync(
     assert result.pictures.as_dict() == {"fetched": 0, "unchanged": 0, "failed": 1}
     assert store.query_one("SELECT status FROM runs WHERE run_id = ?", (result.run_id,))[0] == "succeeded"
     assert store.get_cursor("AIL") is not None and result.warnings == []
-    # The run keeps why, by person id: the reason outlives the log of a sync no one was watching ("sync now").
     run = json.loads(store.query_one("SELECT stats_json FROM runs WHERE run_id = ?", (result.run_id,))[0])
     assert run["pictures"] == {"fetched": 0, "unchanged": 0, "failed": 1,
                                "failures": [{"person": person_id("acc-dev-1"), "reason": "HTTP 500"}]}
@@ -821,8 +773,6 @@ def test_a_picture_that_fails_never_fails_the_sync(
 def test_an_interrupted_picture_step_still_finishes_the_run_it_follows(
     fake: FakeJira, store: Store, fields: FieldsConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Ctrl-C while pictures are fetched: the sync before it is done, so its run is finished as such, never left
-    "running", and the interrupt goes on."""
 
     def interrupted(*_args: object, **_kwargs: object) -> None:
         raise KeyboardInterrupt
@@ -857,7 +807,6 @@ def test_a_sync_fetches_only_its_own_boards_people(
 def test_a_sync_fetches_the_pictures_of_members_with_no_tickets(
     fake: FakeJira, store: Store, fields: FieldsConfig
 ) -> None:
-    """The members step (6) stores the member's picture URL, and the pictures step (7) fetches it."""
     fake.add_member("AIL", "acc-m1", "Noor Haddad", avatarUrls={"48x48": url_of("acc-m1"), "16x16": url_of("acc-m1") + "/16"})
     fake.add_member("OPS", "acc-o1", "Yuki Tanabe", avatarUrls={"48x48": url_of("acc-o1")})
     hosts = Hosts({url_of("acc-dev-1"): ok(PNG), url_of("acc-m1"): ok(WEBP, "image/webp"), url_of("acc-o1"): ok(PNG)})
@@ -872,8 +821,6 @@ def test_a_sync_fetches_the_pictures_of_members_with_no_tickets(
 def test_the_sync_command_that_sync_now_runs_fetches_the_pictures(
     fake: FakeJira, settings: Settings, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """POST /refresh runs `python -m oversight sync --incremental`, which makes its own fetcher: every sync,
-    from the command line or the dashboard's button, refreshes the pictures."""
     hosts = Hosts({url_of("acc-dev-1"): ok(PNG)})
     made: list[PictureFetcher] = []
 

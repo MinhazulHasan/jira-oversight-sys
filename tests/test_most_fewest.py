@@ -1,24 +1,4 @@
-"""Ask honours "most" and "fewest" in people comparisons (JO-14, the product owner's decision of 13 Nov 2026: "answer
-exactly what was asked").
-
-JO-11 put every rate in the comparison closer to the process first, whatever the question said, so "Who has the most
-reopened tickets?" named the person with the fewest first, and its contract refused an explicit fewest on a rate. Now:
-- most, highest, largest, biggest, top N (and close paraphrases): the figure highest first;
-- fewest, least, lowest, smallest, bottom N: lowest first;
-- no direction word: closer to the process first, as before (a count, most first);
-for rates, the ratio and counts alike, with people on too few tickets last whatever the order, vs_board, the caveat
-and every figure unchanged. The first sentence says the order in plain words ("Reopened after Done, last 90 days,
-highest first: ..."), never calling the highest worst or the lowest best. oversight_people_compare takes one
-parameter for it, order: closer (the default) | most | fewest, for every measure, and the facts record the order used.
-A rate named the other way round turns the order ("who overruns the most?" is the lowest share within the limit
-first), and words that only say how little ("the least work") are the figure named beside them ("who reopens the
-least work?" is reopened, fewest first), where JO-12's workload words took them for open tickets.
-
-QUESTIONS is the table, question for question, that the dashboard's sample is held to as well
-(src/server/__tests__/ask-most-fewest.test.ts): the measure, the order and the first sentence, through the router and
-through POST /ask at people level. Against the seeded DEMO store (fictional people); nothing calls a model or the
-network.
-"""
+"""Ask honours "most" and "fewest" in people comparisons."""
 from __future__ import annotations
 
 import hashlib
@@ -37,33 +17,28 @@ from oversight.ask.router import CATALOG_NAMES, PEOPLE_NAMES, last_resort, route
 from oversight.ask.scorecards import CHARACTER_LABELS, order_words
 from oversight.settings import Settings
 from tests.test_analyst import FakeAnalyst, turn, use
-from tests.test_ask_scorecard import _ask, board, client, demo, off, post, scope_of  # noqa: F401  (fixtures)
+from tests.test_ask_scorecard import _ask, board, client, demo, off, post, scope_of  # noqa: F401
 
 PEOPLE = [*CATALOG_NAMES, *PEOPLE_NAMES]
 ADA, CARMEN = "Ada Brooks", "Carmen Ruiz"
-ROUTER_IDS = {ADA: "pbc7fe62842ca", CARMEN: "pfedcba987654"}  # any person ids: the router reads only the words
+ROUTER_IDS = {ADA: "pbc7fe62842ca", CARMEN: "pfedcba987654"}
 WHOM = {"": [], "one": [ADA], "two": [ADA, CARMEN]}
 COMPARE, SCORECARD, RANKING = "oversight_people_compare", "oversight_person_scorecard", "oversight_people"
 
 
 def first(label: str, order_said: str, days: int | None = 90) -> str:
-    """The first sentence's opening, as a pattern: "{Label}, last {days} days, {order}: " (no period for a figure of
-    now)."""
+    """The first sentence's opening, as a pattern: "{Label}, last {days} days, {order}: "."""
     period = f", last {days} days" if days else ""
     return "^" + re.escape(f"{label}{period}, {order_said}: ")
 
 
 OVERALL_FIRST = "^" + re.escape("Measures closer to the process than the board, last 90 days, ")
 
-# (question, who is mentioned, tool, measure, order, days, n, the answer's opening). Direction words of both kinds and
-# none, phrased several ways; rates, the ratio, counts and the overall order; no one, one and two people mentioned.
 QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | None, str]] = [
-    # The JO-12 check's two cases.
     ("Who has the most reopened tickets?", "", COMPARE, "reopened", "most", 90, None,
      first("Reopened after Done", "highest first")),
     ("Who has the fewest tickets stuck in a status?", "", COMPARE, "stuck_now", "fewest", 90, None,
      first("Open tickets stuck in a status", "lowest first", None)),
-    # Rates, most first.
     ("Whose tickets are reopened the most?", "", COMPARE, "reopened", "most", 90, None,
      first("Reopened after Done", "highest first")),
     ("Who has the highest reopen rate this month?", "", COMPARE, "reopened", "most", 30, None,
@@ -82,7 +57,6 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
      first("Done within the effort limit", "highest first")),
     ("Who has the most code review recorded?", "", COMPARE, "code_review", "most", 90, None,
      "^" + re.escape("Not measurable on this board: Code review recorded.")),
-    # Rates, fewest first.
     ("Who has the lowest share of reopened work?", "", COMPARE, "reopened", "fewest", 90, None,
      first("Reopened after Done", "lowest first")),
     ("Who skips the fewest stages?", "", COMPARE, "skipped_stage", "fewest", 90, None,
@@ -95,7 +69,6 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
      first("Time logged on done work", "lowest first")),
     ("From lowest to highest, rank everyone by time logged", "", COMPARE, "time_logged", "fewest", 90, None,
      first("Time logged on done work", "lowest first")),
-    # A rate named the other way round: the most overruns are the lowest share within the limit, and so on.
     ("Who overruns the most?", "", COMPARE, "within_estimate", "fewest", 90, None,
      first("Done within the effort limit", "lowest first")),
     ("Who goes over the effort limit the least?", "", COMPARE, "within_estimate", "most", 90, None,
@@ -108,7 +81,6 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
      first("Done within the effort limit", "lowest first")),
     ("Who has the lowest effort ratio?", "", COMPARE, "within_estimate", "most", 90, None,
      first("Done within the effort limit", "highest first")),
-    # Done, closed or in progress beside a rate name the tickets the rate is of: the rate is the figure (the review).
     ("Who has the most tickets reopened after Done?", "", COMPARE, "reopened", "most", 90, None,
      first("Reopened after Done", "highest first")),
     ("Who has the most time logged on done work?", "", COMPARE, "time_logged", "most", 90, None,
@@ -121,8 +93,6 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
      first("Skipped a stage", "highest first")),
     ("Who has the most stuck tickets in progress?", "", COMPARE, "stuck_now", "most", 90, None,
      first("Open tickets stuck in a status", "highest first", None)),
-    # Top N and bottom N give the order only where no other direction word does; the word nearest the measure decides
-    # a question that asks both ways; how many and which end, in other words.
     ("Top 3 people with the fewest reopened tickets", "", COMPARE, "reopened", "fewest", 90, 3,
      first("Reopened after Done", "lowest first")),
     ("Top 5 people who log the least time", "", COMPARE, "time_logged", "fewest", 90, 5,
@@ -137,8 +107,6 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
      first("Estimated before work started", "lowest first")),
     ("Who is at the top for reopened tickets?", "", COMPARE, "reopened", "most", 90, None,
      first("Reopened after Done", "highest first")),
-    # Words that only say how little ("the least work") are the figure named beside them; a word of room itself
-    # ("capacity") stays the open tickets.
     ("Who reopens the least work?", "", COMPARE, "reopened", "fewest", 90, None,
      first("Reopened after Done", "lowest first")),
     ("Who has the least work in progress?", "", COMPARE, "in_progress", "fewest", None, None,
@@ -149,14 +117,12 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
      first("Time logged on done work", "lowest first")),
     ("Who has capacity to review code?", "", COMPARE, "open_tickets", "fewest", None, None,
      first("Open tickets", "fewest first", None)),
-    # Rates, no direction word: closer to the process first, as before.
     ("Rank everyone by reopened tickets", "", COMPARE, "reopened", "closer", 90, None,
      first("Reopened after Done", "closest to the process first")),
     ("Who has tickets stuck?", "", COMPARE, "stuck_now", "closer", 90, None,
      first("Open tickets stuck in a status", "closest to the process first", None)),
     ("Who is best at estimating before they start?", "", COMPARE, "estimated_before_start", "closer", 90, None,
      first("Estimated before work started", "closest to the process first")),
-    # The other side of the process (the JO-14 review): further from it first, and the least of that closer first.
     ("Who is worst for reopened work?", "", COMPARE, "reopened", "most", 90, None,
      first("Reopened after Done", "highest first")),
     ("Who has the worst reopen rate?", "", COMPARE, "reopened", "most", 90, None,
@@ -175,7 +141,6 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
      first("Time logged on done work", "lowest first")),
     ("Who has the worst effort ratio?", "", COMPARE, "within_estimate", "fewest", 90, None,
      first("Done within the effort limit", "lowest first")),
-    # The ratio.
     ("Who has the lowest open findings per 10 open tickets?", "", COMPARE, "open_findings_per_10", "fewest", 90, None,
      first("Open findings per 10 open tickets", "lowest first", None)),
     ("Who has the most findings per 10 tickets?", "", COMPARE, "open_findings_per_10", "most", 90, None,
@@ -186,7 +151,6 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
      first("Open findings per 10 open tickets", "closest to the process first", None)),
     ("Who has the worst open findings?", "", COMPARE, "open_findings_per_10", "most", 90, None,
      first("Open findings per 10 open tickets", "highest first", None)),
-    # Counts: most first, or fewest first (a count has no closer side).
     ("Who has the biggest backlog?", "", COMPARE, "open_tickets", "most", None, None,
      first("Open tickets", "most first", None)),
     ("Who has the smallest backlog?", "", COMPARE, "open_tickets", "fewest", None, None,
@@ -206,15 +170,12 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
     ("Top 3 people with the fewest open breaches", "", RANKING, None, "fewest", None, 3,
      r"^.+ (?:has|have) the fewest open breaches"),
     ("Top 3 busiest people", "", COMPARE, "open_tickets", "most", None, 3, first("Open tickets", "most first", None)),
-    # The overall order: the most measures closer is closer first; the fewest, the exact reverse.
     ("Who follows the process most closely?", "", COMPARE, OVERALL, "closer", 90, None, OVERALL_FIRST + "most first: "),
     ("Who is best on the board?", "", COMPARE, OVERALL, "closer", 90, None, OVERALL_FIRST + "most first: "),
     ("Rank everyone", "", COMPARE, OVERALL, "closer", 90, None, OVERALL_FIRST + "most first: "),
     ("Who follows the process least?", "", COMPARE, OVERALL, "fewest", 90, None, OVERALL_FIRST + "fewest first: "),
     ("Which developer is least compliant?", "", COMPARE, OVERALL, "fewest", 90, None, OVERALL_FIRST + "fewest first: "),
     ("Who is the most compliant?", "", COMPARE, OVERALL, "closer", 90, None, OVERALL_FIRST + "most first: "),
-    # The other side of the process, overall: further from it first (the fewest measures closer), and the least of
-    # that closer first, as JO-12 answered "who needs the least help?" before JO-14 turned it round.
     ("Who is struggling the least?", "", COMPARE, OVERALL, "closer", 90, None, OVERALL_FIRST + "most first: "),
     ("Who needs the least help?", "", COMPARE, OVERALL, "closer", 90, None, OVERALL_FIRST + "most first: "),
     ("Who needs less help?", "", COMPARE, OVERALL, "closer", 90, None, OVERALL_FIRST + "most first: "),
@@ -232,7 +193,6 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
     ("Who is not pulling their weight?", "", COMPARE, OVERALL, "fewest", 90, None, OVERALL_FIRST + "fewest first: "),
     ("Who is careless with estimates?", "", COMPARE, "estimated_before_start", "fewest", 90, None,
      first("Estimated before work started", "lowest first")),
-    # Two people side by side.
     ("Who has more reopened tickets, @Ada Brooks or @Carmen Ruiz?", "two", COMPARE, "reopened", "most", 90, None,
      first("Reopened after Done", "highest first")),
     ("Which of @Ada Brooks and @Carmen Ruiz has fewer stuck tickets?", "two", COMPARE, "stuck_now", "fewest", 90,
@@ -243,12 +203,10 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
      first("Time logged on done work", "closest to the process first")),
     ("Who closed more tickets this month, @Ada Brooks or @Carmen Ruiz?", "two", COMPARE, "done_in_period", "most",
      30, None, first("Done in the period", "most first", 30)),
-    # A measure named with a word that ranks, compares or evaluates: that measure, in the order asked (the review).
     ("Rank @Ada Brooks and @Carmen Ruiz by reopened tickets, highest first", "two", COMPARE, "reopened", "most", 90,
      None, first("Reopened after Done", "highest first")),
     ("Who is worse on reopened tickets, @Ada Brooks or @Carmen Ruiz?", "two", COMPARE, "reopened", "most", 90, None,
      first("Reopened after Done", "highest first")),
-    # One person: their scorecard, each measure next to the board (one person is in no order).
     ("Does @Ada Brooks have the most reopened tickets?", "one", SCORECARD, None, None, 90, None,
      "^" + re.escape("Ada Brooks, last 90 days, next to the board")),
     ("Is @Ada Brooks the lowest on time logged?", "one", SCORECARD, None, None, 90, None,
@@ -257,7 +215,7 @@ QUESTIONS: list[tuple[str, str, str, str | None, str | None, int | None, int | N
 
 
 def test_the_table_has_at_least_forty_questions_each_once() -> None:
-    assert len(QUESTIONS) >= 90  # 54 at JO-14, and the review's questions since
+    assert len(QUESTIONS) >= 90
     assert len(QUESTIONS) >= 40 and len({row[0] for row in QUESTIONS}) == len(QUESTIONS)
     orders = {row[4] for row in QUESTIONS}
     assert {"most", "fewest", "closer"} <= orders
@@ -268,7 +226,6 @@ def test_the_table_has_at_least_forty_questions_each_once() -> None:
 
 def _planned(question: str, who: str) -> list[tuple[str, dict[str, Any]]]:
     names = WHOM[who]
-    # As the service routes it: the mentioned names taken out of the words, the people by id.
     planned = route(strip_names(question, names), PEOPLE, project="DEMO", mentions=[ROUTER_IDS[name] for name in names])
     assert planned.understood, question
     return [(call.name, {key: value for key, value in call.params.items() if key != "project"})
@@ -292,8 +249,7 @@ def test_the_router_plans_the_measure_and_the_order_asked_for(question: str, who
 
 
 def _ordered_as_asked(fact: dict[str, Any], asked: str) -> None:
-    """The people in the facts in the order asked: those compared first, by their figure, those on too few tickets
-    after them whatever the order."""
+    """The people in the facts in the order asked."""
     people = [row for row in fact["rows"] if row["person_id"]]
     measure = fact["params"]["measure"]
     if measure == OVERALL:
@@ -303,7 +259,7 @@ def _ordered_as_asked(fact: dict[str, Any], asked: str) -> None:
         return
     counted = measure in RANKED_COUNTS
     enough = [row for row in people if counted or (row["enough"] and row["value"] is not None)]
-    assert people[:len(enough)] == enough  # too few tickets: last, whatever the order
+    assert people[:len(enough)] == enough
     values = [row["value"] for row in enough]
     if asked == "closer":
         highest = BY_KEY[measure].direction == "higher_is_closer"
@@ -324,17 +280,15 @@ def test_the_answer_is_in_the_order_asked_and_says_so_first(client: TestClient, 
     assert step["tool"] == tool, question
     fact = body["facts"][0]
     assert re.match(opening, body["answer"]), (question, body["answer"][:160])
-    # It reports the order; it never calls anyone the best or the worst, nor labels anyone.
     assert not re.search(r"\b(?:best|worst)\b", body["answer"], re.IGNORECASE), body["answer"]
     assert not CHARACTER_LABELS.search(body["answer"])
     if tool != COMPARE:
         return
-    assert (fact["params"]["measure"], fact["params"]["order"]) == (measure, asked)  # the facts record the order
+    assert (fact["params"]["measure"], fact["params"]["order"]) == (measure, asked)
     assert step["params"]["order"] == asked
     if not any(row["person_id"] for row in fact["rows"]):
-        return  # not measurable on this board: no one's figures to order
+        return
     _ordered_as_asked(fact, asked or "closer")
-    # The answer names the people compared in the facts' order (those on too few tickets after them).
     sentence = body["answer"].split("\n\n")[0]
     if measure == OVERALL:
         named = [row["name"] for row in fact["rows"] if row["compared"]]
@@ -346,8 +300,6 @@ def test_the_answer_is_in_the_order_asked_and_says_so_first(client: TestClient, 
 
 
 def test_the_two_named_cases(client: TestClient) -> None:
-    """The JO-12 check's two cases: the most reopened lists the highest reopened rate first; the fewest stuck, the
-    lowest first."""
     most = post(client, {"question": "Who has the most reopened tickets?", "level": "people"})
     rows = [row for row in most["facts"][0]["rows"] if row["person_id"] and row["enough"]]
     top = max(row["value"] for row in rows)
@@ -365,8 +317,6 @@ def test_the_two_named_cases(client: TestClient) -> None:
                                                 "Rank everyone by open findings per 10 open tickets"),
                                                ("Who follows the process least?", "Who follows the process most closely?")])
 def test_only_the_order_changes(client: TestClient, asked: str, closer: str) -> None:
-    """vs_board, the standing, the caveat and every figure are the same whatever the order: only the rows' order and
-    the first sentence's order words differ."""
     one, other = (post(client, {"question": question, "level": "people"}) for question in (asked, closer))
     rows, others = one["facts"][0]["rows"], other["facts"][0]["rows"]
 
@@ -375,34 +325,29 @@ def test_only_the_order_changes(client: TestClient, asked: str, closer: str) -> 
 
     assert sorted(rows, key=whose) == sorted(others, key=whose)
     assert [row for row in rows if not row["person_id"]] == [row for row in others if not row["person_id"]]
-    assert one["answer"].split("\n\n")[-1] == other["answer"].split("\n\n")[-1]  # the caveat
+    assert one["answer"].split("\n\n")[-1] == other["answer"].split("\n\n")[-1]
     assert one["answer"].split("\n\n")[-1].startswith("Figures from Jira over the last 90 days")
     too_few = [row["name"] for row in rows if row["person_id"] and row.get("standing") == "Too few tickets"]
-    if too_few:  # labelled so and last, whatever the order
+    if too_few:
         assert [row["name"] for row in rows if row["person_id"]][-len(too_few):] == too_few
         assert f"Too few tickets to compare: {too_few[0]}" in one["answer"]
-
-
-# --- the tool's parameter ---------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("measure", ["overall", *(measure.key for measure in MEASURES)])
 @pytest.mark.parametrize("asked", ["closer", "most", "fewest"])
 def test_every_measure_takes_every_order(measure: str, asked: str) -> None:
-    # JO-11 refused fewest on a rate: "order fewest is for a count only".
     assert CompareParams(measure=measure, order=asked).order == asked
 
 
 def test_closer_is_the_default_and_nothing_else_is_an_order() -> None:
     assert CompareParams(measure="reopened").order == "closer"
-    assert CompareParams.model_validate({"measure": "reopened", "order": None}).order == "closer"  # a model's null
+    assert CompareParams.model_validate({"measure": "reopened", "order": None}).order == "closer"
     for wrong in ("worst", "best", "desc", "asc", ""):
         with pytest.raises(ValidationError):
             CompareParams(measure="reopened", order=wrong)
 
 
 def test_the_facts_record_the_order_used() -> None:
-    # A count has no closer side (most first); overall, the most measures closer is the closer order itself.
     assert effective_order("open_tickets", "closer") == "most"
     assert effective_order("done_in_period", "fewest") == "fewest"
     assert effective_order(OVERALL, "most") == "closer"
@@ -431,8 +376,6 @@ def test_the_tool_and_the_analyst_are_told_the_order() -> None:
     assert "highest first" in prop["description"] and "lowest first" in prop["description"]
     assert "for every measure" in prop["description"]
     assert "order most: the figure highest first" in PEOPLE_CATALOG[COMPARE].description
-    # A measure named the other way round, and the other side of the process, which only the code-planned path read
-    # until the JO-14 review: the tool, the analyst and the live planner are told too.
     for told in (prop["description"], PEOPLE_CATALOG[COMPARE].description,
                  analyst_system("DEMO", "2026-11-04", 4, "people"), PEOPLE_PLAN_SYSTEM):
         assert "within_estimate fewest" in told and "further from it first" in told, told[:80]
@@ -448,8 +391,6 @@ def test_the_tool_and_the_analyst_are_told_the_order() -> None:
                                                       "first: ")])
 def test_in_analyst_mode_the_order_the_model_asked_for_is_kept(demo: Settings, asked: str | None,
                                                                 opening: str) -> None:
-    """Analyst mode: the model calls the comparison with the order (or none: closer); the facts record it, and when its
-    own answer cannot be used (a label, twice), the answer built in code says that order first."""
     params: dict[str, Any] = {"measure": "reopened", **({"order": asked} if asked else {})}
     stubborn = FakeAnalyst([turn(uses=[use(COMPARE, params)]), turn(text="Ada Brooks is lazy."),
                             turn(text="Ada Brooks is hopeless.")])
@@ -460,9 +401,6 @@ def test_in_analyst_mode_the_order_the_model_asked_for_is_kept(demo: Settings, a
     assert response.answer.startswith(opening), response.answer[:120]
     values = [row["value"] for row in fact.rows if row["person_id"] and row["enough"]]
     assert values == sorted(values, reverse=asked == "most")
-
-
-# --- the order itself, on hand-made standings ---------------------------------------------------------------
 
 
 def _standing(name: str, figures: dict[str, tuple[float, bool]], closer: int = 0) -> Standing:
@@ -482,16 +420,12 @@ def _names(ordered: list[Standing]) -> list[str]:
 
 
 @pytest.mark.parametrize(("measure", "figures", "expected"), [
-    # Lower is closer (reopened): closer is lowest first; most, highest first; fewest, lowest first.
     ("reopened", {"A": (10, True), "B": (40, True), "C": (25, True), "D": (90, False)},
      {"closer": "ACBD", "most": "BCAD", "fewest": "ACBD"}),
-    # Higher is closer (estimated before start): closer is highest first.
     ("estimated_before_start", {"A": (80, True), "B": (20, True), "C": (50, True), "D": (100, False)},
      {"closer": "ACBD", "most": "ACBD", "fewest": "BCAD"}),
-    # The ratio, lower is closer; a figure on too few tickets is last whichever way.
     ("open_findings_per_10", {"A": (1.5, True), "B": (4.0, True), "C": (0.5, True), "D": (0.0, False)},
      {"closer": "CABD", "most": "BACD", "fewest": "CABD"}),
-    # A count: most first, closer too; fewest first; ties in the directory's order either way.
     ("open_tickets", {"A": (3, True), "B": (9, True), "C": (5, True), "D": (5, True)},
      {"closer": "BCDA", "most": "BCDA", "fewest": "ACDB"}),
 ])
@@ -506,21 +440,15 @@ def test_the_overall_order_and_its_exact_reverse() -> None:
     p = _standing("P", {"open_findings_per_10": (1.0, True)}, closer=3)
     q = _standing("Q", {"open_findings_per_10": (2.0, True)}, closer=1)
     r = _standing("R", {"open_findings_per_10": (2.0, True)}, closer=3)
-    s = _standing("S", {"open_findings_per_10": (0.0, False)}, closer=0)  # compared on none: last, either way
-    t = _standing("T", {"open_findings_per_10": (0.0, False)}, closer=1)  # its ratio on too few tickets
+    s = _standing("S", {"open_findings_per_10": (0.0, False)}, closer=0)
+    t = _standing("T", {"open_findings_per_10": (0.0, False)}, closer=1)
     everyone = [p, q, r, s, t]
     assert "".join(_names(order(everyone, OVERALL))) == "PRQTS"
     assert "".join(_names(order(everyone, OVERALL, first="most"))) == "PRQTS"
-    # Fewest measures closer first; ties by the ratio highest first, a figure on too few tickets counting as the most.
     assert "".join(_names(order(everyone, OVERALL, first="fewest"))) == "TQRPS"
 
 
-# --- the JO-14 review's further cases ------------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(("question", "order"), [
-    # A question about the other side of the process that no figure places: the overall comparison, further from the
-    # process first, and the least of that closer first; a direction word alone stays closer first.
     ("Who makes the most mistakes?", "fewest"),
     ("Who has the most trouble?", "fewest"),
     ("Who makes the fewest mistakes?", "closer"),
@@ -542,16 +470,11 @@ def test_the_last_resort_keeps_the_side_of_the_process_asked_about(client: TestC
                                       "Who has lower findings rate?", "Who has the highest findings per 10?",
                                       "Who has fewer findings per 10 tickets?"])
 def test_with_comparison_off_a_direction_word_is_never_taken_for_a_name(off: TestClient, question: str) -> None:
-    """Regression (the JO-14 review): with comparison off, "Who has lower findings per 10?" got "No one called Lower
-    is on this board.", an untrue turn-away: JO-14's direction words were not among the words that are never names."""
     body = post(off, {"question": question, "level": "people"})
     assert (body["outcome"], body["message"]) == ("not_understood", COMPARISON_OFF), body["message"]
 
 
 def test_a_cut_comparison_says_nothing_of_rows_and_a_ranking_counts_people_only(client: TestClient) -> None:
-    """Regression (the JO-14 review): "The table shows the first 3." for two people and the board, and "the first 7"
-    for five people: the comparison names everyone it shows, as the comparison answered in code and the dashboard's
-    sample do; the people ranking counts its people, never the row of tickets nobody holds."""
     for question in ("Top 2 people by findings rate", "Who are the top 5 people with the most work?",
                      "Show me the top 3 people for reopened work"):
         body = post(client, {"question": question, "level": "people"})

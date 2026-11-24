@@ -1,50 +1,3 @@
-"""POST /ask (contract 4.6): one question in, the Ask service's answer out.
-
-The body is {"question": "<text>", "level": "team" | "people", "mentions": [person id]}
-and nothing else (422 otherwise); level defaults to "team" and mentions to [].
-The dashboard's server sets the level on every request (the browser never
-chooses it): "people" for an admin, and wherever sign-in is off. mentions is
-for a people-level question only (422 at team level): at most ten person ids,
-each p and 12 lower-case hex characters, none twice. The interface refuses
-bodies over 2,000 characters and so does this. A blank question, or one over
-the service's own limit, comes back as not_understood without planning, and
-so does a mention of someone who holds no ticket on the board.
-
-At people level the route works out the board's people with the person rules
-(routes/people.py: people_scope: with the board as its scorecards are worked
-out, and PEOPLE_COMPARISON) and the service answers with them
-(oversight/ask/people.py); the response's `people` lists the people the
-answer names, verified, as person objects ({id, name, avatar}), and is []
-at team level and whenever the answer names no one. Since JO-11 nothing about
-people is declined at people level: a question that evaluates someone gets
-their scorecard or the comparison (oversight/ask/scorecards.py).
-
-It writes only its audit rows: the service records its own qa_log and
-llm_calls rows through a Store opened for the request. A model that fails or
-declines is an outcome the service reports, not an HTTP error.
-
-Governance (JO-12):
-- The viewer (X-Oversight-Viewer, oversight/api/access_log.py) must be named
-  for a people-level question, and for any question while ASK_RATE_LIMIT is
-  set: 422 otherwise, before anything is asked.
-- ASK_RATE_LIMIT (oversight/api/ratelimit.py): over the viewer's limit, 429
-  {"detail", "code": "ask_rate_limited"} with Retry-After in seconds; nothing
-  is written to qa_log and no model is called.
-- A people-level question that read person-level data is recorded in the
-  access log as person_ask, with the qa_id and outcome, whatever the outcome
-  (a not_verified answer still sends its facts). It read person-level data
-  when it mentioned people (picked or typed), used a person tool, ran an
-  analyst query over a view or column that holds people (the people and
-  scorecard views, the assignee columns), or sent facts that hold a person on
-  the board by id or by name. Subjects: the people mentioned, then those the
-  answer names, then everyone its facts hold by person id or by display name
-  (folded for case and accents; a name two people share counts as both).
-  Recorded after the answer is made and before it is sent: when the entry
-  cannot be written, the answer is not sent (500, access_log_unavailable);
-  its qa_log row stays, as the record of the question.
-- `note` (string or null): budget.BUDGET_NOTE when the day's model budget was
-  used up and the answer was built without the model (service.py).
-"""
 from __future__ import annotations
 
 import re
@@ -109,16 +62,10 @@ def _admit(request: Request, viewer: Viewer | None, ctx: ApiContext) -> None:
                        headers={"Retry-After": str(wait)})
 
 
-# An analyst query (oversight/ask/analyst.py) that reads what holds people at people level: the people and scorecard
-# views, and the issues and findings views' assignee columns. Read as a person read whatever its result holds.
 _READS_PEOPLE = re.compile(r"\b(?:people|scorecard|assignee|assignee_id)\b", re.IGNORECASE)
 
 
 class _BoardNames:
-    """Everyone on the board (holding a ticket now, or a member) by display name folded for case and accents, to
-    find the people a fact names: a cell that is a name, or that holds a name of two words or more as whole words
-    (a list or a sentence a query put together). A one-word name counts only as the whole cell, so a summary's
-    word is not taken for someone. A name two people share counts as both."""
 
     def __init__(self, scope: PeopleScope) -> None:
         self.ids: dict[str, list[str]] = {}
@@ -141,8 +88,7 @@ class _BoardNames:
 
 
 def _people_read(response: AskResponse, data: dict[str, Any], scope: PeopleScope) -> tuple[bool, list[str]]:
-    """Whether a people-level answer read person-level data, and whose (see the module docstring): the people
-    mentioned, then those the answer names, then everyone its facts hold by person id or by name."""
+    """Whether a people-level answer read person-level data, and whose (see the module docstring)"""
     tools = {call["name"] for call in data["plan"]}
     queried = any(_READS_PEOPLE.search(str((call.get("params") or {}).get("sql") or ""))
                   for call in data["plan"] if call["name"] == QUERY_TOOL)

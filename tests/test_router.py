@@ -1,5 +1,3 @@
-"""The deterministic question router: the routing table, parameter parsing,
-the per-person refusal and the catalogue filter."""
 from __future__ import annotations
 
 from typing import Any
@@ -21,10 +19,7 @@ def calls_of(plan: Plan) -> Expected:
     return [(call.name, call.params) for call in plan.calls]
 
 
-# --- the routing table ------------------------------------------------------------
-
 ROUTING_TABLE: list[tuple[str, Expected]] = [
-    # the demo's suggested questions
     ("Where do tickets get stuck most?", [("oversight_time_in_status", {"project": "AIL", "group_by": "status", "period": "90d"})]),
     ("Which epics have the most open breaches?", [("oversight_hot_spots", {"project": "AIL"})]),
     (
@@ -44,13 +39,11 @@ ROUTING_TABLE: list[tuple[str, Expected]] = [
     ("Which tickets have been reopened after Done?", [("oversight_list_findings", {"project": "AIL", "rule_id": "R-FLOW-03", "state": "open"})]),
     ("How much of the active sprint has an estimate?", [("oversight_coverage", {"project": "AIL", "field": "estimate", "period": "sprint"})]),
     ("Which open tickets have burned the most of their estimate?", [("oversight_top_issues", {"project": "AIL", "metric": "effort_ratio"})]),
-    # the eval examples in Planning.md section 8
     ("Which ticket types sit longest in In Progress?", [("oversight_time_in_status", {"project": "AIL", "group_by": "issue_type", "period": "90d"})]),
     (
         "Which tickets reached testing without code review last sprint?",
         [("oversight_list_findings", {"project": "AIL", "rule_id": "R-FLOW-01", "state": "all", "period": "sprint"})],
     ),
-    # the rest of the table
     ("What happened to AIL-552?", [("oversight_issue_timeline", {"issue_key": "AIL-552"})]),
     ("Timeline for DEMO-7 please", [("oversight_issue_timeline", {"issue_key": "DEMO-7"})]),
     ("Show the R-EST-01 findings in DEMO", [("oversight_list_findings", {"project": "DEMO", "rule_id": "R-EST-01", "state": "open"})]),
@@ -105,9 +98,6 @@ def test_params_never_hold_nulls() -> None:
             assert None not in call.params.values(), (question, call)
 
 
-# --- per-person questions and the unknown -------------------------------------------
-
-
 @pytest.mark.parametrize(
     "question",
     [
@@ -131,9 +121,6 @@ def test_per_person_questions_are_declined_with_the_reason(question: str) -> Non
 def test_unmatched_questions_are_not_understood_without_a_reason(question: str) -> None:
     plan = plan_for(question)
     assert plan.understood is False and plan.reason is None and plan.calls == []
-
-
-# --- parameter parsing ----------------------------------------------------------------
 
 
 def test_the_context_project_is_the_default_and_a_blank_one_is_omitted() -> None:
@@ -228,9 +215,6 @@ def test_counts_parse_status_type_and_estimate() -> None:
     }
 
 
-# --- the catalogue filter -------------------------------------------------------------
-
-
 def test_only_tools_in_the_catalogue_are_planned() -> None:
     without = [name for name in NAMES if name != "oversight_time_in_status"]
     plan = plan_for("Where do tickets get stuck most?", names=without)
@@ -244,7 +228,6 @@ def test_only_tools_in_the_catalogue_are_planned() -> None:
 def test_an_empty_catalogue_plans_nothing() -> None:
     plan = plan_for("Where do tickets get stuck most?", names=[])
     assert plan.understood is False and plan.calls == []
-    # The per-person refusal does not depend on the catalogue.
     assert plan_for("Who is slowest?", names=[]).reason == PERSON_REASON
 
 

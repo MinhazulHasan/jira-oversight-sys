@@ -1,63 +1,4 @@
-"""One function per check type. Checks only read the database, through RuleContext.
-
-An `Issue` is a sqlite3.Row of `issues` LEFT JOIN `issue_metrics` on issue_key
-(every column of both tables, plus has_metrics). A check returns None (no
-hit), one Hit, or a list of Hits (one per occurrence, e.g. one per skip). Hits
-are stable: the same data gives the same evidence_key on every run, so the
-findings lifecycle can tell "still there" from "new". An evidence key never
-depends on a board's rule settings (JO-15): the two that hold a param
-(effort_ratio_at_least's threshold, no_evidence_after_percentile's pct) take it
-from the catalogue's params (keyed, RuleContext.identity_params) while the
-comparison uses the board's, so a ticket over both an old and a new threshold
-stays the same finding, its message and evidence refreshed with the new one.
-A hit's evidence holds the thresholds it was found under (threshold, pct,
-grace_hours, threshold_days_left and threshold_share, beside what was
-measured), so a finding a later setting closed still says what it crossed.
-
-Messages are short, at team and process level, and name no people. They carry
-no dates (the evidence does, and the reader's screen shows them in the
-reader's zone). Hours use one decimal and ratios two, with the "×" sign. A
-time just past its limit never reads as the limit itself ("Open for 6 days;
-the limit is 6 days"): it is said to a tenth, or as "more than" the limit.
-
-Issue-scoped checks (CHECKS) and their params:
-- missing_estimate: started and no estimate on the project's basis.
-- estimate_after_start {grace_hours: 1}: the estimate was first set more than
-  grace_hours after work started.
-- effort_ratio_at_least {threshold}: effort_ratio >= threshold.
-- entered_stage_without_evidence {stage, evidence}: the first entry into the
-  stage had no evidence recorded at or before it.
-- skipped_stage: one Hit per forward jump over a mapped stage.
-- reopened: one Hit per change from a done-category status to one that is not.
-- in_progress_unassigned: in progress with nobody assigned.
-- stuck_in_status {pct}: longer in the current status than the project's own
-  pct-th percentile for it (silent, with a note, when history is too thin).
-- no_evidence_after_percentile {stage, evidence, pct}: in the stage longer than
-  the project's pct-th percentile with no evidence yet.
-- unestimated_in_active_sprint: in an active sprint with no estimate.
-The general checks custom rules use (JO-20; oversight/rules/registry.py holds their params and bounds). Their evidence
-keys hold no param, so a limit changed never renames a finding:
-- time_in_status_over {statuses, hours}: the current status is one of `statuses` (ignoring case) and the time in it
-  (issue_metrics.status_age_h) is above `hours`. Key "in-status-<status>". A status the board no longer has (renamed
-  or removed in Jira: not in its statuses table, once that lists any) is noted on the rule's run line once, as it is:
-  only the work the last sync still shows in it is checked. A rename in Jira leaves its tickets under the old name
-  until each is next updated, and they are still in that status: their findings stay open rather than closing as
-  fixed because a name changed. A status removed from the workflow moves its tickets on, so nothing is left in it.
-- open_longer_than {days}: not done, and created more than `days` ago. Key "open-too-long".
-- no_update_for {days}: not done, and Jira's updated time is more than `days` ago. Key "no-update".
-- missing_field {field}: assignee (nobody assigned), estimate (no estimate on the board's basis:
-  issue_metrics.estimate_basis "none"), epic (none on the issue nor, for a subtask, on its parent) or sprint (in no
-  sprint). Key "missing-<field>".
-Sprint-scoped checks (SPRINT_CHECKS) take a Sprint instead of an Issue:
-- sprint_at_risk {days_left, not_started_share}: an active sprint ending within
-  days_left days with more than not_started_share of its issues not started; or
-  still open past its end date with any of its issues not done, whatever the
-  share (18 Nov 2026: such a sprint read "On track"). The finding is the same one
-  before and after the end (one evidence key); its evidence says which
-  (overdue) and how many issues are not done. The engine stores these under
-  issue_key "sprint:<id>".
-The status_category filter in applies_to is applied by the engine, not here.
-"""
+"""One function per check type. Checks only read the database, through RuleContext."""
 from __future__ import annotations
 
 import json
@@ -87,11 +28,7 @@ _LABELS: dict[str, str] = {
     "test_signoff": "test sign-off",
 }
 _BASIS_LABELS: dict[str, str] = {"points": "story-point", "hours": "original"}
-# estimate_after_start's grace when its params leave it out: an estimate set within this many hours of the start
-# counts as set before it (the person scorecards read it too, oversight/api/scorecard.py).
 DEFAULT_GRACE_HOURS = 1.0
-# The other params a check reads with a default when its params leave them out. A board's rule settings start from
-# these too where rules.yaml sets nothing (oversight/rules/settings.py).
 DEFAULT_STATUS_PCT = 90.0  # stuck_in_status
 DEFAULT_STAGE_PCT = 75.0  # no_evidence_after_percentile
 DEFAULT_DAYS_LEFT = 2.0  # sprint_at_risk
@@ -123,7 +60,6 @@ _REMOTE_LINK_SQL = "SELECT 1 FROM links WHERE issue_key = ? AND kind = 'remote_l
 
 
 def label(name: str) -> str:
-    """A stage or evidence name as it reads in a sentence ("code_review" -> "code review")."""
     return _LABELS.get(name, name.replace("_", " "))
 
 
@@ -146,11 +82,7 @@ class Sprint:
 
 @dataclass
 class RuleContext:
-    """Everything a check may read, for one project in one run.
-
-    Built by the engine. The project's issues, timelines and changes are read in
-    a few bulk queries the first time they are needed, then served from memory.
-    """
+    """Everything a check may read, for one project in one run."""
 
     store: Store
     process: ProcessConfig
@@ -162,8 +94,6 @@ class RuleContext:
     notes: dict[str, str] = field(default_factory=dict)
     # The rule being evaluated, so a check can leave a note on it (set by the engine).
     current_rule: str | None = None
-    # The params that rule's findings are named by (Rule.identity_params, the catalogue's: set by the engine with
-    # current_rule), so an evidence key never depends on a board's rule settings (keyed). None: the params given.
     identity_params: Mapping[str, Any] | None = None
     _issues: dict[str, sqlite3.Row] | None = field(default=None, init=False, repr=False)
     _intervals: dict[str, list[sqlite3.Row]] | None = field(default=None, init=False, repr=False)
@@ -232,14 +162,7 @@ class RuleContext:
         return self.process.stage_of(self.project, status)
 
     def category_of(self, status: str | None, issue: Issue | None = None) -> str | None:
-        """new | indeterminate | done, from the statuses table; a status mapped to done_stage counts as done.
-
-        With `issue`, a status missing from the table (renamed, removed, or from
-        the project the issue moved from) that is the issue's current status
-        takes the issue's own status_category: derive's lookup
-        (derive/run.py _category_lookup) does the same, so a rule and the
-        metrics never disagree about whether a change was a reopen.
-        """
+        """new | indeterminate | done, from the statuses table; a status mapped to done_stage counts as done."""
         if status is None:
             return None
         if self._categories is None:
@@ -255,7 +178,6 @@ class RuleContext:
         return None
 
     def status_names(self) -> frozenset[str]:
-        """The board's status names as the statuses table lists them, folded for case; empty before its first sync."""
         if self._status_names is None:
             rows = self.store.query("SELECT name FROM statuses WHERE project_key = ?", (self.project,))
             self._status_names = frozenset(row["name"].casefold() for row in rows if row["name"])
@@ -345,9 +267,6 @@ SprintCheckFn = Callable[[Sprint, RuleContext, dict[str, Any]], CheckResult]
 
 
 def keyed(ctx: RuleContext, params: Mapping[str, Any], name: str, default: Any) -> Any:
-    """A param a check names its findings by (it is part of the evidence key): the catalogue's value while the engine
-    runs the rule with a board's settings (ctx.identity_params), so changing a threshold on one board never gives a
-    finding a new id; otherwise the param as given. `default`: the value when the params read leave it out."""
     source = params if ctx.identity_params is None else ctx.identity_params
     return source.get(name, default)
 
@@ -533,8 +452,6 @@ def check_sprint_at_risk(sprint: Sprint, ctx: RuleContext, params: dict[str, Any
     if days_left > within:
         return None
     excluded = {t.casefold() for t in ctx.rules.defaults.exclude_types}
-    # Issues derive hasn't reached are skipped, as the engine skips them for every rule (and
-    # notes it): with no metrics, started_at is unknown, not "not started".
     members = [row for row in (ctx.metrics(k) for k in sprint.issue_keys) if row is not None]
     members = [row for row in members if (row["issue_type"] or "").casefold() not in excluded]
     if not members:
@@ -660,18 +577,14 @@ def _duration(hours: float) -> str:
 
 
 def _limit_hours(hours: float) -> str:
-    """A limit in hours as _duration reads a time (days from 48 hours on), without the trailing ".0": "3 days"."""
     return f"{round(hours / 24, 1):g} days" if hours >= 48 else f"{round(hours, 1):g} h"
 
 
 def _shown_hours(hours: float) -> float:
-    """A time as _duration and _limit_hours show it, to a tenth of its unit (days from 48 hours on), in hours again."""
     return round(hours / 24, 1) * 24 if hours >= 48 else round(hours, 1)
 
 
 def _time_past(hours: float, limit: float) -> str:
-    """A time over a limit in hours, as _duration says it ("3.4 days"), unless that would read as no more than the
-    limit as _limit_hours says it ("29.0 h" past a limit of "29 h"): then "more than" the limit."""
     return _duration(hours) if _shown_hours(hours) > _shown_hours(limit) else f"more than {_limit_hours(limit)}"
 
 
@@ -680,8 +593,6 @@ def _days(days: float) -> str:
 
 
 def _days_past(days: float, limit: float) -> str:
-    """A time over a limit in days, never reading as the limit itself: the whole days gone by while they are over it
-    ("41 days"), else the tenths ("6.4 days"), else "more than" the limit ("more than 6 days")."""
     whole = float(math.floor(days))
     if whole > limit:
         return _days(whole)

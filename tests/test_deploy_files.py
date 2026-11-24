@@ -1,5 +1,4 @@
-"""The deployment pack (Dockerfile, .dockerignore, deploy/docker-compose.yml): what reaches an image, and that no
-secret is in any file. Read as text only: nothing is built or run, and no file under data/ is opened."""
+"""The deployment pack (Dockerfile, .dockerignore, deploy/docker-compose.yml)"""
 from __future__ import annotations
 
 import os
@@ -18,11 +17,7 @@ COMPOSE = PROJECT_ROOT / "deploy" / "docker-compose.yml"
 SECRET_WORDS = ("KEY", "SECRET", "TOKEN", "PASSWORD", "WEBHOOK")
 
 
-# --- .dockerignore, as Docker reads it --------------------------------------------------------------------------------
-
-
 def _pattern(text: str) -> re.Pattern[str]:
-    """A .dockerignore pattern as Go's filepath.Match reads it, with Docker's ** (any number of folders)."""
     out, i = "", 0
     while i < len(text):
         if text.startswith("**/", i):
@@ -54,7 +49,7 @@ def read_ignore(path: Path) -> list[tuple[bool, re.Pattern[str]]]:
 
 
 def ignored(rules: list[tuple[bool, re.Pattern[str]]], relative: str) -> bool:
-    """Docker's rule: the last pattern that matches the path or one of its parent folders decides."""
+    """Docker's rule"""
     parts = relative.split("/")
     candidates = ["/".join(parts[:n]) for n in range(1, len(parts) + 1)]
     verdict = False
@@ -65,8 +60,7 @@ def ignored(rules: list[tuple[bool, re.Pattern[str]]], relative: str) -> bool:
 
 
 def context(root: Path, ignore: Path) -> set[str]:
-    """Every file that reaches the build context. A folder is not entered when it is ignored and no ! pattern
-    could bring anything inside it back (names only: no file is opened)."""
+    """Every file that reaches the build context."""
     rules = read_ignore(ignore)
     found: set[str] = set()
     for folder, dirs, files in os.walk(root):
@@ -121,9 +115,6 @@ def test_every_copy_in_the_dockerfile_has_its_source_in_the_context(image_files:
         assert source in image_files or any(path.startswith(source + "/") for path in image_files)
 
 
-# --- Dockerfile ------------------------------------------------------------------------------------------------------
-
-
 def test_the_dockerfile_runs_slim_python_313_as_an_unprivileged_user() -> None:
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "ARG PYTHON_IMAGE=python:3.13-slim" in text
@@ -141,7 +132,6 @@ DASHBOARD = PROJECT_ROOT.parent / "jira-oversight-ui"
 
 
 def test_neither_image_pulls_more_than_its_base_image() -> None:
-    # A `# syntax=` line makes BuildKit pull a third, floating image (docker/dockerfile) before it builds.
     files = [DOCKERFILE, *([DASHBOARD / "Dockerfile"] if (DASHBOARD / "Dockerfile").exists() else [])]
     for path in files:
         assert not re.search(r"^#\s*syntax\s*=", path.read_text(encoding="utf-8"), re.MULTILINE | re.IGNORECASE), path
@@ -151,10 +141,8 @@ def test_neither_image_pulls_more_than_its_base_image() -> None:
 def test_the_dashboards_code_is_roots_and_its_health_check_asks_the_api() -> None:
     text = (DASHBOARD / "Dockerfile").read_text(encoding="utf-8")
     run = text[text.index("AS run"):]
-    # The runtime user cannot rewrite the server's code; only Next.js's cache folder is its to write.
     assert "--chown" not in run
     assert "chown node:node .next/cache" in run and run.index("chown node:node") < run.index("USER node")
-    # Healthy only when the API answers the dashboard's own settings (a wrong key or a stopped API is unhealthy).
     assert re.search(r'HEALTHCHECK .*\n\s+CMD \["node", "healthcheck.mjs"\]', run)
     assert "COPY --from=build /app/scripts/healthcheck.mjs ./healthcheck.mjs" in run
     assert "!scripts/healthcheck.mjs" in (DASHBOARD / ".dockerignore").read_text(encoding="utf-8").splitlines()
@@ -173,8 +161,6 @@ def _template(path: Path) -> dict[str, str]:
 
 
 def test_the_production_templates_fail_safe(tmp_path: Path) -> None:
-    # Regression: step 5.1 copied the development templates, so a missed line left a developer an admin, the vendor's
-    # domain allowed in, a US region for a UK/EU client, and an email digest with no mail server.
     backend = _template(PROJECT_ROOT / "deploy" / "backend.env.example")
     dashboard = _template(PROJECT_ROOT / "deploy" / "dashboard.env.example")
     for name in ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_PROJECTS", "API_SERVICE_KEY", "AWS_REGION",
@@ -187,28 +173,22 @@ def test_the_production_templates_fail_safe(tmp_path: Path) -> None:
         assert dashboard[name] == "", name
     for text in (str(backend), str(dashboard)):
         assert "@" not in text and "atlassian.net" not in text and "localhost" not in text
-    # Every name is one the code reads: the backend's Settings, the dashboard's own template.
     fields = {name.upper() for name in Settings.model_fields}
     assert set(backend) <= fields, set(backend) - fields
     ui_template = DASHBOARD / ".env.example"
     if ui_template.exists():
         assert set(dashboard) <= set(_template(ui_template))
-    # The backend's loads as it stands (the API then refuses to start without a key, and the doctor fails it).
     copy = tmp_path / "backend.env"
     copy.write_text((PROJECT_ROOT / "deploy" / "backend.env.example").read_text(encoding="utf-8"), encoding="utf-8")
     loaded = Settings(_env_file=copy)
     assert loaded.llm_mode == "stub" and loaded.digest_channel == "file"
 
 
-# The guide is kept out of git (.gitignore): a fresh clone has none, and its text is then not checked.
 GUIDE = PROJECT_ROOT / "docs" / "DEPLOYMENT.md"
 
 
 @pytest.mark.skipif(not GUIDE.exists(), reason="docs/DEPLOYMENT.md is local only, not on this machine")
 def test_the_guide_works_as_written_and_says_what_a_new_auth_secret_does() -> None:
-    # Regressions (JO-12 review): the guide said a new AUTH_SECRET only signs everyone out, though it re-keys every
-    # viewer in the access log; promised a snapshot warning step 3 had already made impossible; used `http2 on;`,
-    # which the nginx most distributions package rejects; never wrote a baseline; and named no picture host exactly.
     text = GUIDE.read_text(encoding="utf-8")
     rotation = text[text.index("5. Rotating a secret later") : text.index("## 6. Build and start")]
     assert "new id in the access log" in rotation and "Export the access log first" in rotation
@@ -224,9 +204,6 @@ def test_the_guide_works_as_written_and_says_what_a_new_auth_secret_does() -> No
 def test_files_are_lf_only() -> None:
     for path in (DOCKERFILE, DOCKERIGNORE, COMPOSE, *([GUIDE] if GUIDE.exists() else [])):
         assert b"\r\n" not in path.read_bytes(), path
-
-
-# --- the compose file -------------------------------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -257,7 +234,6 @@ def test_settings_come_from_env_files_and_no_value_is_a_secret(compose: dict[str
             assert not any(word in name.upper() for word in SECRET_WORDS), f"{service}: {name}"
     text = COMPOSE.read_text(encoding="utf-8")
     assert not re.search(r"(?i)(sk-ant|ATATT|xox[bp]-|BEGIN [A-Z ]*PRIVATE KEY)", text)
-    # The env files stay out of git and out of every image.
     assert "deploy/*.env" in (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
 
 

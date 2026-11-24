@@ -1,21 +1,3 @@
-"""Every board the API serves (JO-17): the boards and their process, read for each request; and board discovery in the
-API's own process.
-
-BoardIndex reads, for a request, the boards the service serves (oversight.boards.served_boards: JIRA_PROJECTS, then
-every board discovery found, with when each last synced) and the process with each of them mapped
-(oversight.boards.mapped_process). Two small queries a request (the boards table and sync_state), only when the request
-needs them: a board outside JIRA_PROJECTS, or a route that reads the snapshot. A board's automatic mapping is worked out
-from the snapshot once after each of its syncs and kept (keyed by the board's name and its last sync's start), so a
-request never repeats that work while nothing changed; the cache is shared by every request, behind a lock.
-
-Discoverer runs board discovery (oversight.boards.discover_boards) in this process, on a background thread, so a request
-never waits on Jira: when the API starts, and when GET /projects finds the stored list older than DISCOVERY_MAX_AGE
-(or none). At most one runs at a time, and one is never started within DISCOVERY_RETRY_AFTER of the last one this
-process started, so a Jira outage is not asked again on every request. A failure is logged (board_discovery_failed,
-with the error's type and status only) and the last list stays. It never runs with BOARD_DISCOVERY off or without the
-Jira settings, and it reads Jira with this process's own settings. The scheduled cycle and "Sync now" run their own
-discovery as their first step (`python -m oversight discover`).
-"""
 from __future__ import annotations
 
 import sqlite3
@@ -65,9 +47,6 @@ class BoardIndex:
                                                                                          repr=False)
 
     def read(self, db_path: Path, conn: sqlite3.Connection | None = None) -> Served:
-        """The boards and the process, from `conn` (a read-only connection the request holds), else through a
-        read-only connection of its own; without a snapshot, JIRA_PROJECTS alone, none synced. A snapshot that cannot be
-        read is read as none (logged), so the board check still answers."""
         if conn is not None:
             return self._read(conn)
         if not Path(db_path).exists():
@@ -104,8 +83,7 @@ class BoardIndex:
 
 
 class Discoverer:
-    """Board discovery in the API's process, in the background (see the module docstring). `discover` None: never
-    (BOARD_DISCOVERY off, or no Jira settings)."""
+    """Board discovery in the API's process, in the background (see the module docstring)."""
 
     def __init__(
         self,
@@ -127,8 +105,7 @@ class Discoverer:
         return self._discover is not None
 
     def start(self) -> bool:
-        """Start a discovery in the background unless one is running or one started here within retry_after; whether
-        it started."""
+        """Start a discovery in the background unless one is running or one started here within retry_after"""
         if self._discover is None:
             return False
         with self._lock:
@@ -141,8 +118,6 @@ class Discoverer:
         return True
 
     def refresh_if_stale(self, last: str | None) -> bool:
-        """Start one when the stored list (the last discovery that worked finished at `last`) is older than
-        DISCOVERY_MAX_AGE, or there is none; whether it started."""
         if self._discover is None:
             return False
         try:
@@ -170,8 +145,7 @@ class Discoverer:
 
 
 def discovery_for(settings: Settings, db_path: Path, now: Callable[[], datetime]) -> Callable[[], object] | None:
-    """Discovery into the API's snapshot with this process's settings, or None: BOARD_DISCOVERY off, or no Jira
-    settings to read it with."""
+    """Discovery into the API's snapshot with this process's settings, or None"""
     if not settings.discovers_boards or not settings.jira_configured:
         return None
 

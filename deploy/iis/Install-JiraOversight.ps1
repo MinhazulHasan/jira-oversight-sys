@@ -2,35 +2,8 @@
 .SYNOPSIS
     Sets up Jira Oversight on IIS: two app pools, two sites, folder permissions, the settings files and three scheduled jobs.
 
-.DESCRIPTION
-    docs/DEPLOYMENT_IIS.md says where this fits (section 8). Run it in an elevated Windows PowerShell 5.1, on the
-    server, after the prerequisites (section 3) and the code (section 4) are in place. Run it with -WhatIf first: it
-    prints every change it would make and changes nothing.
-
-    Safe to run again: each step looks at what is there and changes only what differs, so the same command repairs a
-    site, applies a new parameter or picks up a new release's web.config. It never deletes a site, a pool, a task or
-    a folder, and never overwrites a settings file or the data.
-
-    What it sets up:
-    - Two app pools with no managed code (the application pool identity, always running, never idle-stopped).
-    - The API site, bound to 127.0.0.1 on -ApiPort only: uvicorn behind HttpPlatformHandler, the port from
-      HTTP_PLATFORM_PORT. The dashboard site, bound to https on -HostName (with the certificate) and to http, which
-      redirects: the Next.js standalone server behind HttpPlatformHandler. Each site's folder holds its web.config
-      (deploy\iis\api and deploy\iis\dashboard, filled in) and nothing else.
-    - The settings files, made from deploy\iis\backend.env.example (.env in the backend's folder) and
-      deploy\iis\dashboard.env.example (dashboard.env in the install folder) when there are none, readable by
-      administrators, SYSTEM and the account that needs them only. Sites made together with a new settings file are left
-      stopped until you have filled it in.
-    - Folder permissions: each pool's identity reads its code and writes only what it must (data, logs, reports for
-      the API; the stdout log folder and .next\cache for the dashboard).
-    - Three jobs under \JiraOversight in Task Scheduler, run by -TaskUser through Invoke-OversightTask.ps1: Sync (a
-      cycle every -SyncIntervalMinutes), Full sync (every issue, once a night) and Backup (once a day).
-
-    It installs no Windows feature and no module, and changes nothing outside the sites, pools, folders and tasks above.
-
 .PARAMETER HostName
-    The address people open, without a scheme, for example oversight.example.com. It must be the host of APP_URL in the
-    dashboard's settings.
+    The address people open, without a scheme, for example oversight.example.com.
 
 .PARAMETER CertificateThumbprint
     The thumbprint of the HTTPS certificate in Cert:\LocalMachine\My (it must name -HostName).
@@ -45,8 +18,7 @@
     The built dashboard (Publish-Dashboard.ps1). Default: <InstallRoot>\dashboard.
 
 .PARAMETER DashboardEnvFile
-    The dashboard's settings file. Default: <InstallRoot>\dashboard.env. Keep this default: `doctor --production` looks
-    for it there.
+    The dashboard's settings file. Default: <InstallRoot>\dashboard.env.
 
 .PARAMETER SitesPath
     The folder for the two sites' own folders. Default: <InstallRoot>\sites.
@@ -58,12 +30,10 @@
     node.exe. Default: the one on the PATH.
 
 .PARAMETER ApiPort
-    The loopback port the API site listens on, and the dashboard calls. Default: 3300. API_PORT in the backend's .env
-    must say the same.
+    The loopback port the API site listens on, and the dashboard calls. Default: 3300.
 
 .PARAMETER TaskUser
-    The account the scheduled jobs run as. Default: NT AUTHORITY\SYSTEM. A managed service account such as
-    CONTOSO\svc-oversight$ works too, and is given the access it needs.
+    The account the scheduled jobs run as. Default: NT AUTHORITY\SYSTEM.
 
 .PARAMETER SyncIntervalMinutes
     Minutes between two cycles, 5 to 1440. Default: 60.
@@ -79,9 +49,6 @@
 
 .EXAMPLE
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\iis\Install-JiraOversight.ps1 -HostName oversight.example.com -CertificateThumbprint 0123...ABCD -WhatIf
-
-.EXAMPLE
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\iis\Install-JiraOversight.ps1 -HostName oversight.example.com -CertificateThumbprint 0123...ABCD
 #>
 #Requires -Version 5.1
 [CmdletBinding(SupportsShouldProcess)]
@@ -121,8 +88,6 @@ $changes = 0
 
 function Write-Step([string] $Message) { Write-Host "[jira-oversight] $Message" }
 
-# A problem that stops a real run. A -WhatIf run only reports it: it is how the plan is read on a machine that is not
-# ready yet.
 function Stop-Or-Warn([string] $Message) {
     if ($WhatIfRun) { Write-Warning "$Message (a real run would stop here)" } else { throw $Message }
 }
@@ -267,8 +232,6 @@ function Copy-Template([string] $Template, [string] $Destination) {
     return $true
 }
 
-# A web.config from its template: every placeholder (a word between double underscores) filled in, written only when
-# the file differs.
 function Write-WebConfig([string] $Template, [string] $Destination, [hashtable] $Values) {
     $text = [System.IO.File]::ReadAllText($Template)
     foreach ($name in $Values.Keys) {
@@ -306,8 +269,6 @@ function Initialize-Pool([string] $Name) {
         if ($PSCmdlet.ShouldProcess($Name, 'create the app pool')) { New-WebAppPool -Name $Name | Out-Null }
         $script:changes++
     }
-    # No managed code; the application pool identity; started with IIS and never stopped for being idle (HttpPlatformHandler
-    # would end the app's process with it); no scheduled recycle, which would restart it in the middle of a sync request.
     Set-IisValue $path 'managedRuntimeVersion' ''
     Set-IisValue $path 'managedPipelineMode' 'Integrated'
     Set-IisValue $path 'enable32BitAppOnWin64' $false

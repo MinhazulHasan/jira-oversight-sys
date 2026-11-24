@@ -1,26 +1,6 @@
-# The rule catalogue (Planning.md Phases 3 and 4). Versioned: any change to a
-# rule's logic or threshold in this file bumps `version`, so old and new
-# findings are never mixed (open findings from an older version are resolved
-# as "superseded").
-#
-# kind:     rule    = one of James's "hard and fast rules" ("blatantly bad")
-#           warning = an early warning ("on its way to being bad")
-# severity: breach | warning   (what the finding is reported as)
-#
-# Board settings (JO-15). This file is what every board starts from. An admin
-# changes one board's rules from the dashboard (Governance, Rule settings): a
-# rule on or off, its severity, and its numeric thresholds within safe bounds
-# (grace_hours, threshold, pct, days_left, not_started_share; never stage or
-# evidence). Those settings are kept in the snapshot database with every change
-# made to them, and override this file on that board only. Everything else, and
-# `defaults`, is set here alone; a value edited here moves every board that has
-# not set its own.
-#
-# Thresholds are placeholders until James agrees them (open questions 3 and 4).
 version: 0.1.0
 
 defaults:
-  # Epics are containers, not work: rules never apply to them unless a rule says so.
   exclude_types: [Epic]
   # History used for percentile thresholds (W-AGE-01, W-REV-01).
   history_days: 180

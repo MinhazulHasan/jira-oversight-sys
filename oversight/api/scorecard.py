@@ -1,90 +1,3 @@
-"""Person scorecards and the people comparison (JO-11; contract 4.15 in the jira-oversight-ui repository).
-
-The product owner's decision of 11 Nov 2026: an admin (people level) can ask how anyone's tickets follow the process,
-and see everyone side by side. A scorecard is one person's process figures from Jira, each next to the whole board's,
-with the tickets behind them; the comparison orders everyone by how closely their tickets follow the process. The
-figures are facts: whatever is written about them never labels anyone, and the decision about a person is the admin's.
-
-One place computes every measure, for the board and for people: GET /people/scorecard (routes/people.py), Ask's two
-person tools and the analyst's scorecard view (oversight/ask/people.py, oversight/ask/scorecards.py) and the tests all
-read it here. It is worked out on read from what the sync, derive and rules steps already store (issues,
-issue_metrics, status_intervals, findings, worklogs, board_members, people): no schema change, no sync step, nothing
-written, so a sync running from disk is never touched. load_board() reads a board in eight queries, whatever its
-size: people and figures in bulk, never one query per person or ticket.
-
-Whose tickets. A person's tickets are the board's work (every issue type but the rules' defaults.exclude_types: an
-Epic is a container, not work, as every rule counts it) whose current assignee they are: basis "current_assignee", as
-findings follow the ticket's current assignee. The board's are all of its work, assigned or not. `tickets` (a
-person's, the board's) counts the same work, Epics left out: one meaning of a person's tickets everywhere (JO-12,
-G5), GET /people's and the directory's count too. Someone who holds only Epics holds none of the board's work: they
-are on it (the directory lists them) with no tickets, as a member who holds none is.
-
-The period. `to` is the snapshot's as-of (the board's last successful sync; now, before the first one) and `from` is
-`days` (30, 90 or 180) before it; "in the period" is from <= t <= to, on the stored UTC timestamps.
-
-The eleven measures (MEASURES, in the contract's order):
-- open_tickets, in_progress (counts): their work whose status category is not done, and is in progress, now (the
-  category the Issue page shows, as GET /people counts it);
-- done_in_period (count): their work with issue_metrics.done_at in the period;
-- estimated_before_start (rate): of their work started in the period (started_at), the share whose estimate was first
-  set no later than work started, allowing R-EST-02's grace (grace_hours from the board's rules: rules.yaml's 1 hour
-  unless the board's rule settings change it, JO-15), so the figure and R-EST-02's findings agree;
-- time_logged (rate): of their work done in the period, the share with time logged on it or its subtasks
-  (time_spent_s or aggregate_time_spent_s above 0);
-- within_estimate (rate): of their work done in the period with an effort ratio and time logged (time_spent_s above
-  0: an estimate with nothing logged against it is missing data, not effort, as the effort medians count it; contract
-  section 8), the share under R-EFF-01's threshold (the board's: rules.yaml's unless its rule settings change it,
-  never written here): R-EFF-01 breaches at it or over it, so the figure and R-EFF-01's findings agree;
-- stuck_now (rate): of their open work, the share with an open W-AGE-01 finding;
-- reopened (rate): of their work done in the period, the share reopened after Done (reopen_count above 0; R-FLOW-03);
-- skipped_stage (rate): of their work done in the period, the share that skipped a stage (skipped_stages; R-FLOW-02);
-- code_review (rate): of their work done in the period that reached R-FLOW-01's stage (testing) and that the rules
-  have checked, the share with no R-FLOW-01 breach (one that is open, or resolved for any reason but "cleared": an
-  aged-out breach still happened). Checked: the rules' look-back (defaults.lookback_days) never checks work finished
-  before it, so done work counts only when it was finished within the look-back of the first rules run that could
-  measure R-FLOW-01 on the board, or when R-FLOW-01 has a finding on it; work the rules never saw is not counted as
-  reviewed (on a young rules history the 180-day figure would otherwise count it so). With no look-back, all of it;
-- open_findings_per_10 (ratio): the open breaches and warnings on their open work per 10 of their open tickets, to
-  one decimal (numerator: those findings; denominator: the open tickets). Both sides count the same tickets: an open
-  finding on finished work (an effort breach, say, until the look-back ages it out) would otherwise be set against
-  open tickets it is not on, and someone who has just finished their work would look worst.
-A rate is a whole percentage and the ratio has one decimal, both rounded half up as a reader rounds: 5 of 8 is 63%.
-
-Enough: a figure rests on at least MIN_TICKETS (5) tickets, its denominator; a count always does. A figure that rests
-on fewer is still given ("1 of 2"), but never compared. vs_board, for rates and the ratio when both sides have enough:
-"level" within 5 percentage points of the board (rates) or 0.5 (the ratio), on the figures as shown; otherwise
-"closer" or "further" by the measure's direction; null for counts, and whenever either side has too few.
-
-Measurable. A measure the board cannot show is measurable false, with the reason (the contract's words), and every
-value null. One truth per board (JO-12, G11): skipped_stage and code_review are measurable exactly when the rules
-engine measures their rule on the board, so a scorecard never calls a measure unmeasurable beside an Overview that
-lists the rule's open findings. "Measures" is what the engine recorded in rule_status in its latest run on the board
-(measurable 1), for a rule the board's rules still have on (rules.yaml with the board's rule settings, JO-15: a rule
-an admin turned off there is measured no more); before any rules run has reached the board, the engine's own test
-(catalog.rule_missing: no evidence or stage the rule needs is missing) stands for it.
-- skipped_stage: R-FLOW-02 is not measured on the board ("This board has no stages to skip.");
-- code_review: R-FLOW-01 is not measured on the board (no code-review evidence, or no testing stage, say), or the
-  board's rules have no R-FLOW-01 that is on ("This board doesn't record code review in Jira.");
-- time_logged: no worklog on the board started in the period;
-- estimated_before_start, within_estimate: the board's estimate field (process.yaml) is not configured on the site
-  (fields.yaml has no story points field; original estimates are a Jira system field, and a synthetic board's demo
-  data carries its own); within_estimate also when the catalogue gives R-EFF-01 no threshold;
-- a measure whose rules the board has turned off (JO-15: an admin's rule settings, or rules.yaml itself), so its rules
-  hold no one to it there: "Its rule is off on this board." (estimated_before_start: both R-EST-01 and R-EST-02 off,
-  "Its rules are off on this board."; code_review: R-FLOW-01 off). A board that could not show the measure with them on
-  says why instead (code review not recorded, say), and stuck_now never reads 0% for want of a W-AGE-01 that is off.
-
-The comparison (order(), Ask's oversight_people_compare) puts everyone who holds a ticket in the order a question
-asks for (the product owner's decision of 13 Nov 2026, JO-14: answer exactly what was asked). "closer" (no direction
-word in the question): closer to the process first, by one measure highest or lowest first by its direction; overall,
-by the number of measures on which they are closer to the process than the board, most first, ties by
-open_findings_per_10 (lower first; a figure on too few tickets is never compared, so it counts as the most). "most"
-(most, highest, largest, top N): the figure highest first, whichever way the measure points; overall, the same order
-as "closer". "fewest" (fewest, least, lowest, smallest, bottom N): the figure lowest first; overall, the exact
-reverse of "most" (fewest measures closer first, ties by open_findings_per_10 higher first). A count (RANKED_COUNTS)
-has no closer side, so "closer" puts it most first. Whatever the order, people with too few tickets for a rate or the
-ratio come last, and overall the people compared on no measure; ties then keep the directory's order.
-"""
 from __future__ import annotations
 
 import json
@@ -123,7 +36,6 @@ OVERALL = "overall"  # the comparison over every measure, rather than one
 Kind = Literal["count", "rate", "ratio"]
 Direction = Literal["neutral", "higher_is_closer", "lower_is_closer"]
 VsBoard = Literal["closer", "further", "level"]
-# The comparison's order (JO-14): closer to the process first (the default), or the figure highest or lowest first.
 Order = Literal["closer", "most", "fewest"]
 ORDERS: tuple[str, ...] = ("closer", "most", "fewest")
 
@@ -155,10 +67,6 @@ MEASURES: tuple[Measure, ...] = (
 BY_KEY: dict[str, Measure] = {measure.key: measure for measure in MEASURES}
 # The measures a person can be closer to the process on, or further from it: the rates and the ratio.
 COMPARABLE: tuple[str, ...] = tuple(measure.key for measure in MEASURES if measure.direction != "neutral")
-# The counts everyone can be put in order by (most first: who finished the most, who has the most in progress, whose
-# backlog is biggest; or fewest first). A count is never set beside the board as closer or further. The open tickets
-# here are the scorecard's (Epics left out), so the biggest backlog is counted as one person's backlog is; JO-09's
-# ranking by GET /people's open tickets (oversight_people) stays as it was.
 RANKED_COUNTS: tuple[str, ...] = ("open_tickets", "in_progress", "done_in_period")
 # The counts of now, which no period bounds: their comparison takes no days.
 NOW_COUNTS: tuple[str, ...] = ("open_tickets", "in_progress")
@@ -187,8 +95,7 @@ def unmeasured() -> Value:
 
 
 def percent(numerator: int, denominator: int) -> int:
-    """numerator / denominator as a whole percentage, rounded half up as a reader rounds: 5 of 8 is 63. The same
-    integer is the ratio per 10 in tenths: 7 per 3 is 233, so 23.3 per 10."""
+    """numerator / denominator as a whole percentage, rounded half up as a reader rounds"""
     return (200 * numerator + denominator) // (2 * denominator)
 
 
@@ -237,8 +144,6 @@ class Board:
     work: tuple[Ticket, ...]
     holdings: Mapping[str, int]  # person id -> tickets held now (their work, Epics left out)
     holders: tuple[Person, ...]  # everyone holding a ticket now (work), in the directory's order
-    # Everyone else on the board, holding none of its work (its members who hold no ticket, and anyone holding only
-    # Epics), in the directory's order
     members: tuple[Person, ...]
     reasons: Mapping[str, str]  # measure key -> why this board can never show it
     last_worklog: str | None  # the latest worklog started on the board up to the as-of
@@ -264,8 +169,6 @@ class Board:
 
     @property
     def records_code_review(self) -> bool:
-        """Whether code review shows on this board (the caveat's last sentence is said when it does not): a board that
-        records it, with R-FLOW-01 turned off, does."""
         return self.reasons.get("code_review") != NO_CODE_REVIEW
 
     def rule_ids(self, measure: Measure) -> list[str]:
@@ -311,8 +214,6 @@ _TICKETS_SQL = """
     LEFT JOIN issue_metrics AS m ON m.issue_key = i.issue_key
     WHERE i.project_key = ?
 """
-# Per issue: its open findings, whether one of them is W-AGE-01's, and whether R-FLOW-01 ever breached on it (open, or
-# resolved for any reason but "cleared"). A sprint finding's key is no ticket's, so it counts for no one.
 _FINDINGS_SQL = """
     SELECT issue_key,
            SUM(CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END) AS open_findings,
@@ -386,7 +287,7 @@ def load_board(conn: sqlite3.Connection, ctx: ApiContext) -> Board:
         if who is not None:
             on_the_board.setdefault(who["id"], who)
         if (row["issue_type"] or "").casefold() in excluded:
-            continue  # a container, not work: never in a measure, and no one's ticket (JO-12, G5)
+            continue
         if who is not None:
             holdings[who["id"]] += 1
             holders.setdefault(who["id"], who)
@@ -417,8 +318,7 @@ def load_board(conn: sqlite3.Connection, ctx: ApiContext) -> Board:
 
 
 def _checked_since(conn: sqlite3.Connection, project: str, rules: RulesConfig) -> str | None:
-    """Since when the rules have checked done work for R-FLOW-01 on the board: the look-back counted back from their
-    first run that could measure it; "" when there is no look-back (all of it), None when no run has measured it."""
+    """Since when the rules have checked done work for R-FLOW-01 on the board"""
     lookback = rules.defaults.lookback_days
     if lookback is None:
         return ""
@@ -481,8 +381,7 @@ def _rule(rules: RulesConfig, rule_id: str, *, enabled: bool = False) -> Rule | 
 
 
 def _effort_limit(rules: RulesConfig) -> float | None:
-    """R-EFF-01's threshold on the board (rules.yaml's unless the board's rule settings change it); None when the
-    rules give it none."""
+    """R-EFF-01's threshold on the board (rules.yaml's unless the board's rule settings change it)"""
     rule = _rule(rules, EFFORT_RULE)
     threshold = rule.params.get("threshold") if rule is not None else None
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not threshold > 0:
@@ -500,9 +399,6 @@ def _grace_hours(rules: RulesConfig) -> float:
 
 
 def _measured_rules(conn: sqlite3.Connection, ctx: ApiContext) -> frozenset[str]:
-    """The rules the engine measures on the board (JO-12, G11: one truth per board): each enabled rule its latest run
-    there recorded as measurable in rule_status; before any rules run has reached the board, each enabled rule the
-    engine's own test finds nothing missing for (catalog.rule_missing), as the Overview's rule list judges them."""
     enabled = {rule.id: rule for rule in ctx.rules.enabled_rules}
     latest = {row["rule_id"]: row["measurable"] for row in _rows(conn, _LATEST_STATUS_SQL, (ctx.project, ctx.project))}
     if latest:
@@ -511,9 +407,7 @@ def _measured_rules(conn: sqlite3.Connection, ctx: ApiContext) -> frozenset[str]
 
 
 def _reasons(ctx: ApiContext, effort_limit: float | None, measured: frozenset[str]) -> dict[str, str]:
-    """The measures this board can never show, whatever the period, and why. measured: the rules the engine measures
-    on the board (_measured_rules). A measure whose rules are all off on the board (JO-15) says so, unless the board
-    could not show it with them on either."""
+    """The measures this board can never show, whatever the period, and why."""
     process, project = ctx.process, ctx.project
     off = frozenset(rule.id for rule in ctx.rules.rules if not rule.enabled)
     reasons: dict[str, str] = {}
@@ -536,8 +430,6 @@ def _reasons(ctx: ApiContext, effort_limit: float | None, measured: frozenset[st
 
 
 def _turned_off(ctx: ApiContext, rule_id: str, off: frozenset[str]) -> str | None:
-    """RULE_OFF when the board has turned the rule off though it could measure it (nothing the rule needs is missing
-    there); None otherwise."""
     rule = _rule(ctx.rules, rule_id) if rule_id in off else None
     return RULE_OFF if rule is not None and not rule_missing(rule, ctx.process, ctx.project) else None
 
@@ -622,8 +514,6 @@ def person_values(board: Board, person_id: str, period: Period, against: Mapping
 
 
 def scorecard(board: Board, days: int, wanted: Sequence[str] | None, *, comparison: bool) -> dict[str, Any]:
-    """GET /people/scorecard's body but meta (contract 4.15). wanted: the person ids asked for (each on the board: the
-    route checks), or None for everyone who holds a ticket, who are listed only when comparison is on."""
     period = board.period(days)
     against = board_values(board, period)
     if wanted is None:
@@ -692,9 +582,7 @@ def too_few(board: Board, standing: Standing, period: Period) -> int:
 
 
 def effective_order(measure: str, first: str) -> Order:
-    """The order a comparison by this measure is put in, as the facts record it: as asked, but a count has no closer
-    side, so "closer" puts it most first; and overall, the most measures closer to the process first is the closer
-    order itself, so "most" is "closer" there. ValueError for an order that is none of ORDERS."""
+    """The order a comparison by this measure is put in, as the facts record it"""
     if first not in ORDERS:
         raise ValueError(f"not an order: {first!r} (closer, most or fewest)")
     if first == "fewest":
@@ -707,10 +595,7 @@ def effective_order(measure: str, first: str) -> Order:
 
 
 def order(everyone: Sequence[Standing], measure: str, *, first: str = "closer") -> list[Standing]:
-    """The comparison's order (see the module docstring). measure: a key of COMPARABLE, or OVERALL, or a count of
-    RANKED_COUNTS. first: "closer" (closer to the process first; a count most first), "most" (the figure highest
-    first) or "fewest" (lowest first). Too few tickets for a rate or the ratio, or no measure compared overall, last
-    whatever the order; ties keep the directory's order (the sorts are stable)."""
+    """The comparison's order (see the module docstring)."""
     first = effective_order(measure, first)
     if measure == OVERALL:
         compared = [one for one in everyone if one.compared]
@@ -719,8 +604,6 @@ def order(everyone: Sequence[Standing], measure: str, *, first: str = "closer") 
             return _lower_first(_compared_value(one.values["open_findings_per_10"]))
 
         if first == "fewest":
-            # The exact reverse of the closer order: the fewest measures closer first, ties by the ratio highest first
-            # (a figure on too few tickets counting as the most, so it leads its tie).
             compared.sort(key=lambda one: (one.closer, -ratio(one)))
         else:
             compared.sort(key=lambda one: (-one.closer, ratio(one)))

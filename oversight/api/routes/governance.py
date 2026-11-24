@@ -1,37 +1,3 @@
-"""GET /access-log (contract 4.16) and GET /usage (contract 4.17): the Governance area, people level only (JO-12).
-
-Both answer people level only, as the scorecard does: the dashboard's server names the level on every request
-(?level=team|people, team when left out) and at team level the answer is 403 {"detail", "code":
-"people_level_only"}. Neither is board-scoped: ?project is checked as everywhere and otherwise ignored (a board
-never synced is no refusal here, JO-17), and `meta` names every board the service serves (meta.service_meta). Any
-other parameter name, a single-valued one given twice, or a value out of bounds is a 422, as the API's other bad
-parameters are; an empty value counts as not given.
-No-store, as every JSON route.
-
-GET /access-log: who viewed whose person-level data (oversight/api/access_log.py), newest first, a page at a time.
-- from, to: calendar days (YYYY-MM-DD) in the report zone (meta.report_timezone), both included, from 2000-01-01 to
-  2100-12-31 (any other day is a 422, never a date the zone cannot hold); from after to is a 422. person: a person
-  id among an entry's subjects. viewer: a viewer hash (32 hex characters, or local). action: one of the actions
-  (access_log.ACTIONS: JO-12's six and JO-13's person_card_view), repeatable (any of them). cursor: next_cursor
-  from the page before. limit: 1 to 200, 50 when left out.
-- export=true: the same filters for a CSV export of them, up to 10,000 entries in one answer (limit up to 10,000,
-  10,000 when left out; cursor as for a page), recorded as access_log_export instead of access_log_view.
-- {meta, entries: [{id, at, viewer: {hash, name}, level, project, action, subjects: [person], detail}],
-  next_cursor, facets}: next_cursor is null on the last page. A subject no longer on any board the service serves is
-  {"id", "name": "Former member", "avatar": null}. facets, on a first page (no cursor, not an export; null
-  otherwise): every viewer ({hash, name}, by the name of their latest entry) and every person read (person objects)
-  that the whole log holds, whatever the filters, so the filters can offer them all, on any board
-  (access_log.read_facets).
-- The request must name its viewer (X-Oversight-Viewer, else 422), and every export, and a page at most once per
-  viewer and person filtered by in any ten minutes (access_log.ACCESS_LOG_VIEW_ONCE_IN: reloads and page turns never
-  fill the log with its own views), is itself recorded (access_log_view or access_log_export, with the person filtered
-  by as its subject, and as its detail the filters, {"from", "to", "actions", "viewer"}, and "entries", the number of
-  entries it returned), after it is read: a page never holds its own entry. When the entry cannot be written, nothing
-  is served (500, access_log_unavailable).
-
-GET /usage: today's questions, model calls and tokens, the daily model budget (LLM_DAILY_TOKEN_BUDGET) and how much
-of it is used, and the last seven UTC days (oversight/llm/budget.py). Its only parameters are project and level.
-"""
 from __future__ import annotations
 
 import re
@@ -74,8 +40,6 @@ _SINGLE = frozenset({PROJECT_PARAM, LEVEL_PARAM, "from", "to", "person", "viewer
 _PARAMETERS = _SINGLE | {"action"}
 _USAGE_PARAMETERS = frozenset({PROJECT_PARAM, LEVEL_PARAM})
 _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-# The days a filter may name: far wider than any log, and narrow enough that a day and the next one's midnight exist
-# in every zone (9999-12-31 + 1 day, or 0001-01-01 east of UTC, overflow).
 FIRST_DAY, LAST_DAY = date(2000, 1, 1), date(2100, 12, 31)
 _WHOLE = re.compile(r"[0-9]{1,6}")  # ASCII digits only: str.isdigit takes characters int() refuses ("²")
 _TRUE, _FALSE = frozenset({"true", "1"}), frozenset({"false", "0"})

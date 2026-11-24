@@ -1,12 +1,3 @@
-"""GET /trends (contract 4.8): the weekly series for one metric.
-
-Parameters as the interface validates them (src/lib/api/params.ts): `metric`,
-one of the six and required; `period`, "week" (the default and only value);
-`last_n`, 1 to 12 weeks ending with the current one, default 12. A name the
-endpoint does not take, or one given twice, is refused as params.ts refuses it.
-Every refusal is a 422. The points are the ones the Overview's trend card for
-the same metric shows (oversight.api.aggregates.trend_series).
-"""
 from __future__ import annotations
 
 import sqlite3

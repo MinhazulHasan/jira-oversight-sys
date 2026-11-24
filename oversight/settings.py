@@ -12,8 +12,6 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from oversight.errors import ConfigError
 
-# Relative paths in settings resolve against the project folder, so the CLI
-# behaves the same from Task Scheduler as from a terminal.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Project keys end up inside JQL, so anything else is rejected up front.
@@ -27,8 +25,6 @@ _RATE_LIMIT = re.compile(r"^([1-9][0-9]{0,5})/([1-9][0-9]{0,3})m$")
 RATE_LIMIT_MAX_MINUTES = 1440  # a day
 # BACKUP_KEEP: how many of its own backups `python -m oversight backup` keeps (oversight/backup.py).
 BACKUP_KEEP_DEFAULT = 14
-# SYNC_INTERVAL_MINUTES: the scheduled cycle's interval (`python -m oversight cycle --loop`, oversight/cycle.py).
-# Never more often than every 5 minutes, which spares the Jira site; at most once a day.
 SYNC_INTERVAL_DEFAULT = 60
 SYNC_INTERVAL_MIN = 5
 SYNC_INTERVAL_MAX = 1440
@@ -54,8 +50,6 @@ class Settings(BaseSettings):
     jira_api_token: SecretStr = SecretStr("")
     # The boards the scheduled cycle always keeps in sync; the first is the dashboard's default board.
     jira_projects: Annotated[list[str], NoDecode] = ["AIL"]
-    # JO-17. on: the service serves every Jira board (project) its Jira account can browse, found by a read-only
-    # project search (oversight/boards.py), besides JIRA_PROJECTS. off: JIRA_PROJECTS only.
     board_discovery: Literal["on", "off"] = "on"
     jira_timeout_s: float = 30.0
     jira_connect_timeout_s: float = 5.0
@@ -68,23 +62,11 @@ class Settings(BaseSettings):
     config_dir: Path = Path("config")
     reports_dir: Path = Path("reports")
 
-    # --- reporting ----------------------------------------------------------
-    # The organisation's reporting time zone, an IANA name such as
-    # America/Chicago: report days, digest dates and the insights week are cut
-    # in it, and every API response names it. Blank: UTC. Never taken from a
-    # Jira profile: the sync account's zone only writes JQL dates.
     report_timezone: str = ""
 
-    # --- llm (Phase 6 onwards) ----------------------------------------------
-    # stub: the scripted provider answers from the data with no API key (demos,
-    # CI). live: the configured provider.
     llm_mode: Literal["stub", "live"] = "stub"
-    # anthropic: the Claude API with ANTHROPIC_API_KEY. bedrock: Claude on Amazon
-    # Bedrock, signed with the AWS settings below.
     llm_provider: Literal["anthropic", "bedrock"] = "anthropic"
     anthropic_api_key: SecretStr = SecretStr("")
-    # Amazon Bedrock. Leave the keys and profile blank on an AWS host to use its
-    # role through the standard AWS credential chain.
     aws_region: str = ""
     aws_access_key_id: SecretStr = SecretStr("")
     aws_secret_access_key: SecretStr = SecretStr("")
@@ -99,15 +81,10 @@ class Settings(BaseSettings):
     # The plan may make at most this many catalogue calls; each returns at most this many rows.
     ask_max_calls: int = 3
     ask_row_limit: int = 200
-    # analyst: with a live model, Claude answers any question by querying the snapshot
-    # (read-only views, several steps). catalog: only the fixed lookups. LLM_MODE=stub
-    # always uses the catalogue: the scripted provider cannot hold a conversation.
     ask_mode: Literal["analyst", "catalog"] = "analyst"
     # The analyst's tool turns per question (each may run several queries).
     ask_max_steps: int = 6
 
-    # --- notifications (Phase 5) --------------------------------------------
-    # file: writes the digest under reports/digests (works out of the box).
     digest_channel: Literal["file", "email", "teams"] = "file"
     smtp_host: str = ""
     smtp_port: int = 587
@@ -126,34 +103,16 @@ class Settings(BaseSettings):
     api_reload: bool = False
     # Serve interactive docs at /docs (Authorize with the service key). Local use only.
     api_docs: bool = False
-    # The UI's server route presents this key; blank is refused unless
-    # API_ALLOW_INSECURE=true, so an open API is always a choice somebody made.
     api_service_key: SecretStr = SecretStr("")
     api_allow_insecure: bool = False
     cors_allow_origins: str = "http://localhost:3400"
-    # Person scorecards (JO-11): comparing people (the everyone table, several people side by side) is on unless
-    # an organisation turns it off; off, the API and Ask refuse any comparison, whatever the browser sends.
-    # Anything but "on" or "off" is a config error at start.
     people_comparison: Literal["on", "off"] = "on"
 
-    # --- governance (JO-12) -------------------------------------------------
-    # The access log (who viewed whose person-level data, oversight/api/access_log.py) keeps an entry this many days,
-    # then deletes it: at the API's start and once a day. At least 30.
     access_log_days: int = ACCESS_LOG_DAYS_DEFAULT
-    # Questions each viewer may ask (POST /ask) in a window: "off" (the default: an admin is never limited unless the
-    # organisation chooses to), or "<count>/<n>m", such as 30/10m. Counted in memory, per process.
     ask_rate_limit: str = "off"
-    # Model tokens (input + output) per UTC day, across Ask, the weekly insights and the rule drafts (JO-20), counted
-    # from llm_calls. 0 (the default) is no limit. Once reached, Ask answers without the model, insights skip and a
-    # rule draft is not offered, until 00:00 UTC.
     llm_daily_token_budget: int = 0
 
-    # --- deployment (JO-12) -------------------------------------------------
-    # `python -m oversight backup` keeps this many of the newest backups it made (in the backups folder beside the
-    # snapshot) and deletes its older ones; any other file there is left alone. At least 1.
     backup_keep: int = BACKUP_KEEP_DEFAULT
-    # `python -m oversight cycle --loop` (the deployment's sync service) starts a cycle this many minutes after the
-    # last one started: 5 to 1440.
     sync_interval_minutes: int = SYNC_INTERVAL_DEFAULT
 
     # --- demo data ----------------------------------------------------------
@@ -354,8 +313,6 @@ class Settings(BaseSettings):
                 f"missing Jira settings: {', '.join(missing)} "
                 "(copy .env.example to .env and fill them in)"
             )
-        # Every request carries the API token; never send it unencrypted. (The
-        # value isn't echoed: a mistyped URL may hold credentials.)
         if not self.jira_base_url.lower().startswith("https://"):
             raise ConfigError(
                 "JIRA_BASE_URL must start with https:// (e.g. https://<site>.atlassian.net): "

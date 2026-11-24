@@ -1,28 +1,4 @@
-"""The daily model budget and the usage figures (JO-12), both read from the audit tables.
-
-LLM_DAILY_TOKEN_BUDGET caps the model tokens (input + output) spent in one UTC day, across Ask, the weekly insights
-and the AI drafts of rules (JO-20). 0, the default, is no limit. The day runs from 00:00 to 00:00 UTC, so the budget
-resets at midnight UTC.
-
-- Spent: the input and output tokens of every model call recorded that day in llm_calls (Ask's plan, compose and
-  analyst calls, the insights' calls and the rule drafts' alike). The scripted provider (LLM_MODE=stub, and Ask's
-  answers built without the model) calls no model, so its rows are not counted. A call that failed carries the tokens
-  its response reported, which are billed (a refusal, a reply cut off at max_tokens or with no structured output:
-  llm.provider.LLMError's usage), and none when no response came back (a transport error).
-- Reached: a budget is set and the day's spend is at or over it. The check is made before each question and before
-  each board's insights call, so one question may take the day's spend past the budget; the next one is answered
-  without the model. When it is reached, Ask answers in catalogue mode with the scripted provider (answers built in
-  code from the same facts, no model) and says so with BUDGET_NOTE; the insights skip the board with a log line; a
-  rule draft answers unavailable, with no call, and a draft that reaches it skips its repair call
-  (oversight/api/rule_draft.py).
-- Usage (GET /usage): per UTC day, the questions asked (qa_log: every board, level and outcome), the model calls
-  (llm_calls rows, the scripted provider's left out, failed calls included) and their tokens; and ai_model, "on"
-  when a model is set up (LLM_MODE=live) and "off" when every answer is built in code (LLM_MODE=stub), so a page of
-  zero tokens can say why.
-
-Timestamps are compared as stored (UTC text, YYYY-MM-DDTHH:MM:SS.mmmZ), so a UTC day is a text range and its date is
-the first ten characters. llm_calls.called_at and qa_log.asked_at are indexed (schema version 8).
-"""
+"""Daily model token budget (per UTC day) and the GET /usage figures, read from the audit tables."""
 from __future__ import annotations
 
 import sqlite3
@@ -114,8 +90,7 @@ def budget_reached(conn: sqlite3.Connection, settings: Settings, now: datetime) 
 
 
 def used_pct(tokens: int, budget: int) -> float | None:
-    """The share of the budget used, a percentage with one decimal (over 100 when the last call took the day past
-    it); None without a budget."""
+    """Percentage of the budget used, one decimal; None without a budget."""
     return round(100 * tokens / budget, 1) if budget > 0 else None
 
 

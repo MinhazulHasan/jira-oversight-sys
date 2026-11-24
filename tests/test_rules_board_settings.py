@@ -1,11 +1,3 @@
-"""The rule engine with a board's rule settings (JO-15, oversight/rules/engine.py): a threshold changed, a rule turned
-off and on again (one rules.yaml has off too), a severity changed and changed back, what each does to the board's
-findings, and the preview of a change, which writes nothing and says what the re-check then does, settings saved
-earlier that have not reached the findings included.
-
-Small AIL stories built with tests/rules_helpers.py, run at fixed clocks. Settings are saved as the API saves them
-(oversight.rules.settings.save_board_settings), by the local viewer.
-"""
 from __future__ import annotations
 
 import json
@@ -46,7 +38,6 @@ FINISHED = [*STARTED, (-2.0, "In Progress", "Done")]
 
 
 def _set(store: Store, *changes: Change, project: str = "AIL", rules: RulesConfig | None = None) -> SavedChange:
-    """Save the changes to the board's settings, from its revision now (over the test catalogue, or `rules`)."""
     revision = load_board_settings(store.conn, project).revision
     return save_board_settings(store, rules or catalogue(), project, revision=revision, changes=list(changes), now=NOW,
                                viewer_hash="local", viewer_name="Local (sign-in off)")
@@ -65,7 +56,6 @@ def _stat(result: RulesResult, rule_id: str) -> RuleStats:
 
 
 def _efforts(store: Store, spent: dict[str, float]) -> None:
-    """Finished issues of one point (8 h) with these hours logged: effort ratios of hours / 8."""
     for key, hours in spent.items():
         add_issue(store, key, status="Done", changes=FINISHED, points=1, spent_h=hours)
 
@@ -77,13 +67,10 @@ def _stats(store: Store, result: RulesResult) -> dict[str, Any]:
     return stats
 
 
-# --- thresholds -----------------------------------------------------------------------------------------------
-
-
 def test_a_threshold_change_keeps_the_findings_still_over_it_and_closes_the_rest_as_settings_changed(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    _efforts(store, {"AIL-1": 16, "AIL-2": 13, "AIL-3": 24})  # 2.0, 1.625 and 3.0 times the estimate
+    _efforts(store, {"AIL-1": 16, "AIL-2": 13, "AIL-3": 24})
     derive(store, process)
     run_at(store, process, fields)
     before = _by_issue(store, "R-EFF-01")
@@ -94,9 +81,9 @@ def test_a_threshold_change_keeps_the_findings_still_over_it_and_closes_the_rest
     [result] = run_at(store, process, fields, now=LATER)
 
     after = _by_issue(store, "R-EFF-01")
-    assert len(_findings(store, "R-EFF-01")) == 3  # no new ids: a finding is the condition, not the threshold
+    assert len(_findings(store, "R-EFF-01")) == 3
     fingerprint = settings_hash({"threshold": 1.8})
-    for key in ("AIL-1", "AIL-3"):  # still over 1.8: the same finding, refreshed with the new threshold
+    for key in ("AIL-1", "AIL-3"):
         row = after[key]
         assert (row["finding_id"], row["first_seen_at"], row["last_seen_at"], row["resolved_at"]) == (
             before[key]["finding_id"], at(0), at(1), None)
@@ -114,7 +101,6 @@ def test_a_threshold_change_keeps_the_findings_still_over_it_and_closes_the_rest
     assert ("  board rule settings revision 1 (customised: R-EFF-01): 1 findings closed because the settings changed"
             in result.render().splitlines())
 
-    # Back to rules.yaml's 1.5: the finding that closed reopens, the same id, first seen as before.
     _set(store, Change("R-EFF-01", reset=True))
     [back] = run_at(store, process, fields, now=NOW + timedelta(hours=2))
     reopened = _by_issue(store, "R-EFF-01")
@@ -134,13 +120,12 @@ def test_when_the_data_and_the_settings_both_change_nothing_is_claimed_as_fixed(
     run_at(store, process, fields)
 
     _set(store, Change("R-EFF-01", params={"threshold": 1.8}))
-    _efforts(store, {"AIL-2": 6})  # its logged time corrected too: 0.75 times the estimate
+    _efforts(store, {"AIL-2": 6})
     derive(store, process)
     [both] = run_at(store, process, fields, now=LATER)
-    assert _by_issue(store, "R-EFF-01")["AIL-2"]["resolved_why"] == "settings_changed"  # never "cleared"
+    assert _by_issue(store, "R-EFF-01")["AIL-2"]["resolved_why"] == "settings_changed"
     assert (both.settings_changed, both.resolved) == (1, 0)
 
-    # Under the same settings, a finding the data alone takes away is cleared, as before.
     _efforts(store, {"AIL-1": 8})
     derive(store, process)
     [data] = run_at(store, process, fields, now=NOW + timedelta(hours=2))
@@ -151,16 +136,16 @@ def test_when_the_data_and_the_settings_both_change_nothing_is_claimed_as_fixed(
 def test_a_finding_is_named_by_the_catalogues_threshold_and_compared_with_the_boards(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    add_issue(store, "AIL-1", status="Done", changes=FINISHED, points=1, spent_h=24)  # 3 times the estimate
+    add_issue(store, "AIL-1", status="Done", changes=FINISHED, points=1, spent_h=24)
     derive(store, process)
     ctx = context(store, process, fields)
-    ctx.identity_params = {"threshold": 1.5}  # what the engine sets: rules.yaml's params
+    ctx.identity_params = {"threshold": 1.5}
 
     [hit] = hits(ctx, "effort_ratio_at_least", "AIL-1", threshold=2.0)
     assert (hit.evidence_key, hit.evidence["threshold"]) == ("ratio-ge-1.5", 2.0)
     assert "threshold 2×" in hit.message
-    assert hits(ctx, "effort_ratio_at_least", "AIL-1", threshold=3.5) == []  # compared with the board's
-    ctx.identity_params = None  # a check called on its own names its finding by its params, as before
+    assert hits(ctx, "effort_ratio_at_least", "AIL-1", threshold=3.5) == []
+    ctx.identity_params = None
     assert [h.evidence_key for h in hits(ctx, "effort_ratio_at_least", "AIL-1", threshold=2.0)] == ["ratio-ge-2"]
 
 
@@ -168,17 +153,14 @@ def test_a_no_evidence_finding_is_named_by_the_catalogues_percentile(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
     reviewed = with_project(process, evidence={"code_review": {"label": "code-reviewed"}})
-    add_history(store, "In Progress", [10.0] * 20)  # 20 closed development intervals of 10 h
-    add_issue(store, "AIL-1", status="In Progress", changes=STARTED, points=1)  # in development for 48 h, no review
+    add_history(store, "In Progress", [10.0] * 20)
+    add_issue(store, "AIL-1", status="In Progress", changes=STARTED, points=1)
     derive(store, reviewed)
     ctx = context(store, reviewed, fields)
     ctx.identity_params = {"stage": "development", "evidence": "code_review", "pct": 75}
 
     [hit] = hits(ctx, "no_evidence_after_percentile", "AIL-1", stage="development", evidence="code_review", pct=90)
     assert (hit.evidence_key, hit.evidence["pct"]) == ("no-code_review-after-p75", 90.0)
-
-
-# --- on and off ---------------------------------------------------------------------------------------------------
 
 
 def test_turning_a_rule_off_closes_its_findings_and_turning_it_on_again_reopens_them(
@@ -195,7 +177,7 @@ def test_turning_a_rule_off_closes_its_findings_and_turning_it_on_again_reopens_
     assert (closed["finding_id"], closed["resolved_at"], closed["resolved_why"]) == (
         first["finding_id"], at(1), "settings_changed")
     assert (off.settings_changed, off.untouched) == (1, 0)
-    assert "R-HYG-01" not in {s.rule_id for s in off.stats}  # not run on the board
+    assert "R-HYG-01" not in {s.rule_id for s in off.stats}
     assert store.query_one("SELECT 1 FROM rule_status WHERE run_id = ? AND rule_id = 'R-HYG-01'", (off.run_id,)) is None
 
     _set(store, Change("R-HYG-01", enabled=True))
@@ -209,13 +191,9 @@ def test_turning_a_rule_off_closes_its_findings_and_turning_it_on_again_reopens_
 def test_a_rule_rules_yaml_has_off_closes_its_findings_once_the_board_turns_it_on_and_off_again(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    """rules.yaml has R-HYG-01 off: its findings from before are left as they are while the board never touched it.
-    Turned on by the board they are the board's doing, so turned off again (rules.yaml's own value: no row is kept)
-    they close as settings_changed, as a rule rules.yaml has on does (contract 4.9: a rule that is off holds no open
-    findings)."""
     add_issue(store, "AIL-1", status="In Progress", changes=STARTED, points=1, assignee=None)
     derive(store, process)
-    run_at(store, process, fields)  # rules.yaml had it on then
+    run_at(store, process, fields)
     [first] = _findings(store, "R-HYG-01")
     stingy = catalogue(enabled=[rule.id for rule in catalogue().rules if rule.id != "R-HYG-01"])
 
@@ -231,19 +209,15 @@ def test_a_rule_rules_yaml_has_off_closes_its_findings_once_the_board_turns_it_o
     assert on.customised == ["R-HYG-01"]
 
     _set(store, Change("R-HYG-01", enabled=False), rules=stingy)
-    assert store.count("rule_settings") == 0  # off is rules.yaml's value: nothing differs from it
+    assert store.count("rule_settings") == 0
     [off] = run_at(store, process, fields, stingy, now=NOW + timedelta(hours=3))
     [closed] = _findings(store, "R-HYG-01")
     assert (closed["finding_id"], closed["resolved_at"], closed["resolved_why"]) == (
         first["finding_id"], at(3), "settings_changed")
     assert (off.settings_changed, off.untouched, off.customised) == (1, 0, [])
-    # The preview of turning it on again says the same finding reopens.
     proposed = plan_changes(stingy, load_board_settings(store.conn, "AIL"), [Change("R-HYG-01", enabled=True)]).settings
     [back] = preview(store, process, stingy, fields, "AIL", proposed, now=NOW + timedelta(hours=4))
     assert (back.rule_id, back.open_now, back.would_open, back.open_examples) == ("R-HYG-01", 0, 1, ("AIL-1",))
-
-
-# --- severity -----------------------------------------------------------------------------------------------------
 
 
 def test_a_severity_change_supersedes_the_findings_with_new_ids_and_changing_it_back_reopens_the_originals(
@@ -257,7 +231,7 @@ def test_a_severity_change_supersedes_the_findings_with_new_ids_and_changing_it_
 
     _set(store, Change("R-HYG-01", severity="warning"))
     [changed] = run_at(store, process, fields, now=LATER)
-    old, new = _findings(store, "R-HYG-01")  # by rule_version: "0.1.0", then "0.1.0+warning"
+    old, new = _findings(store, "R-HYG-01")
     assert (old["finding_id"], old["resolved_at"], old["resolved_why"]) == (original["finding_id"], at(1), "superseded")
     assert new["finding_id"] == finding_id("R-HYG-01", "0.1.0+warning", "AIL-1", "unassigned") != original["finding_id"]
     assert (new["rule_version"], new["severity"], new["kind"], new["first_seen_at"], new["resolved_at"]) == (
@@ -280,13 +254,12 @@ def test_a_warning_is_linked_to_its_breach_at_the_warnings_own_rule_version(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
     _set(store, Change("W-EFF-01", severity="breach"))
-    add_issue(store, "AIL-1", status="In Progress", changes=STARTED, points=1, spent_h=7)  # 7 h of 8: burning fast
+    add_issue(store, "AIL-1", status="In Progress", changes=STARTED, points=1, spent_h=7)
     derive(store, process)
     run_at(store, process, fields)
     [warning] = _findings(store, "W-EFF-01")
     assert (warning["rule_version"], warning["severity"], warning["kind"]) == ("0.1.0+breach", "breach", "warning")
 
-    # AIL-1 finishes at twice its estimate: warned at NOW, breached two hours later.
     add_issue(store, "AIL-1", status="Done", changes=[*STARTED, (1, "In Progress", "Done")], points=1, spent_h=16)
     derive(store, process, now=NOW + timedelta(hours=2))
     [breached] = run_at(store, process, fields, now=NOW + timedelta(hours=2))
@@ -294,9 +267,6 @@ def test_a_warning_is_linked_to_its_breach_at_the_warnings_own_rule_version(
     assert breached.linked == 1
     assert [tuple(row) for row in store.query("SELECT warning_finding_id, breach_finding_id FROM warning_links")] == [
         (warning["finding_id"], breach["finding_id"])]
-
-
-# --- no settings: as before -------------------------------------------------------------------------------------
 
 
 def test_a_board_with_no_settings_runs_exactly_as_before_whatever_another_board_has(
@@ -321,15 +291,12 @@ def test_a_board_with_no_settings_runs_exactly_as_before_whatever_another_board_
     assert "board rule settings" not in result.render()
 
 
-# --- the preview ------------------------------------------------------------------------------------------------
-
-
 def test_a_preview_says_what_the_recheck_then_does_and_writes_nothing(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
     _efforts(store, {"AIL-1": 16, "AIL-2": 13, "AIL-3": 24})
-    add_issue(store, "AIL-4", status="In Progress", changes=STARTED, points=1, assignee=None)  # R-HYG-01
-    add_issue(store, "AIL-5", status="In Progress", changes=STARTED, points=1, spent_h=7)  # W-EFF-01
+    add_issue(store, "AIL-4", status="In Progress", changes=STARTED, points=1, assignee=None)
+    add_issue(store, "AIL-5", status="In Progress", changes=STARTED, points=1, spent_h=7)
     derive(store, process)
     run_at(store, process, fields)
     changes = [Change("R-EFF-01", params={"threshold": 1.8}), Change("R-HYG-01", severity="warning"),
@@ -338,7 +305,7 @@ def test_a_preview_says_what_the_recheck_then_does_and_writes_nothing(
     before = [tuple(row) for row in store.query("SELECT * FROM findings ORDER BY finding_id")]
 
     assert store.path is not None
-    conn = open_readonly(store.path)  # as the API previews: a connection that cannot write
+    conn = open_readonly(store.path)
     try:
         impacts = preview(Store(conn), process, catalogue(), fields, "AIL", proposed, now=LATER)
     finally:
@@ -357,7 +324,6 @@ def test_a_preview_says_what_the_recheck_then_does_and_writes_nothing(
     assert [tuple(row) for row in store.query("SELECT * FROM findings ORDER BY finding_id")] == before
     assert store.count("rule_settings") == 0
 
-    # The re-check does what the preview said.
     _set(store, *changes)
     [result] = run_at(store, process, fields, now=LATER)
     assert (result.settings_changed, result.superseded, _stat(result, "R-HYG-01").opened) == (2, 1, 1)
@@ -376,15 +342,12 @@ def test_a_preview_of_settings_that_change_nothing_is_empty(
 def test_a_preview_counts_saved_settings_the_findings_do_not_show_yet(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    """A save whose re-check failed, or never ran (the API restarted first): the findings still show the earlier
-    settings, and the re-check after the next save applies every saved setting, so the preview of an unrelated change
-    says what that re-check does, the earlier change's rule marked pending."""
     _efforts(store, {"AIL-1": 16, "AIL-2": 13, "AIL-3": 24})
-    add_issue(store, "AIL-4", status="In Progress", changes=STARTED, points=1, assignee=None)  # R-HYG-01
+    add_issue(store, "AIL-4", status="In Progress", changes=STARTED, points=1, assignee=None)
     derive(store, process)
     run_at(store, process, fields)
-    _set(store, Change("R-EFF-01", params={"threshold": 1.8}))  # saved; its re-check never ran
-    _set(store, Change("W-AGE-01", params={"pct": 80}))  # saved too, and changes no finding: nothing to say
+    _set(store, Change("R-EFF-01", params={"threshold": 1.8}))
+    _set(store, Change("W-AGE-01", params={"pct": 80}))
     changes = [Change("R-HYG-01", enabled=False)]
     proposed = plan_changes(catalogue(), load_board_settings(store.conn, "AIL"), changes).settings
 
@@ -396,11 +359,9 @@ def test_a_preview_counts_saved_settings_the_findings_do_not_show_yet(
         Impact("R-HYG-01", measurable=True, enabled=False, open_now=1, would_open=0, would_close=1, would_stay=0,
                open_examples=(), close_examples=("AIL-4",)),
     ]
-    # The re-check does what the preview said, the earlier change with it.
     _set(store, *changes)
     [result] = run_at(store, process, fields, now=LATER)
     assert result.settings_changed == sum(impact.would_close for impact in impacts) == 2
-    # Applied, nothing is pending: the next preview names the change set's own rule alone.
     later = plan_changes(catalogue(), load_board_settings(store.conn, "AIL"), [Change("W-SPR-01", enabled=False)])
     assert [impact.rule_id for impact in preview(store, process, catalogue(), fields, "AIL", later.settings,
                                                  now=LATER)] == ["W-SPR-01"]
@@ -409,7 +370,7 @@ def test_a_preview_counts_saved_settings_the_findings_do_not_show_yet(
 def test_a_preview_names_sprints_by_their_key_in_number_order(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    for number, sprint_id in ((1, 12), (2, 7)):  # one issue not started in each sprint, both ending in a day
+    for number, sprint_id in ((1, 12), (2, 7)):
         add_issue(store, f"AIL-{number}", sprints=[sprint(sprint_id, end=24.0)], points=1)
     derive(store, process)
     run_at(store, process, fields)
@@ -419,9 +380,7 @@ def test_a_preview_names_sprints_by_their_key_in_number_order(
 
     [risk] = preview(store, process, catalogue(), fields, "AIL", proposed, now=LATER)
 
-    # A sprint goes as "sprint:<id>", in the order of its number, never as text ("sprint:12" before "sprint:7").
     assert (risk.rule_id, risk.would_close, risk.close_examples) == ("W-SPR-01", 2, ("sprint:7", "sprint:12"))
-    # Closed, a finding still says the limits it was found under.
     _set(store, Change("W-SPR-01", params={"days_left": 0.5}))
     run_at(store, process, fields, now=LATER)
     for row in _findings(store, "W-SPR-01"):

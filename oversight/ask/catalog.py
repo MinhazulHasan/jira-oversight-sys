@@ -1,59 +1,4 @@
-"""The fixed catalogue of read-only queries (Phase 6). The same specs become the
-MCP tools and feed the dashboard's Ask page. The LLM picks from this list and
-never writes SQL; every parameter is validated by a pydantic model before any
-query runs, and every query is parameterised SQL on a read-only connection.
-
-Each QuerySpec:
-- name: "oversight_..." (never clashes with Rovo's Jira tools).
-- description: one or two sentences for the plan prompt and the MCP tool.
-- params_model: a pydantic model (extra="forbid") with bounded fields:
-  project (pattern ^[A-Z][A-Z0-9_]{0,19}$, default: the context project);
-  n <= 20 (top lists) or <= 50 (findings); period in {"7d","30d","90d","sprint","all"};
-  rule_id pattern ^[RW]-[A-Z]+-\\d{2,3}$; issue_key pattern ^[A-Z][A-Z0-9_]+-\\d+$;
-  enums for metric / group_by / field / state / severity.
-- needs_evidence(params, rules) -> list[str]: evidence names the call depends on
-  (e.g. list_findings for R-FLOW-01 needs code_review); the service turns a
-  missing one into the not_measurable outcome.
-- run(conn, params, ctx) -> Facts: rows capped at ctx.row_limit (truncated=True
-  when more existed); as_of = the last successful sync's started_at; columns
-  typed so the UI can format them. Text columns that come from tickets
-  (summary) are untrusted: included as-is, never interpreted.
-
-The ten specs (CATALOG, in this order):
-  oversight_count_issues(project, status?, issue_type?, period?, has_estimate?: bool)
-      -> one row {count, sample_keys (up to 20 keys, as "AIL-1, AIL-2 ...")}
-  oversight_top_issues(project, metric: cycle_time|effort_ratio|status_age|reopens, n<=20, status_category?, issue_type?)
-      -> rows {issue_key, summary, issue_type, status, epic_key, value, unit}
-  oversight_time_in_status(project, group_by: status|issue_type|epic, period)
-      -> rows {group, n, median_h, p75_h, p90_h} over closed intervals ending in the period
-         (by status: every status before the done stage; by type or epic: the work stages)
-  oversight_effort_vs_estimate(project, group_by: epic|issue_type|sprint, period)
-      -> rows {group, n, median_ratio, share_over_threshold, threshold} (done work resolved in the period
-         with an estimate and time_spent_s > 0); by epic the group is the epic key (kind issue_key)
-         followed by epic_title, and work in no epic is "(no epic)"
-  oversight_list_findings(project, rule_id?, severity?, state: open|resolved|all, period?, n<=50)
-      -> rows {finding_id, rule_id, rule_title, severity, issue_key, summary, epic_key, message, first_seen_at, resolved_at}
-  oversight_issue_timeline(issue_key)
-      -> rows {seq, status, stage, entered_at, left_at, hours} plus a note with the issue's findings
-  oversight_trend(project, metric: median_cycle_time_h|median_effort_ratio|skipped_stage_share|reopen_rate|open_breaches|open_warnings, last_n<=12)
-      -> rows {week_of, value} (weeks start on Monday; value null when no data)
-  oversight_coverage(project, field: estimate|story_points|time_logged|code_review|test_evidence, period)
-      -> one row {covered, total, share, measurable, note}
-  oversight_hot_spots(project, n<=10)
-      -> rows {epic_key, epic_title, open_breaches, open_warnings, issues}; open findings outside any
-         epic, sprint findings ("sprint:<id>") included, form the (no epic) row after the epics
-  oversight_rule_status(project)
-      -> rows {rule_id, title, kind, severity, measurable, missing, open_findings, version}
-
-catalog_schema() returns [{name, description, input_schema (JSON schema of the
-params model)}] for the plan prompt and the MCP server.
-
-Periods: "7d", "30d" and "90d" count back from the context's `now`; "sprint"
-is the time since the active sprint started (found in the synced sprint
-objects; without one, the last 14 days, and the note says so); "all" is no
-limit. Weeks start on Monday, in UTC. Every number comes from the snapshot
-tables or oversight.stats; nothing is estimated.
-"""
+"""The fixed catalogue of read-only, parameter-validated queries behind Ask and the MCP tools."""
 from __future__ import annotations
 
 import json
@@ -77,13 +22,11 @@ if TYPE_CHECKING:
 
 ColumnKind = Literal["text", "number", "count", "hours", "share", "ratio", "date", "issue_key"]
 
-# Parameter patterns. Project keys and issue keys appear in SQL only as bound
-# values, but a key that cannot be a Jira key is refused before any query runs.
+# A key that cannot be a Jira key is refused before any query runs.
 PROJECT_KEY_PATTERN = r"^[A-Z][A-Z0-9_]{0,19}$"
-RULE_ID_PATTERN = r"^[RW]-[A-Z]+-\d{2,3}$"  # a custom rule's id too (JO-20: R-CUS-01, W-CUS-104)
+RULE_ID_PATTERN = r"^[RW]-[A-Z]+-\d{2,3}$"  # a custom rule's id too (R-CUS-01, W-CUS-104)
 ISSUE_KEY_PATTERN = r"^[A-Z][A-Z0-9_]+-\d+$"
-# Status and issue type names as Jira allows them: letters, digits, spaces and
-# a little punctuation ("Won't Fix", "Sub-task", "Ready for QA").
+# Status and issue type names as Jira allows them ("Won't Fix", "Sub-task").
 NAME_PATTERN = r"^[\w .,'()/&+-]{1,60}$"
 
 Period = Literal["7d", "30d", "90d", "sprint", "all"]
@@ -95,8 +38,7 @@ _SPRINT_FALLBACK_DAYS = 14
 _NO_EPIC = "(no epic)"
 _NO_SPRINT = "(no sprint)"
 _NO_TYPE = "(no type)"
-# A subtask's parent is a task, so its epic is the parent's: every query that
-# groups or reports by epic joins the parent (alias p) and takes this expression.
+# A subtask's epic is its parent's, so queries by epic join the parent (alias p).
 _PARENT_JOIN = "LEFT JOIN issues AS p ON p.issue_key = i.parent_key"
 _EPIC_OF_I = "COALESCE(i.epic_key, p.epic_key)"
 # Fixed English month names: strftime("%b") follows the machine's locale.
@@ -330,8 +272,7 @@ def _window(conn: sqlite3.Connection, ctx: CatalogContext, project: str, period:
     if period in _PERIOD_DAYS:
         days = _PERIOD_DAYS[period]
         return _Window(to_iso(ctx.now - timedelta(days=days)), f"the last {days} days")
-    # "sprint": the active sprint's start, read from the sprint objects the sync
-    # stored in raw_json (any field, so no fields.yaml is needed here).
+    # "sprint": the active sprint's start, from the sprint objects stored in raw_json.
     try:
         sprints = _rows(conn, _ACTIVE_SPRINT_SQL, (project,))
     except sqlite3.OperationalError:
@@ -402,8 +343,7 @@ def run_count_issues(conn: sqlite3.Connection, params: BaseModel, ctx: CatalogCo
         sql += " AND lower(issue_type) = lower(?)"
         values.append(params.issue_type)
     if params.state is not None:
-        # "Open tickets" means one thing everywhere: the board's work by status category, as the Overview's where work
-        # sits and the Portfolio count it (rules.yaml's defaults.exclude_types, Epics, are containers, not work).
+        # Open tickets means the board's work by status category, as the Overview and Portfolio count it.
         sql += {"open": " AND status_category != 'done'", "in_progress": " AND status_category = 'indeterminate'",
                 "done": " AND status_category = 'done'"}[params.state]
         excluded = [name.casefold() for name in ctx.rules.defaults.exclude_types]
@@ -541,8 +481,7 @@ def run_time_in_status(conn: sqlite3.Connection, params: BaseModel, ctx: Catalog
     stage_of: dict[str, str | None] = {}
     config = ctx.process.project(project) if project in ctx.process.projects else None
     if params.group_by == "status":
-        # A closed interval in the done stage is the time before a reopen, not time in
-        # the process: left in, it reads as "tickets get stuck in Done".
+        # Time in the done stage is the wait before a reopen, not time in the process.
         done = ctx.process.done_stage
         for interval in intervals:
             if interval["stage"] == done:
@@ -555,8 +494,7 @@ def run_time_in_status(conn: sqlite3.Connection, params: BaseModel, ctx: Catalog
         done_statuses = [s for s, stage in config.status_to_stage.items() if stage == done] if config else []
         notes.append(f"time in the done stage ({', '.join(done_statuses) or done}) is left out")
     else:
-        # Per type or epic, the hours that count are those spent on the work:
-        # the stages from development up to (not including) done.
+        # By type or epic, only the work stages count: development up to, not including, done.
         work = set(ctx.process.work_stages())
         for interval in intervals:
             if interval["stage"] not in work:
@@ -585,9 +523,7 @@ def run_time_in_status(conn: sqlite3.Connection, params: BaseModel, ctx: Catalog
 
 # --- oversight_effort_vs_estimate ----------------------------------------------------------
 
-# Done work with an estimate (an effort ratio) and logged time: a ratio of 0 is an
-# estimate with nothing logged against it, missing data rather than effort, and it
-# would drag every median down (API contract section 8).
+# A ratio of 0 is an estimate with nothing logged, missing data that would drag medians down.
 _DONE_RATIOS_SQL = f"""
     SELECT i.issue_key, i.issue_type, {_EPIC_OF_I} AS epic_key, e.summary AS epic_title, i.sprint_ids, m.effort_ratio
     FROM issues AS i JOIN issue_metrics AS m ON m.issue_key = i.issue_key
@@ -703,8 +639,7 @@ _FINDING_COLUMNS = [
 
 
 def _rule_title(rules: RulesConfig, rule_id: str) -> str:
-    """The rule's title as the board names it: a custom rule's too, one the board deleted included (JO-20); the id for
-    a rule no longer known."""
+    """The rule's title as the board names it, deleted custom rules included; the id for an unknown rule."""
     return rules.title_of(rule_id)
 
 
@@ -1018,8 +953,7 @@ def _coverage_evidence(params: BaseModel, rules: RulesConfig) -> list[str]:
 
 # --- oversight_hot_spots -------------------------------------------------------------------
 
-# A LEFT JOIN: a sprint finding (issue_key "sprint:<id>") has no issue row, so it lands
-# in the no-epic group, as the findings filter epic=none has it (API contract section 8).
+# A LEFT JOIN: a sprint finding has no issue row, so it lands in the no-epic group.
 _OPEN_BY_EPIC_SQL = f"""
     SELECT {_EPIC_OF_I} AS epic_key, e.summary AS epic_title, f.severity, f.issue_key
     FROM findings AS f
@@ -1056,8 +990,7 @@ def run_hot_spots(conn: sqlite3.Connection, params: BaseModel, ctx: CatalogConte
         group = issues.setdefault(epic, set())
         if not finding["issue_key"].startswith(_SPRINT_SCOPED):
             group.add(finding["issue_key"])
-    # A hot spot is an epic: work outside any epic is shown for context, after the epics,
-    # so "the top hot spot" always names one (the insights skip that group the same way).
+    # Work outside any epic comes after the epics, so the top hot spot always names an epic.
     ordered = sorted(issues, key=lambda epic: (epic is None, -breaches[epic], -warnings[epic], epic or ""))
     limit = min(params.n, ctx.row_limit)
     rows = [
@@ -1100,8 +1033,7 @@ _RULE_STATUS_COLUMNS = [
 
 
 def rule_missing(rule: Rule, process: ProcessConfig, project: str) -> list[str]:
-    """What a rule needs that the board does not record: evidence process.yaml leaves null, then stages its workflow
-    does not map. The engine's own test, which it records in rule_status: any of it makes the rule not measurable."""
+    """What a rule needs that the board does not record; any of it makes the rule not measurable."""
     configured = project in process.projects
     mapped = set(process.ordered_stages(project)) if configured else set()
     missing = [name for name in rule.requires_evidence if not (configured and process.has_evidence(project, name))]
@@ -1241,8 +1173,7 @@ def catalog_schema() -> list[dict[str, Any]]:
 
 
 def validate_params(name: str, params: Mapping[str, Any] | Any, catalog: Mapping[str, QuerySpec] = CATALOG) -> BaseModel:
-    """The spec's validated parameter model; ValueError (in plain words) for a spec not in `catalog` (CATALOG
-    unless a people-level question passes its own) or bad parameters."""
+    """The spec's validated parameter model; ValueError in plain words for an unknown spec or bad parameters."""
     spec = catalog.get(name)
     if spec is None:
         raise ValueError(f"unknown query {name!r}")

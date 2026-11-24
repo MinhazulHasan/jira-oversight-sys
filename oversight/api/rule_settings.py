@@ -1,89 +1,3 @@
-"""Rule settings for admins (JO-15; contract 4.20 to 4.22 in the jira-oversight-ui repository): what GET
-/rules/settings, POST /rules/settings/preview and POST /rules/settings answer (oversight/api/routes/rule_settings.py),
-over oversight/rules/settings.py, which holds every rule about what may change and how it is stored; and custom rules
-(JO-20): the rules an admin adds to a board, its checks (oversight/rules/registry.py) and the AI draft
-(oversight/api/rule_draft.py).
-
-The board's settings (settings_body: GET, and a save's answer): {meta, project, revision, catalogue_version,
-updated_at, updated_by, apply, rules, history, checks, custom_limit, custom_count, issue_types, ai_draft}.
-- revision: the board's settings revision (0: never changed); updated_at and updated_by: the latest change's time and
-  viewer name (null before any).
-- rules: every catalogue rule, on or off, in catalogue order, then the board's custom rules in the order they were
-  added: {rule_id, title, description, kind, check, scope, escalates_to, enabled, default_enabled, severity,
-  default_severity, params, customised, measurable, missing_evidence, open, custom, check_label, applies_to,
-  created_at, created_by}. params: a catalogue rule's editable params only (oversight.rules.settings.EDITABLE), each
-  {name, label, kind ("number"), unit, value (the board's), default (rules.yaml's, else the check's), min, max, step,
-  options (null)}, [] when none; a custom rule's, every param of its check (statuses, stage, evidence and field too),
-  each {name, label, kind, unit, value, default, min, max, step, options}, default being its value (a custom rule has
-  no catalogue value) and unit, min, max and step null for a param that is not a number. A custom rule's defaults are
-  the rule as created: on, and its severity then (so customised says whether its on/off or severity changed since).
-  measurable and missing_evidence as GET /rules says them for the board; open: its open findings on the board;
-  check_label: the check's label; applies_to: {status_category: [...], issue_type: [...] | null}, a catalogue rule's
-  as rules.yaml says it (every category where it names none; none for a sprint rule); created_at and created_by: when
-  and by whom a custom rule was added (the viewer's name, never an email address), null for a catalogue rule.
-- history: the board's changes, newest first, at most 50: {change_id, at, revision, by: {hash, name}, reason, undo_of,
-  changes: [{rule_id, field, from, to}]}, from and to being the effective values; a custom rule's field `rule` holds
-  its definition {title, description, check, params, applies_to, severity} (from null when added or restored, to null
-  when deleted), its fields title, description and applies_to their values.
-- checks: the registry for this board (registry.checks_payload): each {name, label, summary, scope, params: [{name,
-  label, kind, unit, min, max, step, default, options}], categories, default_categories, measurable,
-  missing_evidence}, options filled from the board: its statuses ({value, label, category}), the stages it maps and
-  the evidence names ({value, label}), the fields; null for a number.
-- custom_limit (50) and custom_count (the board's custom rules, not deleted); issue_types: the board's issue types,
-  from its issues, Epic (rules.yaml's exclude_types) left out, for a custom rule's applies_to.
-- ai_draft: {available, reason}: whether POST /rules/settings/draft can draft now. Available with LLM_MODE=live (a
-  provider set up) and with stub (the scripted drafter); not while the board holds custom_limit custom rules (a draft
-  could never be added: LIMIT_REASON), nor while the day's model budget is used up (LLM_DAILY_TOKEN_BUDGET), reason
-  saying so in plain words (BUDGET_REASON).
-- apply: whether the settings have reached the board's findings: {state, applied_revision, started_at, finished_at,
-  message, result}. applied_revision is the settings revision the board's findings show: the highest settings_revision
-  of its latest RECENT_RUNS succeeded rules runs (0 when none), from the runs table, so it is still right after the
-  API restarts (revisions only grow, and each run reads them inside its write transaction for the board). Only those
-  runs are read (oversight.rules.settings.recent_runs), so the answer costs the same however long the history. state:
-  - running: this process's re-check of the board is queued or running (started_at: when it began, or was asked for);
-  - applied: applied_revision >= revision. started_at, finished_at and result are the first succeeded rules run that
-    applied this revision: result {opened, closed}, the findings it opened and every one it closed (cleared,
-    settings_changed, superseded or aged out). All null for revision 0, and once every run read applied it (the first
-    is older than they are: what it did is no longer known);
-  - failed: this process's last re-check of the board failed and the settings have not reached the findings yet;
-    message says so, and that the next sync applies them;
-  - pending: not applied yet, and nothing running here: the next sync (or re-check) applies them, as message says.
-
-The preview (preview_body): {meta, project, revision, impact, totals}. impact holds each rule whose settings the change
-set changes, and each rule it leaves as saved whose saved settings have not reached the board's findings yet (a
-re-check that failed, or has not run) when the re-check would open or close any of its findings, in catalogue order,
-then the custom rules': {rule_id, measurable, open_now, would_open, would_close, would_stay, examples: {open, close},
-note}, from oversight.rules.engine.preview over the board's data now, through the request's read-only connection:
-nothing is written. So totals are what the re-check after the save does. A custom rule the change set adds is in it
-under the id the save would give it now (the next of its prefix: another board adding one first moves it on), with
-every finding it would raise now (would_open); one it deletes with its open findings closing (would_close). note says
-when a rule left on is not measurable on the board (the change does nothing until it can run: NOT_MEASURABLE_NOTE),
-or when its findings still reflect earlier settings, which the re-check brings up to date (PENDING_NOTE); null
-otherwise. totals: {would_open, would_close}.
-
-Each body is read in one read transaction on the request's read-only connection (snapshot): a save or a rules run
-landing part way never shows as a revision without its change in the history, or an apply state that does not fit the
-revision.
-
-Bodies. A POST takes a JSON object of at most 16 KB (BODY_LIMIT): the preview's {changes, revision?} (the revision
-not checked), a save's {revision, changes, reason?, undo_of?}; a change is {rule_id, enabled?, severity?, params?,
-reset?} (JO-15's; on a custom rule, params edit its params, and reset is refused), or one of JO-20's, by its op:
-{op: "create", rule: {title, description?, check, params, applies_to, severity}} (the id is given by the save),
-{op: "edit", rule_id, title?, description?, params?, applies_to?} (a custom rule's; never its check), {op: "delete",
-rule_id} and {op: "restore", rule_id} (a deleted custom rule of this board: what undo of a delete sends). At most one
-change per rule, and a change other than a create names a rule the board holds already (never the id a create in the
-same body would be given). Every problem found is in one 422 {"detail", "code": "rule_settings_invalid", "errors":
-[{rule_id, field, message}]}: detail is every message once, in plain words, and errors each one with the rule and the
-field it is about (null when none; the fields oversight.rules.settings.Problem names: a setting, params, reset, rule_id,
-changes, revision, reason, undo_of, op, rule, title, description, check, applies_to and its parts, or the name of a key
-the request does not take). A new rule's problems have no rule id (it has none yet): their field names the rule by its
-place in the body, "changes.<index>.rule.<field>" (index from 0, as the body lists its changes: "changes.2.rule.title",
-"changes.2.rule.params.days"), so a body that adds several rules says which one each problem is about. An undo
-(undo_of) must undo the board's latest change exactly, or it is refused under undo_of. The reason, a custom rule's title
-and its description are kept as the access log keeps a name (control characters as spaces, spaces collapsed; a title
-and a description also as the registry keeps them: oversight.rules.registry.visible_text); the reason at most 500
-characters; none of them may hold an email address or an Atlassian account id: they are shown to every admin.
-"""
 from __future__ import annotations
 
 import json
@@ -157,8 +71,6 @@ BUSY_DETAIL = (
     "Nothing was changed: try again in a moment."
 )
 NOT_MEASURABLE_NOTE = "Not measurable on this board, so this change has no effect until it can run."
-# A rule the changes leave as saved whose findings do not reflect the settings it runs with yet (an earlier change whose
-# re-check failed, or has not run): the re-check after this save applies them too, so its figures are in the preview.
 PENDING_NOTE = (
     "Its findings still reflect its earlier settings: the re-check after this save applies the current ones too."
 )
@@ -173,7 +85,6 @@ _NOT_AN_OBJECT = "The request body must be a JSON object."
 _RULE_ID = re.compile(r"[RW]-[A-Z]+-[0-9]{2,3}")
 _CHANGE_ID = re.compile(r"[0-9a-f]{32}")
 _CHANGE_KEYS = frozenset({"rule_id", "enabled", "severity", "params", "reset"})
-# JO-20's changes, by op: the keys each takes.
 _OPS = ("create", "edit", "delete", "restore")
 _OP_KEYS = {
     "create": frozenset({"op", "rule"}),
@@ -189,8 +100,7 @@ _CLOSED = ("resolved", "settings_changed", "superseded", "aged_out")
 
 
 def invalid(problems: Sequence[Problem]) -> ApiError:
-    """The 422 for a refused body or change set: every problem, in one detail (each naming its rule where its message
-    does not already, a sentence two new rules share said once) and one by one."""
+    """The 422 for a refused body or change set"""
     detail = " ".join(dict.fromkeys(
         f"{problem.rule_id}: {problem.message}" if problem.rule_id and problem.rule_id not in problem.message
         else problem.message
@@ -312,8 +222,6 @@ def _changes(body: dict[str, Any], problems: list[Problem]) -> list[Change]:
 
 
 def _op_change(number: int, item: dict[str, Any], problems: list[Problem]) -> Change | None:
-    """A JO-20 change (create, edit, delete or restore), its shape checked and its texts cleaned; what it names is
-    checked against the board when it is planned. None, with its problems, when it is not one."""
     op = item.get("op")
     if op not in _OPS:
         problems.append(Problem(None, "op", f"Change {number}'s op must be create, edit, delete or restore."))
@@ -353,9 +261,6 @@ def _op_change(number: int, item: dict[str, Any], problems: list[Problem]) -> Ch
 def _texts(
     given: dict[str, Any], rule_id: str | None, problems: list[Problem], *, index: int | None = None
 ) -> dict[str, Any]:
-    """A custom rule's title and description as kept (as the access log keeps a name), each refused when it holds an
-    email address or an account id; a value that is not text is left for the registry to refuse. `index`: a new
-    rule's place in the body, which its problems name it by."""
     cleaned: dict[str, Any] = {}
     for name, words in (("title", "The name"), ("description", "The description")):
         value = given.get(name)
@@ -394,8 +299,7 @@ def _cut(name: object) -> str:
 
 @contextmanager
 def snapshot(conn: sqlite3.Connection) -> Iterator[None]:
-    """Every read inside it in one read transaction: the snapshot as it stood at its first read (the database is in
-    WAL mode, so no writer waits for it). Inside a transaction already, it joins it."""
+    """Every read inside it in one read transaction"""
     if conn.in_transaction:
         yield
         return
@@ -407,8 +311,7 @@ def snapshot(conn: sqlite3.Connection) -> Iterator[None]:
 
 
 def settings_body(conn: sqlite3.Connection, ctx: ApiContext, job: Recheck | None) -> dict[str, Any]:
-    """GET /rules/settings' body (and a save's answer), read in one snapshot: see the module docstring. `job`: this
-    process's latest re-check of the board."""
+    """GET /rules/settings' body (and a save's answer), read in one snapshot"""
     project = ctx.project
     with snapshot(conn):
         settings = load_board_settings(conn, project)
@@ -441,17 +344,13 @@ def settings_body(conn: sqlite3.Connection, ctx: ApiContext, job: Recheck | None
 
 
 def ai_draft_state(conn: sqlite3.Connection, ctx: ApiContext, custom_count: int) -> dict[str, Any]:
-    """{available, reason}: whether a draft can be asked for now on a board holding `custom_count` custom rules (see
-    the module docstring). The scripted drafter calls no model, so the budget never stops it; the limit stops every
-    drafter, as no draft could be added."""
+    """{available, reason}"""
     reason = unavailable(conn, ctx, custom_count)
     return {"available": reason is None, "reason": reason}
 
 
 def unavailable(conn: sqlite3.Connection, ctx: ApiContext, custom_count: int) -> str | None:
-    """Why no draft can be asked for now, in plain words: the board holds as many custom rules as it can
-    (LIMIT_REASON), or the day's model budget is used up (BUDGET_REASON, never for the scripted drafter); None when
-    one can."""
+    """Why no draft can be asked for now, in plain words"""
     if custom_count >= CUSTOM_LIMIT:
         return LIMIT_REASON
     if getattr(ctx.provider, "name", None) != SCRIPTED and budget_reached(conn, ctx.settings, ctx.now()):
@@ -534,8 +433,7 @@ def _custom_params(rule: Rule, custom: CustomRule, options: BoardOptions) -> lis
 
 
 def _applies_of(rule: Rule) -> dict[str, Any]:
-    """A catalogue rule's applies_to as the dashboard reads a custom rule's: every category where rules.yaml names
-    none, none for a sprint rule; null issue types for every type."""
+    """A catalogue rule's applies_to as the dashboard reads a custom rule's"""
     applies = rule.applies_to
     if rule.scope == "sprint":
         categories: list[str] = []
@@ -549,9 +447,6 @@ def _applies_of(rule: Rule) -> dict[str, Any]:
 def apply_state(
     conn: sqlite3.Connection, project: str, revision: int, job: Recheck | None, *, saved_at: str | None = None
 ) -> dict[str, Any]:
-    """Whether the board's settings at `revision`, saved at `saved_at` (storage format), have reached its findings,
-    from the board's latest succeeded rules runs alone (oversight.rules.settings.recent_runs: a bounded read, however
-    long the history): see the module docstring."""
     runs = recent_runs(conn, project)
     shown = showing(runs)
     applied = shown.revision if shown is not None else 0
@@ -572,10 +467,6 @@ def apply_state(
 
 
 def _applying(runs: Sequence[AppliedRun], revision: int, saved_at: str) -> AppliedRun | None:
-    """The first of the board's recent runs (newest first) to apply its settings at `revision` or a later one: the
-    earliest started of those that did and finished after the revision was saved, as only those can have read it.
-    None when that is the oldest of RECENT_RUNS runs: every run read applied it, so the first may be older still, and
-    what it did is no longer known."""
     found = [run for run in runs if run.revision >= revision and (run.finished_at or "") >= saved_at]
     first = min(found, key=lambda run: (run.started_at, run.run_id), default=None)
     if first is None or (len(runs) >= RECENT_RUNS and first.run_id == runs[-1].run_id):
@@ -597,9 +488,6 @@ def _result(stats: Mapping[str, Any]) -> dict[str, int] | None:
 def preview_body(
     conn: sqlite3.Connection, ctx: ApiContext, changes: Sequence[Change], viewer: Viewer | None = None
 ) -> dict[str, Any]:
-    """POST /rules/settings/preview's body, read in one snapshot: the change set validated as a save validates it (422
-    otherwise; a custom rule against the board's options as they are), then what it would do (see the module
-    docstring). Nothing is written: `conn` is read-only."""
     with snapshot(conn):
         current = load_board_settings(conn, ctx.project)
         board = custom_context(conn, ctx.process, ctx.catalogue, ctx.project, at=to_iso(ctx.now()) or "",
@@ -641,9 +529,7 @@ def _impact(impact: Impact) -> dict[str, Any]:
 
 
 def save(ctx: ApiContext, asked: SaveRequest, viewer: Viewer) -> SavedChange:
-    """Write a save to the board's settings (oversight.rules.settings.save_board_settings): 409 when it was made from
-    another revision, 422 for any problem with it, 503 when a rules run holds the write lock past WRITE_WAIT_MS;
-    nothing is written in any of them."""
+    """Write a save to the board's settings (oversight.rules.settings.save_board_settings)"""
     store = _writer(ctx.db_path)
     try:
         return save_board_settings(
@@ -665,9 +551,7 @@ def save(ctx: ApiContext, asked: SaveRequest, viewer: Viewer) -> SavedChange:
 
 
 def _writer(db_path: Path) -> Store:
-    """A Store on the snapshot that exists, to write a board's settings: read-write, never making a new file and never
-    migrating (the API brought the snapshot to this version when it started), waiting up to WRITE_WAIT_MS for the
-    write lock."""
+    """A Store on the snapshot that exists, to write a board's settings"""
     conn = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=rw", uri=True, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout = {WRITE_WAIT_MS}")

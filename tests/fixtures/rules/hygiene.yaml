@@ -1,7 +1,3 @@
-# Hygiene rule: R-HYG-01 (in progress, nobody assigned), on AIL and HRS.
-# Format: see estimates.yaml. assignee_id is an account id, never a name; a
-# case's `assignee_id: null` overrides the default.
-
 defaults: {issue_type: Task, assignee_id: acc-team-1}
 
 cases:

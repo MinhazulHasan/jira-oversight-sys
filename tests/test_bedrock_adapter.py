@@ -1,8 +1,4 @@
-"""BedrockProvider: settings, client construction and request shapes, offline.
-
-The fake client from the Anthropic adapter tests records each call. The one
-test that builds the real Mantle client never sends a request.
-"""
+"""BedrockProvider"""
 from __future__ import annotations
 
 from typing import Any
@@ -33,9 +29,6 @@ def bedrock_settings(**overrides: Any) -> Settings:
     return Settings(**values)
 
 
-# --- model ids ----------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("configured", "sent"),
     [
@@ -47,9 +40,6 @@ def bedrock_settings(**overrides: Any) -> Settings:
 )
 def test_first_party_ids_get_the_bedrock_prefix_and_others_pass_through(configured: str, sent: str) -> None:
     assert bedrock_model_id(configured) == sent
-
-
-# --- settings -----------------------------------------------------------------------
 
 
 def test_live_bedrock_needs_a_region() -> None:
@@ -77,9 +67,6 @@ def test_aws_secrets_never_appear_in_the_settings_repr() -> None:
     assert SECRET_KEY not in shown and ACCESS_KEY not in shown
 
 
-# --- client construction ------------------------------------------------------------
-
-
 def test_client_options_come_from_settings_and_blanks_are_left_to_the_aws_chain() -> None:
     options = bedrock_client_options(bedrock_settings(llm_timeout_s=42.5, llm_max_retries=5))
     assert options == {
@@ -105,9 +92,6 @@ def test_the_real_mantle_client_targets_the_regional_bedrock_endpoint() -> None:
 
 def test_get_provider_picks_bedrock_from_settings() -> None:
     assert isinstance(get_provider(bedrock_settings()), BedrockProvider)
-
-
-# --- requests -----------------------------------------------------------------------
 
 
 def test_structured_sends_the_bedrock_model_id() -> None:

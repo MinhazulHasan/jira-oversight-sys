@@ -1,4 +1,4 @@
-"""The API container's HEALTHCHECK (oversight/healthcheck.py): a stand-in opener, so nothing goes on the network."""
+"""The API container's HEALTHCHECK, with a stand-in opener so nothing goes on the network."""
 from __future__ import annotations
 
 import io

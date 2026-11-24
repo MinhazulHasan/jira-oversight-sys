@@ -1,29 +1,4 @@
-"""The LLMProvider interface and the models every provider returns.
-
-CONTRACT (stub; the LLM build implements it). Two providers exist:
-- ScriptedProvider (llm/scripted.py): offline, deterministic, no key. The
-  default (LLM_MODE=stub), used by demos, tests and CI.
-- AnthropicProvider (llm/anthropic_adapter.py): Claude through the Anthropic
-  SDK (LLM_MODE=live).
-
-Both expose the same two calls:
-- structured(system, user, schema, *, model, effort, max_tokens) -> StructuredResult:
-  the model returns an instance of `schema` (a pydantic model). Used for the
-  plan (Plan) and for the weekly narrative (insights.Narrative).
-- compose(system, user, *, model, effort, max_tokens) -> TextResult: free text.
-Providers never see the database: callers pass fully rendered prompts, and
-callers decide what to do with the result. Every call is audited through
-llm.audit.record_llm_call by the caller (the provider returns usage and timing).
-
-Errors: LLMError(retryable) for transport and API failures (the SDK already
-retried); LLMRefusal when the model declined (stop_reason "refusal"); a
-StructuredResult whose parsed output failed validation raises LLMError
-(retryable=False) with the validation message. A failure that came with a
-response (a refusal, a reply cut off at max_tokens or with no structured
-output) carries the tokens it reported (`usage`) and its stop_reason: those
-tokens are billed, so the caller records them and the daily budget counts
-them (llm/budget.py). One with no response (a transport error) has none.
-"""
+"""The LLMProvider interface, its result types and its errors."""
 from __future__ import annotations
 
 import json
@@ -48,10 +23,7 @@ def _params_from_json(value: Any) -> Any:
     return parsed
 
 
-# Structured outputs close every object schema (additionalProperties: false), so a
-# free-form dict there could only ever be {}: the model could not pass a single
-# parameter. In the schema the model sees, params is therefore a string holding a
-# JSON object; the validator turns it back into the dict the rest of the code uses.
+# Structured outputs forbid free-form objects, so the model sends params as a JSON string.
 CallParams = Annotated[
     dict[str, Any],
     BeforeValidator(_params_from_json),
@@ -87,12 +59,7 @@ class Plan(BaseModel):
 
 @dataclass(frozen=True)
 class ConverseResult:
-    """One turn of a tool-using conversation (the Ask analyst).
-
-    `content` is the SDK's content blocks, to be appended to the conversation
-    unchanged (thinking blocks included); `text` is its text blocks joined;
-    `tool_uses` are its tool_use blocks (each with .id, .name and .input).
-    """
+    """One turn of a tool-using conversation (the Ask analyst)."""
 
     content: list[Any]
     text: str
@@ -128,8 +95,7 @@ class StructuredResult:
 
 
 class LLMError(OversightError):
-    """A call that failed. usage and stop_reason: what its response reported, when one came back (see the module
-    docstring); None when none did."""
+    """A failed call; usage and stop_reason are set when a response came back, since those tokens are billed."""
 
     def __init__(
         self, message: str, *, retryable: bool = False, usage: Usage | None = None, stop_reason: str | None = None

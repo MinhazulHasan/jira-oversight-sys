@@ -1,14 +1,3 @@
-"""GET /issues/{key}/timeline (contract 4.5): the Issue page.
-
-One issue of the dashboard's project: its facts (its current assignee by Jira
-display name and picture version, points, time logged, the estimate's basis and
-when it was set, the effort ratio against R-EFF-01's threshold, cycle time,
-reopens, its Jira link), every status it sat in, the stages it jumped, its
-changelog (assignees as Assigned / Unassigned), the hours logged on it week by
-week (totals, never who), and every finding about it, open first, then newest
-first. The key is upper-cased before it is looked up; 404 when the snapshot has
-no such issue.
-"""
 from __future__ import annotations
 
 import sqlite3

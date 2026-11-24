@@ -1,16 +1,11 @@
-# The reference audit (the 2 Nov 2026 read-only audit of AIL), as quoted in Planning.md §1.
-# `python -m oversight baseline --compare` regenerates the baseline for this
-# window and compares. Explain every difference in reports/: the data wins,
-# then the plan is updated.
+# Reference audit figures; `python -m oversight baseline --compare` checks against them.
 project: AIL
 as_of: 2026-11-02          # window end (exclusive): local midnight in `timezone`
 window_days: 90            # window start: as_of minus 90 days = 2026-08-04
 timezone: America/Chicago  # the Jira account's zone; JQL reads dates in it
-# Tempo writes AIL worklogs through this app account (seen in AIL changelogs, 4 Nov 2026).
 tempo_account_id: "557058:295406f3-a1fc-4733-b906-dd15d021bd79"
 expected:
-  # Read-only JQL checks on 4 Nov 2026 are noted against each figure.
-  total_issues: 1134            # a count taken during 2 Nov; created < 2 Nov gives 1133, created < 3 Nov gives 1142
+  total_issues: 1134
   resolved_in_window: 291       # resolved >= "2026-08-04" AND resolved < "2026-11-02" gives 291
   with_original_estimate: 0     # gives 0
   with_story_points: 192        # gives 192

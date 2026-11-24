@@ -1,8 +1,4 @@
-"""The daily digest (Phase 5): what it says, what it never repeats, and what it records.
-
-Findings, runs, rule_status and sync_state rows are written straight into the
-store, so nothing here depends on the rule engine.
-"""
+"""The daily digest"""
 from __future__ import annotations
 
 import json
@@ -31,9 +27,6 @@ VERSION = "0.1.0"
 @pytest.fixture
 def rules() -> RulesConfig:
     return RulesConfig.load(CONFIG_FIXTURES / "rules.yaml")
-
-
-# --- builders -----------------------------------------------------------------------
 
 
 def _issue(
@@ -77,7 +70,6 @@ def _finding(
     project: str | None = None,
     version: str = VERSION,
 ) -> str:
-    # Another rule_version (a severity changed on the board, a catalogue version bump) names the same condition anew.
     finding_id = f"{rule_id}:{issue_key}:{evidence_key}" + ("" if version == VERSION else f":{version}")
     store.upsert(
         "findings",
@@ -109,7 +101,6 @@ def _resolve(store: Store, finding_id: str, *, at: datetime, why: str = "cleared
 
 
 def _reopen(store: Store, finding_id: str, *, at: datetime) -> None:
-    # What the engine does when a resolved finding hits again: first_seen_at stays.
     store.conn.execute(
         "UPDATE findings SET resolved_at = NULL, resolved_why = NULL, last_seen_at = ? WHERE finding_id = ?",
         (to_iso(at), finding_id),
@@ -164,7 +155,7 @@ def _synced(store: Store, at: datetime, *, project: str = "AIL", account_timezon
 
 
 class FakeChannel:
-    """Records what it is given; fails for the projects it is told to fail for."""
+    """Records what it is given"""
 
     name = "fake"
 
@@ -202,9 +193,6 @@ def _run(
     return run_digest(
         store, process, rules, settings, projects=list(projects), now=lambda: now, channel=channel, tz_name=tz, **kw
     )
-
-
-# --- content ------------------------------------------------------------------------
 
 
 def test_first_digest_counts_everything_open_as_new(store: Store, process: ProcessConfig, rules: RulesConfig) -> None:
@@ -246,12 +234,10 @@ def test_the_same_finding_never_appears_as_new_twice(
     assert day1.content.finding_ids == [first]
     assert "AIL-1 · Work started without an estimate" in day1.message.text
 
-    # Nothing changed: the finding is still open, and it is not "new" again.
     day2 = _run(store, process, rules, settings, now=NOW + DAY, channel=channel)[0]
     assert day2.content.unchanged and day2.content.finding_ids == []
     assert "AIL-1" not in day2.message.text
 
-    # A second finding opens; the first is still open and still not repeated.
     second = _finding(store, "AIL-2", "R-FLOW-02", evidence_key="skip-9", first_seen=NOW + DAY + timedelta(hours=1))
     day3 = _run(store, process, rules, settings, now=NOW + 2 * DAY, channel=channel)[0]
     assert day3.content.finding_ids == [second]
@@ -267,7 +253,6 @@ def test_a_reopened_finding_is_new_only_if_no_digest_ever_showed_it(
 ) -> None:
     _issue(store, "AIL-1")
     _issue(store, "AIL-2")
-    # AIL-1 was opened and cleared before any digest existed: no reader has seen it.
     quiet = _finding(store, "AIL-1", first_seen=NOW - 5 * DAY, resolved=NOW - 4 * DAY, resolved_why="cleared")
     shown = _finding(store, "AIL-2", "R-FLOW-02", evidence_key="skip-1", first_seen=NOW - DAY)
     channel = FakeChannel()
@@ -282,10 +267,8 @@ def test_a_reopened_finding_is_new_only_if_no_digest_ever_showed_it(
     _reopen(store, quiet, at=NOW + DAY + timedelta(hours=2))
     _reopen(store, shown, at=NOW + DAY + timedelta(hours=2))
     day3 = _run(store, process, rules, settings, now=NOW + 2 * DAY, channel=channel)[0]
-    # The never-shown finding is new to the reader; the one shown on day 1 is not repeated.
     assert [i.finding_id for i in day3.content.new_breaches] == [quiet]
     assert "AIL-2" not in day3.message.text.split("Hot spots")[0]
-    # Both are open, and the hot spots say so.
     assert [(s.epic_key, s.open_breaches) for s in day3.content.hot_spots] == [(None, 2)]
 
 
@@ -299,7 +282,6 @@ def test_a_resolved_finding_appears_once_under_resolved(
     _run(store, process, rules, settings, channel=channel)
 
     _resolve(store, fixed, at=NOW + timedelta(hours=3))
-    # A superseded finding is a catalogue version bump, not something that got fixed.
     _finding(store, "AIL-2", "R-HYG-01", evidence_key="unassigned", first_seen=NOW - 2 * DAY,
              resolved=NOW + timedelta(hours=3), resolved_why="superseded")
 
@@ -320,8 +302,6 @@ def test_a_resolved_finding_appears_once_under_resolved(
 def test_a_finding_closed_because_a_boards_rule_settings_changed_is_never_reported_as_resolved(
     store: Store, process: ProcessConfig, rules: RulesConfig, settings: Settings
 ) -> None:
-    """JO-15: an admin turning a rule off or raising its threshold closes findings as "settings_changed", and a
-    finding on work finished before the look-back closes as "aged_out": nothing was fixed, so neither is "resolved"."""
     for key in ("AIL-1", "AIL-2", "AIL-3"):
         _issue(store, key)
     fixed = _finding(store, "AIL-1", first_seen=NOW - DAY)
@@ -342,10 +322,6 @@ def test_a_finding_closed_because_a_boards_rule_settings_changed_is_never_report
 def test_a_severity_change_and_its_revert_bring_nothing_back_as_new(
     store: Store, process: ProcessConfig, rules: RulesConfig, settings: Settings
 ) -> None:
-    """JO-15: changing a rule's severity in a board's rule settings supersedes its open findings and raises each hit
-    again under a new id (rule_version "0.1.0+breach"); changing it back reopens the originals. Neither is a new problem
-    (nor a fix), so the digest that follows says nothing changed; a finding of the same rule on other work is still
-    new."""
     for key in ("AIL-1", "AIL-2", "AIL-3"):
         _issue(store, key)
     reopened = {"rule_id": "R-FLOW-03", "evidence_key": "reopen-7", "message": "Reopened: Done → In Progress"}
@@ -355,7 +331,6 @@ def test_a_severity_change_and_its_revert_bring_nothing_back_as_new(
     day1 = _run(store, process, rules, settings, channel=channel)[0]
     assert [item.finding_id for item in day1.content.new_warnings] == [first, other]
 
-    # Warning to breach: the originals superseded, each hit raised again as a breach under a new id.
     for finding in (first, other):
         _resolve(store, finding, at=NOW + timedelta(hours=2), why="superseded")
     breaches = [_finding(store, key, severity="breach", first_seen=NOW + timedelta(hours=2), version="0.1.0+breach",
@@ -364,7 +339,6 @@ def test_a_severity_change_and_its_revert_bring_nothing_back_as_new(
     assert day2.content.unchanged and day2.message.text.endswith("\nNothing changed since 4 Nov 2026.")
     assert day2.content.finding_ids == [] and "AIL-1" not in day2.message.text
 
-    # And back: the breaches superseded, the originals reopened under their own ids. Meanwhile AIL-3 reopened too.
     for finding in breaches:
         _resolve(store, finding, at=NOW + DAY + timedelta(hours=2), why="superseded")
     for finding in (first, other):
@@ -398,26 +372,21 @@ def test_hot_spots_rank_epics_by_open_findings(store: Store, process: ProcessCon
         _issue(store, key)
     _issue(store, "AIL-401", epic_key="AIL-900")  # an epic the snapshot does not hold
 
-    # Onboarding: 1 breach + 2 warnings open; a cleared one does not count.
     _finding(store, "AIL-101")
     _finding(store, "AIL-102", "W-AGE-01", severity="warning", evidence_key="stuck-In Progress")
     _finding(store, "AIL-103", "W-EFF-01", severity="warning", evidence_key="ratio-ge-0.8")
     _finding(store, "AIL-101", "R-FLOW-02", evidence_key="skip-1", resolved=NOW - timedelta(hours=1), resolved_why="cleared")
-    # Reporting: 3 breaches, the same total but more breaches, so it ranks first.
     _finding(store, "AIL-201")
     _finding(store, "AIL-202")
     _finding(store, "AIL-201", "R-HYG-01", evidence_key="unassigned")
-    # No epic: 2 breaches. Unknown epic: 1 warning.
     _finding(store, "AIL-301")
     _finding(store, "AIL-302")
     _finding(store, "AIL-401", "W-AGE-01", severity="warning", evidence_key="stuck-In Progress")
-    # A sprint-scoped warning is not an issue: it stays out of the hot spots.
     _finding(store, "sprint:42", "W-SPR-01", severity="warning", evidence_key="sprint-42-at-risk",
              message="Sprint 42 ends in 2 days with 35% not started", project="AIL")
 
     content = _build(store, process, rules)
 
-    # Work outside any epic (2 breaches) holds more than AIL-900, but a hot spot is an epic: it comes last.
     assert [(s.epic_key, s.epic_title, s.open_breaches, s.open_warnings) for s in content.hot_spots] == [
         ("AIL-200", "Reporting exports", 3, 0),
         ("AIL-100", "Onboarding flow", 1, 2),
@@ -430,7 +399,6 @@ def test_hot_spots_rank_epics_by_open_findings(store: Store, process: ProcessCon
     assert "AIL-100 · Onboarding flow · 1 breach, 2 warnings\n" in text
     assert "(no epic) · 2 breaches, 0 warnings\n" in text
     assert "AIL-900 · 0 breaches, 1 warning" in text
-    # The sprint warning is still reported, with no browse link and no summary.
     sprint = next(i for i in content.new_warnings if i.issue_key == "sprint:42")
     assert sprint.url is None and sprint.issue_summary is None
     assert "sprint:42 · Sprint at risk · Sprint 42 ends in 2 days with 35% not started" in text
@@ -452,7 +420,6 @@ def test_hot_spots_keep_the_top_five(store: Store, process: ProcessConfig, rules
     assert spots[0].epic_key == "AIL-800" and spots[0].open_breaches == 2
     assert [s.epic_key for s in spots[1:]] == ["AIL-100", "AIL-200", "AIL-300", "AIL-400"]  # ties by key
 
-    # Work outside any epic never takes one of the five places, however much it holds; it follows them.
     for key in ("AIL-901", "AIL-902", "AIL-903"):
         _issue(store, key)
         _finding(store, key)
@@ -464,11 +431,9 @@ def test_hot_spots_keep_the_top_five(store: Store, process: ProcessConfig, rules
 def test_not_measurable_names_the_missing_sources(store: Store, process: ProcessConfig, rules: RulesConfig) -> None:
     _issue(store, "AIL-1")
     _finding(store, "AIL-1")
-    # Only the latest successful run counts: an older one and a later failed one are ignored.
     _rules_run(store, started=NOW - DAY, not_measurable=(("R-HYG-01", ["assignee"]),))
     _rules_run(store, started=NOW - timedelta(hours=1))
     _rules_run(store, started=NOW - timedelta(minutes=10), not_measurable=(("R-EFF-01", ["worklogs"]),), status="failed")
-    # Another project's rows never leak in.
     _rules_run(store, started=NOW - timedelta(minutes=5), project="DEMO", not_measurable=(("R-FLOW-02", ["done"]),))
 
     content = _build(store, process, rules)
@@ -510,7 +475,6 @@ def test_stale_data_is_flagged_at_the_top(store: Store, process: ProcessConfig, 
     html = message.html or ""
     assert "<p><strong>Data may be stale:" in html and html.index("Data may be stale") < html.index("First digest")
 
-    # Two hours is the limit: anything newer is fine.
     _synced(store, NOW - timedelta(hours=2))
     content = _build(store, process, rules)
     assert not content.stale and content.last_synced_at == "2026-11-04T07:00:00.000Z"
@@ -519,7 +483,6 @@ def test_stale_data_is_flagged_at_the_top(store: Store, process: ProcessConfig, 
     _synced(store, NOW - timedelta(hours=2, seconds=1))
     assert _build(store, process, rules).stale
 
-    # No sync at all is worse than an old one.
     store.delete_rows("sync_state", {"scope": "AIL"})
     content = _build(store, process, rules)
     assert content.stale and content.last_synced_at is None
@@ -555,7 +518,6 @@ def test_an_unchanged_day_sends_the_one_line_digest(
 def test_a_quiet_day_on_stale_data_still_warns(
     store: Store, process: ProcessConfig, rules: RulesConfig, settings: Settings
 ) -> None:
-    # A silent day and a broken sync must never look the same.
     channel = FakeChannel()
     _run(store, process, rules, settings, channel=channel)
     result = _run(store, process, rules, settings, now=NOW + DAY, channel=channel)[0]
@@ -597,9 +559,6 @@ def test_sections_are_capped_at_the_most_recent_with_and_n_more(
     html = render_digest(content, tz_name="UTC").html or ""
     assert "<h2>New breaches (30)</h2>" in html and "<p>and 5 more</p>" in html
 
-    # The digests row carries every finding the digest counted, the 5 beyond the cap too
-    # (Planning.md Phase 5: only send what changed since the last digest). So none of them
-    # comes back as "new" the next day, and a day with no change is one line.
     _synced(store, NOW)
     channel = FakeChannel()
     first = _run(store, process, rules, settings, channel=channel)[0]
@@ -649,7 +608,7 @@ def test_the_digest_names_no_people_or_account_ids(
 
 
 def test_dates_render_in_the_given_zone(store: Store, process: ProcessConfig, rules: RulesConfig, settings: Settings) -> None:
-    late = datetime(2026, 11, 4, 23, 30, tzinfo=UTC)  # already 5 Nov in Sydney
+    late = datetime(2026, 11, 4, 23, 30, tzinfo=UTC)
     _issue(store, "AIL-1")
     fixed = _finding(store, "AIL-1", first_seen=late - timedelta(hours=1))
     content = _build(store, process, rules, now=late)
@@ -660,7 +619,6 @@ def test_dates_render_in_the_given_zone(store: Store, process: ProcessConfig, ru
     with pytest.raises(ConfigError, match="unknown time zone"):
         render_digest(content, tz_name="Mars/Olympus")
 
-    # The window start follows the zone too.
     channel = FakeChannel()
     _run(store, process, rules, settings, now=late, channel=channel, tz="Australia/Sydney")
     _resolve(store, fixed, at=late + timedelta(hours=2))
@@ -691,7 +649,6 @@ def test_urls_appear_only_when_a_base_url_is_given(
     assert "browse" not in message.text and "href" not in (message.html or "") and message.links == []
     assert "<li>AIL-7 · Work started without an estimate" in (message.html or "")
 
-    # run_digest passes the configured site; a blank one means no links.
     sent = _run(store, process, rules, settings, channel=FakeChannel())[0]
     assert sent.message.links == [("AIL-7", f"{BASE}/browse/AIL-7")]
     quiet = settings.model_copy(update={"jira_base_url": ""})
@@ -778,9 +735,6 @@ def test_build_digest_rejects_bad_input(store: Store, process: ProcessConfig, ru
         build_digest(store, process, rules, project="AIL", now=datetime(2026, 11, 4, 9, 0))
 
 
-# --- running ------------------------------------------------------------------------
-
-
 def test_the_digests_row_holds_the_finding_ids_and_the_run(
     store: Store, process: ProcessConfig, rules: RulesConfig, settings: Settings
 ) -> None:
@@ -834,7 +788,6 @@ def test_a_channel_error_fails_the_run_but_other_projects_still_go_out(
     assert stats["AIL"] == {"status": "failed", "channel": "fake", "error": "webhook down"}
     assert stats["DEMO"]["status"] == "sent"
 
-    # Nothing reached anyone for AIL, so its next digest starts from scratch.
     again = _run(store, process, rules, settings, now=NOW + DAY, channel=FakeChannel())[0]
     assert again.content.since is None and [i.issue_key for i in again.content.new_breaches] == ["AIL-1"]
 
@@ -865,7 +818,6 @@ def test_run_digest_picks_the_configured_channel_and_zone(
     _finding(store, "AIL-1", first_seen=late - timedelta(hours=1))
     _synced(store, late - timedelta(minutes=30), account_timezone="Australia/Sydney")
 
-    # No zone given: REPORT_TIMEZONE decides the date (23:30 UTC on the 4th is the 5th in Sydney).
     sydney = settings.model_copy(update={"report_timezone": "Australia/Sydney"})
     result = run_digest(store, process, rules, sydney, projects=["AIL"], now=lambda: late)
 
@@ -876,7 +828,6 @@ def test_run_digest_picks_the_configured_channel_and_zone(
     )
     assert store.query_one("SELECT channel, delivery_ref FROM digests", ())["delivery_ref"] == str(path)
 
-    # Blank, it is UTC: the account's zone (the sync recorded Sydney) never decides it.
     assert settings.report_timezone == ""
     store.delete_rows("digests", {"project_key": "AIL"})
     result = run_digest(store, process, rules, settings, projects=["AIL"], now=lambda: late)
@@ -924,5 +875,4 @@ def test_run_digest_fails_early_on_bad_configuration(
     with pytest.raises(ConfigError, match="not configured"):
         _run(store, process, rules, settings, projects=("NOPE",), channel=FakeChannel())
     assert store.count("digests") == 0
-    # The zone and project list are checked before a run record exists; a bad project fails its run.
     assert [r["status"] for r in store.query("SELECT status FROM runs WHERE kind = 'digest'")] == ["failed"]

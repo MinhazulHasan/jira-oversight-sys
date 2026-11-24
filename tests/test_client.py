@@ -1,8 +1,4 @@
-"""The read-only Jira client: retries, errors, credentials, transport settings and paging.
-
-Offline: every test answers through httpx.MockTransport and records sleeps
-instead of waiting.
-"""
+"""The read-only Jira client"""
 from __future__ import annotations
 
 import base64
@@ -27,7 +23,6 @@ from oversight.timeutil import UTC
 JIRA_FIXTURES = Path(__file__).parent / "fixtures" / "jira"
 BASE_URL = "https://fake.atlassian.net"
 EMAIL = "dev@example.com"
-# Distinctive, so a leak check can't pass by accident.
 TOKEN = "tok-3f9a1c-do-not-leak"
 BASIC = base64.b64encode(f"{EMAIL}:{TOKEN}".encode()).decode()
 SERVER_DATE = "Wed, 04 Nov 2026 10:00:00 GMT"
@@ -36,7 +31,7 @@ Handler = Callable[[httpx.Request], httpx.Response]
 
 
 class FakeJira:
-    """MockTransport handler: answers with `handler`, records requests and sleeps."""
+    """MockTransport handler"""
 
     def __init__(self, handler: Handler) -> None:
         self.handler = handler
@@ -87,11 +82,7 @@ def load_fixture(name: str) -> Any:
 
 @pytest.fixture(autouse=True)
 def logs() -> Iterator[list[dict[str, Any]]]:
-    """Every structlog event of the test, debug included, as raw dicts.
-
-    Capturing also keeps the client's log lines off any stream an earlier CLI
-    test left structlog writing to. The configuration is restored afterwards.
-    """
+    """Every structlog event of the test, debug included, as raw dicts."""
     saved = structlog.get_config()
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
     try:
@@ -99,9 +90,6 @@ def logs() -> Iterator[list[dict[str, Any]]]:
             yield captured
     finally:
         structlog.configure(**saved)
-
-
-# --- retries -------------------------------------------------------------------------
 
 
 def test_429_waits_for_retry_after_then_succeeds() -> None:
@@ -272,9 +260,6 @@ def test_jira_unavailable_reports_the_last_attempt(replies: list[Any], status: i
     assert err.value.status_code == status
 
 
-# --- errors that are not retried -----------------------------------------------------
-
-
 @pytest.mark.parametrize("status", [401, 403])
 def test_auth_failures_raise_at_once(status: int) -> None:
     jira = FakeJira.replying(httpx.Response(status, json={"errorMessages": ["Client must be authenticated"]}))
@@ -379,9 +364,6 @@ def test_an_unexpected_response_shape_raises_jira_error(call: Callable[[JiraClie
         call(jira.client())
 
 
-# --- empty bodies --------------------------------------------------------------------
-
-
 def test_204_returns_none() -> None:
     jira = FakeJira.replying(httpx.Response(204))
     assert jira.client().request("GET", "/rest/api/3/myself") is None
@@ -391,9 +373,6 @@ def test_204_returns_none() -> None:
 def test_an_empty_200_body_returns_none(content: bytes) -> None:
     jira = FakeJira.replying(httpx.Response(200, content=content))
     assert jira.client().request("GET", "/rest/api/3/myself") is None
-
-
-# --- credentials and logs ------------------------------------------------------------
 
 
 def _echo_credentials(status: int) -> Handler:
@@ -455,9 +434,6 @@ def test_a_transport_error_is_logged_with_its_type(logs: list[dict[str, Any]]) -
     jira.client().myself()
     first = next(event for event in logs if event["event"] == "jira_request")
     assert (first["status"], first["error"]) == (None, "ConnectError")
-
-
-# --- transport settings --------------------------------------------------------------
 
 
 def test_basic_auth_and_the_json_accept_header_are_sent() -> None:
@@ -549,9 +525,6 @@ def test_the_context_manager_closes_the_client() -> None:
     assert len(jira.requests) == 1
 
 
-# --- simple reads --------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("call", "path", "body"),
     [
@@ -584,9 +557,6 @@ def test_simple_reads_return_the_body(call: Callable[[JiraClient], Any], path: s
     assert call(jira.client()) == body
     [sent] = jira.requests
     assert (sent.method, sent.url.path, sent.url.query) == ("GET", path, b"")
-
-
-# --- search/jql ----------------------------------------------------------------------
 
 
 def test_search_jql_follows_next_page_token_over_three_pages() -> None:
@@ -653,7 +623,6 @@ def test_search_jql_refuses_a_repeated_token(tokens: list[str]) -> None:
 
 
 def test_search_jql_fetches_a_page_only_when_it_is_needed() -> None:
-    # doctor's field probe reads one page of one issue and stops.
     jira = FakeJira.replying(ok({"issues": [{"id": "52507"}], "nextPageToken": "t1"}))
     pages = jira.client().search_jql('project in (AIL) AND cf[10016] is not EMPTY', ["id"], page_size=1)
     assert jira.requests == []
@@ -666,9 +635,6 @@ def test_search_jql_refuses_a_negative_page_size_before_any_request() -> None:
     with pytest.raises(ValueError, match="page_size"):
         jira.client().search_jql('project = "AIL"', ["id"], page_size=-1)
     assert jira.requests == []
-
-
-# --- changelog/bulkfetch -------------------------------------------------------------
 
 
 def test_bulk_changelog_chunks_issues_by_1000_and_fields_by_10() -> None:
@@ -710,7 +676,6 @@ def test_bulk_changelog_follows_next_page_token_and_yields_every_entry() -> None
     }
     jira = FakeJira(lambda request: ok(pages[body_of(request).get("nextPageToken")]))
     entries = list(jira.client().bulk_changelog(["AIL-1140", "AIL-1141"], ["status", "customfield_10016"]))
-    # The same issueId can come back in several entries; callers merge them.
     assert [entry["issueId"] for entry in entries] == ["52507", "52507", "52508"]
     first, second = jira.bodies()
     assert first == {
@@ -747,9 +712,6 @@ def test_bulk_changelog_drops_repeated_ids() -> None:
     list(jira.client().bulk_changelog(["AIL-1", "AIL-2", "AIL-1"], ["status", "status"]))
     assert jira.bodies()[0]["issueIdsOrKeys"] == ["AIL-1", "AIL-2"]
     assert jira.bodies()[0]["fieldIds"] == ["status"]
-
-
-# --- startAt paging ------------------------------------------------------------------
 
 
 def start_at_pages(
@@ -795,7 +757,6 @@ def test_issue_changelog_reads_the_real_sample_in_one_request() -> None:
 
 def test_issue_worklogs_page_by_5000_until_total() -> None:
     worklogs = [{"id": str(67746 + n), "issueId": "52507", "timeSpentSeconds": 3600} for n in range(3)]
-    # The worklog list has no isLast: only total says when to stop.
     jira = FakeJira(start_at_pages(worklogs, "worklogs", 2, is_last=False))
     assert jira.client().issue_worklogs("AIL-1140") == worklogs
     assert jira.params("startAt") == ["0", "2"]
@@ -817,8 +778,6 @@ def test_start_at_paging_stops_on_an_empty_page() -> None:
     assert jira.client().board_sprints("21") == []
     assert len(jira.requests) == 1
 
-
-# --- worklog feeds -------------------------------------------------------------------
 
 FEEDS = [
     pytest.param("worklog_updated", "/rest/api/3/worklog/updated", id="updated"),
@@ -858,7 +817,6 @@ def test_a_worklog_feed_that_does_not_advance_raises(method_name: str, path: str
     page: dict[str, Any] = {"values": [{"worklogId": 1}], "since": 1000, "lastPage": False}
     if until is not None:
         page["until"] = until
-    # A bounded script: a client that kept polling would fail fast instead of hanging.
     jira = FakeJira.replying(ok(page), ok(page))
     with pytest.raises(JiraError, match="did not advance"):
         getattr(jira.client(), method_name)(1000)
@@ -877,9 +835,6 @@ def test_worklog_feeds_need_epoch_milliseconds(since: Any) -> None:
     with pytest.raises(ValueError, match="since_ms"):
         jira.client().worklog_updated(since)
     assert jira.requests == []
-
-
-# --- worklog/list --------------------------------------------------------------------
 
 
 def test_worklog_list_posts_ids_in_chunks_of_1000() -> None:
@@ -907,15 +862,11 @@ def test_worklog_list_of_nothing_sends_nothing() -> None:
     assert jira.requests == []
 
 
-# --- assignable users (a board's members) ---------------------------------------------------------
-
 ASSIGNABLE = "/rest/api/3/user/assignable/search"
-# Every range Jira serves: the read asks for each of them, whatever came of the one before.
 TEN_RANGES = ["0", "100", "200", "300", "400", "500", "600", "700", "800", "900"]
 
 
 def users(*accounts: str) -> list[dict[str, Any]]:
-    """User objects as the assignable-user search returns them (made up, with everything Jira can send)."""
     return [
         {"self": f"{BASE_URL}/rest/api/3/user?accountId={account}", "accountId": account, "accountType": "atlassian",
          "emailAddress": f"{account}@example.invalid", "displayName": f"Member {account}", "active": True,
@@ -927,10 +878,7 @@ def users(*accounts: str) -> list[dict[str, Any]]:
 def assignable_pages(
     site: list[dict[str, Any]], *, assignable: Callable[[int], bool] = lambda _n: True, ignore_start: bool = False
 ) -> Handler:
-    """The read as Atlassian documents it: take the site's users in [startAt, startAt + maxResults), up to the
-    thousandth user, and send a plain JSON array of those of them who can be assigned (`assignable`, by place among
-    the site's users), so a page is often short or empty while more follow, and no one past the 1,000th is ever
-    sent. ignore_start: a server that sends the first page every time."""
+    """The read as Atlassian documents it"""
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert (request.method, request.url.path) == ("GET", ASSIGNABLE)
@@ -942,7 +890,7 @@ def assignable_pages(
 
 
 class Clock:
-    """A fake monotonic clock: the sleeps and the slow answers move it on."""
+    """A fake monotonic clock"""
 
     def __init__(self) -> None:
         self.now = 0.0
@@ -972,9 +920,6 @@ def test_assignable_users_scan_every_range_jira_serves() -> None:
 
 
 def test_empty_ranges_in_the_middle_never_end_the_read(logs: list[dict[str, Any]]) -> None:
-    """The product owner's "I cannot see all the people on the board": on a real site, app accounts, customers and
-    other teams fill whole ranges between a board's people. Here only places 0-9 and 450-459 of 600 can be
-    assigned, so the ranges from 100 to 400 come back empty, and the ten at 450 are found all the same."""
     site = users(*(f"acc-{n:03d}" for n in range(600)))
     jira = FakeJira(assignable_pages(site, assignable=lambda n: n < 10 or 450 <= n < 460))
     found = jira.client().assignable_users("AIL")
@@ -987,7 +932,7 @@ def test_assignable_users_read_on_past_short_pages() -> None:
     site = users(*(f"acc-{n:03d}" for n in range(700)))
     jira = FakeJira(assignable_pages(site, assignable=lambda n: n % 7 == 0))  # some fifteen of each hundred
     assert jira.client().assignable_users("AIL") == site[::7]
-    assert len(jira.requests) == 10  # the site's seven ranges, then three past its end: every range Jira serves
+    assert len(jira.requests) == 10
 
 
 @pytest.mark.parametrize(
@@ -1020,10 +965,6 @@ def test_a_server_that_ignores_start_at_costs_the_ten_requests_and_no_more_and_i
 
 
 def test_a_member_sent_again_as_the_sites_users_move_never_ends_the_read(logs: list[dict[str, Any]]) -> None:
-    """Jira pages the site's users by place, and the places can move while the ten ranges are read: here an account
-    joins the site ahead of everyone once the first page is sent. The board's first member (place 99, then 100)
-    comes again, alone, at the top of the next range, and its second (place 250, then 251) waits in the range
-    after: the read goes on past the repeat and finds both, where stopping there would have dropped the second."""
     site = users(*(f"acc-{n:03d}" for n in range(400)))
     board = {"acc-099", "acc-250"}
     pages = assignable_pages(site, assignable=lambda place: site[place]["accountId"] in board)
@@ -1056,12 +997,10 @@ def test_assignable_users_keep_each_account_once_and_read_on_past_an_overlap() -
 
 
 def test_assignable_users_stop_at_the_cap_and_say_so(logs: list[dict[str, Any]]) -> None:
-    """Ten ranges of 100 hold 1,000 users at most, so only a server that sends more than it was asked for can
-    reach the cap: here 1,200 a page."""
     everyone = users(*(f"acc-{n:04d}" for n in range(2400)))
     jira = FakeJira.replying(ok(everyone[:1200]), ok(everyone[1200:]))
     assert jira.client().assignable_users("AIL") == everyone[:2000]
-    assert len(jira.requests) == 2  # the second page brought someone past the cap, and the read stopped there
+    assert len(jira.requests) == 2
     capped = [event for event in logs if str(event["event"]).startswith("board_members")]
     assert capped == [{"event": "board_members_capped", "logger": "jira", "board": "AIL", "kept": 2000, "cap": 2000,
                        "log_level": "warning"}]
@@ -1182,8 +1121,6 @@ def test_assignable_users_need_a_plain_project_key(key: Any) -> None:
         jira.client().assignable_users(key)
     assert jira.requests == []
 
-
-# --- does the site have users past the scan? ---------------------------------------------------------------
 
 SITE_USERS = "/rest/api/3/users/search"
 

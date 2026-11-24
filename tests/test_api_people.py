@@ -1,24 +1,3 @@
-"""People in the dashboard API (JO-06, JO-10, contract 4.12 to 4.14): GET /people, the person
-filter and facet of GET /findings, the assignee of every finding and of the Issue page, each
-person's picture (its version in every person object and facet entry, and GET
-/people/{id}/avatar), and GET /people/directory, everyone on the board for Ask's @ list: its
-assignees and its members who hold none of its tickets.
-
-Two stores. A hand-built one, written as version 3 and migrated, so its people come from
-raw_json exactly as the real snapshot's will, pins each rule: the order and every tie-break,
-the Unassigned row, the counts, the filter with several values and with "unassigned", sprint
-findings left out by any person filter, facets at zero, an id nobody on the board has, and the
-names (trimmed, capped at 128, "Unnamed account"). Its user objects carry everything Jira's
-can (email address, picture URLs on the real site's two hosts, time zone), its pictures are
-fetched from a stub of those hosts (one of each type, a redirect, a refusal, missing ones),
-and the account ids are in changelogs and worklogs too: every endpoint's response is searched
-for all of it, picture URLs included. Each board also has members from a member fetch, stored as
-the sync stores them (mapping.map_member over the same full user objects): some assignees, and
-three people who hold no ticket (one with a picture, one with an accented name, one on AIL only). The seeded DEMO store (the findings lifecycle of
-test_api_findings) then holds the same rules against SQL written here, with the fictional names
-and the demo's two pictures. Person ids and picture versions are worked out here from the
-contract, not with the service's helpers.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -54,19 +33,15 @@ from tests.test_api_findings import Api, check_finding, check_meta, check_page, 
 
 T = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
 KEY = "test-key"
-ZONE = "Pacific/Chatham"  # the users' own zone: the account's zone in sync_state is Europe/London
+ZONE = "Pacific/Chatham"
 ROW_FIELDS = ("person", "tickets", "open_tickets", "open_breaches", "open_warnings", "tickets_with_findings")
 RULES = RulesConfig.load(CONFIG_FIXTURES / "rules.yaml")
 
 
 def pid(account: str) -> str:
-    """The contract's person id, written out: "p" and 12 hex characters of sha256(account id)."""
     return "p" + hashlib.sha256(account.encode("utf-8")).hexdigest()[:12]
 
 
-# --- the hand-built store -------------------------------------------------------------------------
-
-# Display names as Jira gives them; None: Jira gave none. Synthetic, so nothing here names anyone.
 NAMES: dict[str, str | None] = {
     "echo": "Echo Tester",
     "delta": "Delta Tester",
@@ -80,20 +55,16 @@ NAMES: dict[str, str | None] = {
     "zulu": "  " + "Zulu " * 40,  # 202 characters with spaces around: trimmed, then cut to 128
     "outsider": "Outsider Tester",  # only on AIL
 }
-# Members who hold no ticket on the board they are members of (JO-10). Synthetic too.
 MEMBER_NAMES: dict[str, str] = {
     "mike": "Mike Member",  # DEMO, with a picture
     "olof": "Ólöf Árnadóttir",  # DEMO: folded, she sorts among the O's, not after Zulu
     "oscar": "Oscar Member",  # AIL only
 }
 ALL_NAMES: dict[str, str | None] = {**NAMES, **MEMBER_NAMES}
-# Each board's members, as its last member fetch listed them: some of its assignees, and the members above.
 BOARD_MEMBERS: dict[str, tuple[str, ...]] = {"DEMO": ("echo", "delta", "mike", "olof"), "AIL": ("outsider", "oscar")}
-# Account ids in Atlassian's shape, made up.
 ACCOUNTS = {who: f"712020:{hashlib.sha256(who.encode()).hexdigest()[:8]}-0f0f-4a4a-8b8b-{n:012d}"
             for n, who in enumerate(ALL_NAMES, 1)}
 SIZES = ("16x16", "24x24", "32x32", "48x48")
-# The real site's two picture hosts, with made-up paths: Atlassian's own store, and Gravatar for these.
 ATLASSIAN = "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net"
 ON_GRAVATAR = ("delta", "bravo")
 
@@ -116,8 +87,6 @@ def avatar(who: str, size: str) -> str:
     return f"{ATLASSIAN}/{ACCOUNTS[who]}/{hashlib.sha256(who.encode()).hexdigest()[:8]}-5e5e/{pixels}"
 
 
-# The pictures the stub hosts hold: one of each type the service keeps. delta's Gravatar redirects to its
-# initials; bravo's Gravatar has none (404); alpha's store sends an SVG, which is refused; the rest have none.
 PICTURES: dict[str, tuple[bytes, str]] = {
     "echo": (b"\x89PNG\r\n\x1a\n" + b"echo's picture", "image/png"),
     "charlie": (b"\xff\xd8\xff\xe0" + b"charlie's picture", "image/jpeg"),
@@ -129,7 +98,6 @@ SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
 
 
 def version(data: bytes) -> str:
-    """A picture's version, from the contract: the first 12 hex characters of the SHA-256 of its bytes."""
     return hashlib.sha256(data).hexdigest()[:12]
 
 
@@ -171,7 +139,6 @@ def user(who: str) -> dict[str, Any]:
     return found
 
 
-# key -> (assignee, status)
 TICKETS: dict[str, tuple[str | None, str]] = {
     "DEMO-1": ("echo", "In Progress"),
     "DEMO-2": ("delta", "In Progress"),
@@ -190,7 +157,6 @@ TICKETS: dict[str, tuple[str | None, str]] = {
     "AIL-2": ("echo", "In Progress"),
 }
 STATUSES = {"To Do": ("10001", "new"), "In Progress": ("10002", "indeterminate"), "Done": ("10003", "done")}
-# name -> (rule, issue key as stored, open)
 FINDINGS: dict[str, tuple[str, str, bool]] = {
     "f1": ("R-EST-01", "DEMO-1", True),
     "f2": ("R-HYG-01", "DEMO-1", True),
@@ -245,8 +211,6 @@ def payload(key: str, n: int) -> dict[str, Any]:
 
 
 def build(path: Path) -> None:
-    """Write the store as version 3 (no people table), then open it: the migrations name everyone and keep
-    their picture URLs. Then the pictures are fetched from the stub hosts, as a sync does after it runs."""
     fields = FieldsConfig.load(CONFIG_FIXTURES / "fields.yaml")
     with Store.open(path) as store:
         with store.transaction():
@@ -256,7 +220,6 @@ def build(path: Path) -> None:
                 store.set_cursor(board, last_synced_at=to_iso(T), run_id="r1", account_timezone="Europe/London")
             for n, key in enumerate(TICKETS, 1):
                 store.upsert("issues", map_issue(payload(key, n), fields))
-            # The account ids the snapshot holds besides the assignees': none may leave it either.
             moved = to_iso(T - timedelta(days=20))
             store.upsert("status_changes", {"issue_key": "DEMO-1", "changelog_id": "100", "changed_at": moved,
                                             "author_id": ACCOUNTS["delta"], "from_status": "To Do", "to_status": "In Progress"})
@@ -279,7 +242,6 @@ def build(path: Path) -> None:
         store.conn.executescript("DROP TABLE people; PRAGMA user_version = 3;")
     with Store.open(path) as store:
         assert store.count("people") == len(NAMES)
-        # Each board's members, as the sync's member step stores them: the same full user objects, mapped.
         with store.transaction():
             for board, who in BOARD_MEMBERS.items():
                 rows = [map_member(user(member), to_iso(T)) for member in who]
@@ -325,7 +287,6 @@ def get(client: TestClient, path: str, params: Any = None) -> Any:
 
 
 def shown(who: str | None) -> dict[str, str | None] | None:
-    """The person the contract sends for a fixture account (None: nobody), with its picture's version."""
     if who is None:
         return None
     raw = ALL_NAMES[who]
@@ -348,7 +309,6 @@ def of(*names: str) -> set[str]:
 
 
 WHISKEYS = sorted(("whiskey1", "whiskey2"), key=lambda who: pid(ACCOUNTS[who]))
-# (account, tickets, open tickets, open breaches, open warnings, tickets with findings), in the contract's order.
 DEMO_ROWS: list[tuple[str | None, int, int, int, int, int]] = [
     ("echo", 2, 1, 2, 0, 1),  # most breaches
     ("charlie", 1, 1, 1, 2, 1),  # then most warnings
@@ -366,9 +326,6 @@ DEMO_ROWS: list[tuple[str | None, int, int, int, int, int]] = [
 
 def rows_of(body: Any) -> list[tuple[Any, ...]]:
     return [tuple(row[name] for name in ROW_FIELDS) for row in body["people"]]
-
-
-# --- GET /people ----------------------------------------------------------------------------------
 
 
 def test_people_counts_everyone_on_the_board_in_the_contracts_order(built: TestClient) -> None:
@@ -408,7 +365,6 @@ def test_an_at_sign_alone_is_not_an_address(raw: str) -> None:
 def test_people_reads_only_the_picked_board(built: TestClient) -> None:
     body = get(built, "/people", {"project": "AIL"})
     assert body["meta"]["projects"] == ["AIL"]
-    # No unassigned ticket on AIL, so no Unassigned row; echo's DEMO tickets are not counted here.
     assert rows_of(body) == [(shown("echo"), 1, 1, 1, 0, 1), (shown("outsider"), 1, 1, 0, 0, 0)]
     assert shown("outsider") not in [row["person"] for row in get(built, "/people")["people"]]
 
@@ -440,9 +396,6 @@ def test_each_row_is_exactly_its_findings_filter(built: TestClient) -> None:
 
 
 def test_findings_whose_issue_has_left_the_snapshot_are_no_ones(tmp_path: Path) -> None:
-    """A full sync deleted DEMO-1 and DEMO-2 (or Jira moved them) before the next rules run, and their open
-    findings stay open until a run resolves them. They stay in the list, keys and all, but they are no one's:
-    not their old assignees', and not Unassigned's either."""
     build(tmp_path / "oversight.db")
     with Store.open(tmp_path / "oversight.db") as store, store.transaction():
         store.delete_issue("DEMO-1")
@@ -476,9 +429,6 @@ def test_findings_whose_issue_has_left_the_snapshot_are_no_ones(tmp_path: Path) 
         clicks_through(client)
 
 
-# --- GET /findings: the person filter and facet -----------------------------------------------------
-
-
 def test_the_person_filter_takes_several_people_and_unassigned(built: TestClient) -> None:
     echo, charlie = pid(ACCOUNTS["echo"]), pid(ACCOUNTS["charlie"])
     assert all_ids(built, [("person", echo)]) == of("f1", "f2")
@@ -509,7 +459,6 @@ def test_the_people_facet_lists_everyone_by_name_then_unassigned_even_at_zero(bu
     check_page(body)
     board = [row[0] for row in DEMO_ROWS if row[0] is not None]
     expected = sorted((shown(who) for who in board), key=lambda person: (person["name"].lower(), person["id"]))
-    # Each entry with the person's picture version, as their person object has it; Unassigned's is null.
     assert [(e["value"], e["label"], e["avatar"]) for e in body["facets"]["people"]] == [
         *((person["id"], person["name"], person["avatar"]) for person in expected), ("unassigned", "Unassigned", None)]
     assert sum(entry["avatar"] is not None for entry in body["facets"]["people"]) == 3  # echo, charlie, delta
@@ -549,9 +498,6 @@ def test_fifty_people_and_empty_values_are_accepted(built: TestClient) -> None:
     assert get(built, "/findings", [("person", "")])["total"] == get(built, "/findings")["total"]  # empty: not given
 
 
-# --- the assignee of every finding and of the Issue page -------------------------------------------
-
-
 def test_every_finding_carries_its_issues_current_assignee(built: TestClient) -> None:
     items = get(built, "/findings", {"state": "all", "page_size": 100})["items"]
     expected = {fid(name): shown(TICKETS[key][0]) if key in TICKETS else None
@@ -573,8 +519,6 @@ def test_the_issue_page_names_its_assignee(built: TestClient) -> None:
     assert [(c["field"], c["from"], c["to"]) for c in changes if c["field"] == "assignee"] == [
         ("assignee", "Unassigned", "Assigned")]  # changes still never say whom
 
-
-# --- pictures: GET /people/{id}/avatar (contract 4.13) ------------------------------------------------
 
 PICTURE_HEADERS = {
     "cache-control": "private, max-age=86400",
@@ -598,8 +542,6 @@ def test_a_persons_picture_is_the_stored_bytes_with_their_type_and_the_contracts
 
 
 def test_every_person_objects_avatar_is_the_version_of_the_picture_served(built: TestClient) -> None:
-    """Wherever a person is sent, avatar is the first 12 hex characters of the SHA-256 of the bytes the picture
-    route serves for them, and null exactly when it serves none."""
     for board in ("DEMO", "AIL"):
         everyone = [row["person"] for row in get(built, "/people", {"project": board})["people"] if row["person"]]
         entries = get(built, "/findings", {"project": board})["facets"]["people"]
@@ -665,8 +607,6 @@ def test_a_picture_is_board_scoped_like_people(built: TestClient) -> None:
 
 
 def test_a_members_picture_is_served_while_they_are_on_the_board(tmp_path: Path) -> None:
-    """A member who holds no ticket is on the board only while its last member fetch lists them: once a fetch
-    leaves them out, their picture is a 404 there, as anyone's off the board."""
     build(tmp_path / "oversight.db")
     mike = pid(ACCOUNTS["mike"])
     with serve(tmp_path) as client:
@@ -679,8 +619,6 @@ def test_a_members_picture_is_served_while_they_are_on_the_board(tmp_path: Path)
 
 
 def test_a_stored_picture_that_is_not_one_of_the_four_types_is_never_served(tmp_path: Path) -> None:
-    """Defence in depth: whatever the column holds, only bytes whose magic numbers match a type the service keeps,
-    and match the type stored with them, go out."""
     build(tmp_path / "oversight.db")
     with Store.open(tmp_path / "oversight.db") as store, store.transaction():
         for who, data, kind in (("echo", SVG, "image/png"), ("charlie", PICTURES["charlie"][0], "image/svg+xml"),
@@ -692,11 +630,7 @@ def test_a_stored_picture_that_is_not_one_of_the_four_types_is_never_served(tmp_
         assert picture(client, pid(ACCOUNTS["outsider"]), {"project": "AIL"}).status_code == 200
 
 
-# --- GET /people/directory (contract 4.14): everyone on the board, for Ask's @ list ----------------------
-
-
 def folded(name: str) -> str:
-    """A name folded for case and accents, as the contract orders the directory (the dashboard's foldText)."""
     bare = "".join(char for char in unicodedata.normalize("NFD", name) if not unicodedata.category(char).startswith("M"))
     return bare.lower()
 
@@ -760,8 +694,6 @@ def test_the_directory_takes_no_parameter_but_project(built: TestClient, query: 
 
 
 def test_a_board_with_no_member_fetch_yet_lists_its_assignees(tmp_path: Path) -> None:
-    """Before the first sync that reads members (a database migrated to version 7), the directory is the board's
-    assignees: GET /people's people, each with their tickets."""
     build(tmp_path / "oversight.db")
     with Store.open(tmp_path / "oversight.db") as store, store.transaction():
         store.conn.execute("DELETE FROM board_members")
@@ -772,11 +704,6 @@ def test_a_board_with_no_member_fetch_yet_lists_its_assignees(tmp_path: Path) ->
             (row["person"]["id"], row["tickets"]) for row in people)
 
 
-# --- privacy: no response holds an account id, an email address, Jira's picture URLs or an assignee's ----
-# time zone. (meta.report_timezone, the REPORT_TIMEZONE setting, is the one zone sent: never the syncing
-# account's.) The picture route sends a picture's bytes and nothing else.
-
-# Every GET route, so a new one fails here until the sweep below covers it.
 GET_ROUTES = {
     "/api/v1/health", "/api/v1/projects", "/api/v1/refresh", "/api/v1/overview", "/api/v1/findings",
     "/api/v1/findings/{finding_id}", "/api/v1/issues/{key}/timeline", "/api/v1/people", "/api/v1/insights/latest",
@@ -784,8 +711,6 @@ GET_ROUTES = {
     "/api/v1/people/directory", "/api/v1/people/scorecard", "/api/v1/portfolio", "/api/v1/access-log", "/api/v1/usage",
     "/api/v1/people/{person_id}/card", "/api/v1/rules/settings",
 }
-# Every route that is not a GET alone: the sweep covers each but the two that write (POST /refresh would read Jira, and
-# POST /rules/settings would start a rules run of its own; their answers are the GET bodies swept here).
 POST_ROUTES = {"/api/v1/ask", "/api/v1/refresh", "/api/v1/rules/settings", "/api/v1/rules/settings/preview",
                "/api/v1/rules/settings/draft"}
 JIRA_USER_KEYS = ("accountId", "emailAddress", "avatarUrls", "timeZone", "displayName")
@@ -793,10 +718,6 @@ IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 
 def every_response(client: TestClient, board: str, finding_ids: Sequence[str], issue_keys: Sequence[str]) -> dict[str, str]:
-    """Each endpoint's body for one board: every GET route (every finding's and issue's page given, and
-    every person's picture and card), Ask's answers at both levels: at team level, at people level, and about a
-    mentioned person, a preview of rule settings (JO-15), and of a custom rule to add, and the AI draft of one (JO-20).
-    POST /refresh is left out: it would read Jira; and POST /rules/settings: its answer is GET /rules/settings' body."""
     operations = client.app.openapi()["paths"]  # type: ignore[attr-defined]
     assert {path for path, methods in operations.items() if "get" in methods} == GET_ROUTES
     assert {path for path, methods in operations.items() if set(methods) - {"get"}} == POST_ROUTES
@@ -822,13 +743,11 @@ def every_response(client: TestClient, board: str, finding_ids: Sequence[str], i
         else:  # the bytes alone: an image type, and no JSON around them
             assert response.status_code == 200 and response.headers["content-type"] in IMAGE_TYPES, path
         bodies[path] = response.content.decode("latin-1")  # every byte, searchable as text
-        # The person card (JO-13), for everyone on the board, members too: their other boards are named in it.
         path = f"/people/{row['person']['id']}/card"
         response = client.get(f"/api/v1{path}?level=people&project={board}")
         assert response.status_code == 200, (path, response.text)
         bodies[path] = response.text
     someone = next(row["person"] for row in client.get(f"/api/v1/people?project={board}").json()["people"] if row["person"])
-    # The scorecards (JO-11): everyone, another period, and one person.
     for path in ("/people/scorecard?level=people", "/people/scorecard?level=people&days=30",
                  f"/people/scorecard?level=people&person={someone['id']}"):
         response = client.get(f"/api/v1{path}&project={board}")
@@ -846,12 +765,10 @@ def every_response(client: TestClient, board: str, finding_ids: Sequence[str], i
         answer = client.post(f"/api/v1/ask?project={board}", json=body)
         assert answer.status_code == 200, answer.text
         bodies[path] = answer.text
-    # The Portfolio and the Governance area (JO-12): every board, and the access log after the reads above.
     for path in ("/portfolio", "/usage?level=people", "/access-log?level=people&limit=200"):
         response = client.get(f"/api/v1{path}{'&' if '?' in path else '?'}project={board}")
         assert response.status_code == 200, (path, response.text)
         bodies[path] = response.text
-    # Rule settings (JO-15): the board's, and a preview of a change, which writes nothing.
     settings = client.get(f"/api/v1/rules/settings?level=people&project={board}")
     assert settings.status_code == 200, settings.text
     bodies["/rules/settings"] = settings.text
@@ -860,7 +777,6 @@ def every_response(client: TestClient, board: str, finding_ids: Sequence[str], i
                                             {"rule_id": "R-EFF-01", "params": {"threshold": 2.5}}]})
     assert preview.status_code == 200, preview.text
     bodies["/rules/settings/preview"] = preview.text
-    # A custom rule to add, and the AI draft of one (JO-20): the board's names only, never a person's.
     rule = {"title": "Open over 30 days", "check": "open_longer_than", "params": {"days": 30}, "severity": "warning",
             "applies_to": {"status_category": ["new", "indeterminate"], "issue_type": None}}
     added = client.post(f"/api/v1/rules/settings/preview?level=people&project={board}",
@@ -871,7 +787,6 @@ def every_response(client: TestClient, board: str, finding_ids: Sequence[str], i
                         json={"text": "Work in progress for more than 3 days"})
     assert draft.status_code == 200, draft.text
     bodies["/rules/settings/draft"] = draft.text
-    # Team level names no one; people level names them by display name, with the picture's version.
     assert json.loads(bodies["/ask"])["people"] == [] and someone["name"] not in bodies["/ask"]
     assert json.loads(bodies["/ask mention"])["people"] in ([], [someone])
     return bodies
@@ -888,7 +803,6 @@ def test_no_response_holds_an_account_id_email_picture_url_or_time_zone(built: T
         issues = [key for key in TICKETS if board_of(key) == board]
         people = get(built, "/people/directory", {"project": board})["people"]
         bodies = every_response(built, board, findings, issues)
-        # Nothing skipped: 27 fixed bodies (JO-20's custom rule preview and draft among them), then the rest.
         assert len(bodies) == 27 + len(TREND_METRICS) + len(findings) + len(issues) + 2 * len(people)
         assert json.loads(bodies["/ask people"])["outcome"] == "answered"  # it does name people, by display name
         assert json.loads(bodies["/ask scorecard"])["outcome"] == json.loads(bodies["/ask compare"])["outcome"] == "answered"
@@ -896,13 +810,9 @@ def test_no_response_holds_an_account_id_email_picture_url_or_time_zone(built: T
         assert sum(path.endswith("/card") for path in bodies) == len(people)
         for path, text in bodies.items():
             assert not [secret for secret in secrets if secret in text], (board, path)
-    # The id is the hash, not a disguise of the account id: nothing else is in it.
     for row in get(built, "/people")["people"]:
         if row["person"]:
             assert re.fullmatch(r"p[0-9a-f]{12}", row["person"]["id"])
-
-
-# --- the seeded DEMO store, against SQL ----------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -918,7 +828,6 @@ def demo_pictures(demo: Api) -> dict[str, bytes]:
 
 
 def demo_people(demo: Api) -> dict[str | None, dict[str, str | None] | None]:
-    """account -> the person the contract sends for it, its avatar the version of the bytes in the store."""
     versions = {account: version(data) for account, data in demo_pictures(demo).items()}
     return {None: None, **{account: {"id": pid(account), "name": name, "avatar": versions.get(account)}
                            for account, name in ASSIGNEE_NAMES.items()}}
@@ -939,7 +848,6 @@ def test_the_demos_two_pictures_are_served_and_the_others_get_none(demo: Api) ->
 
 
 def test_demo_people_match_sql_with_the_fictional_names(demo: Api) -> None:
-    # A person's tickets are the board's work, Epics left out (JO-12 G5: one meaning of open tickets everywhere).
     tickets = {row[0]: (row[1], row[2]) for row in demo.rows(
         "SELECT assignee_id, COUNT(*), SUM(status_category != 'done') FROM issues WHERE project_key = 'DEMO'"
         " AND issue_type != 'Epic' GROUP BY 1")}

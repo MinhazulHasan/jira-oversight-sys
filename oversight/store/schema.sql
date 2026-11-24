@@ -1,6 +1,4 @@
--- Jira Oversight snapshot schema (SQLite). Timestamps are UTC text in the
--- format YYYY-MM-DDTHH:MM:SS.mmmZ, so text order is time order.
--- Departures from Planning.md section 6 are marked "added".
+-- Jira Oversight snapshot schema (SQLite). Timestamps are UTC text, so text order is time order.
 
 -- Raw, as synced from Jira --------------------------------------------------
 
@@ -76,16 +74,14 @@ CREATE TABLE IF NOT EXISTS statuses (            -- added: each project's status
   PRIMARY KEY (project_key, status_id)
 );
 
-CREATE TABLE IF NOT EXISTS boards (              -- added (JO-17): every Jira project the service's account can browse,
-                                                 -- from a read-only project search (oversight/boards.py)
+CREATE TABLE IF NOT EXISTS boards (              -- every Jira project the service account can browse
   project_key    TEXT PRIMARY KEY,
   project_id     TEXT,
   name           TEXT NOT NULL,                  -- Jira's name for it
   project_type   TEXT,                           -- Jira's projectTypeKey: software | business | service_desk | ...
   discovered_at  TEXT NOT NULL,                  -- when a search first listed it
   last_seen_at   TEXT NOT NULL,                  -- when a search last listed it
-  disappeared_at TEXT                            -- when a search first no longer listed it (deleted, archived or out of
-                                                 -- the account's sight); NULL while it is listed
+  disappeared_at TEXT                            -- when a search first no longer listed it; NULL while listed
 );
 
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -120,8 +116,7 @@ CREATE INDEX IF NOT EXISTS ix_board_members_account ON board_members (account_id
 
 CREATE TABLE IF NOT EXISTS status_intervals (
   issue_key  TEXT NOT NULL,
-  seq        INTEGER NOT NULL,    -- added: 0-based position in the issue's timeline; order by this,
-                                  -- since entered_at can't (a change dated before created_at)
+  seq        INTEGER NOT NULL,    -- added: 0-based position in the issue's timeline
   status     TEXT NOT NULL,
   stage      TEXT,                -- James's stage, from process.yaml
   entered_at TEXT NOT NULL,
@@ -149,7 +144,7 @@ CREATE TABLE IF NOT EXISTS issue_metrics (
 
 CREATE TABLE IF NOT EXISTS runs (
   run_id        TEXT PRIMARY KEY,
-  kind          TEXT,             -- sync | derive | baseline | rules | digest | insights | demo (seeding) | discover (JO-17)
+  kind          TEXT,             -- sync | derive | baseline | rules | digest | insights | demo (seeding) | discover
   status        TEXT,             -- added: running | succeeded | failed
   started_at    TEXT,
   finished_at   TEXT,
@@ -173,11 +168,9 @@ CREATE TABLE IF NOT EXISTS findings (
   first_seen_at TEXT,
   last_seen_at  TEXT,
   resolved_at   TEXT,             -- NULL = open
-  resolved_why  TEXT,             -- added: cleared | superseded (another rule_version) | aged_out (finished before the
-                                  -- look-back) | settings_changed (JO-15: the board's rule settings changed; never a fix)
+  resolved_why  TEXT,             -- cleared | superseded | aged_out | settings_changed
   run_id        TEXT,
-  settings_hash TEXT              -- added (JO-15): the rule's params fingerprint on the board when it was last seen; NULL:
-                                  -- the catalogue's (oversight/rules/settings.py)
+  settings_hash TEXT              -- the rule's params fingerprint when last seen; NULL: the catalogue's
 );
 CREATE INDEX IF NOT EXISTS ix_findings_open ON findings (project_key, resolved_at, rule_id);
 CREATE INDEX IF NOT EXISTS ix_findings_issue ON findings (issue_key);
@@ -193,7 +186,7 @@ CREATE TABLE IF NOT EXISTS rule_status (
   issues_checked   INTEGER,
   hits             INTEGER,
   note             TEXT,             -- e.g. "fewer than 20 closed intervals: no threshold"
-  settings_hash    TEXT,             -- added (JO-15): the params fingerprint the rule ran with; NULL: the catalogue's
+  settings_hash    TEXT,             -- added: the params fingerprint the rule ran with; NULL: the catalogue's
   PRIMARY KEY (run_id, project_key, rule_id)
 );
 
@@ -243,7 +236,7 @@ CREATE TABLE IF NOT EXISTS qa_log (
 CREATE TABLE IF NOT EXISTS llm_calls (
   call_id       TEXT PRIMARY KEY,
   called_at     TEXT NOT NULL,
-  purpose       TEXT NOT NULL,      -- plan | compose | compose_strict | insights | insights_strict | rule_draft (JO-20)
+  purpose       TEXT NOT NULL,      -- plan | compose | compose_strict | insights | insights_strict | rule_draft
   provider      TEXT NOT NULL,      -- scripted | anthropic
   model         TEXT,
   prompt_hash   TEXT,
@@ -272,8 +265,7 @@ CREATE TABLE IF NOT EXISTS insights (
 );
 CREATE INDEX IF NOT EXISTS ix_insights_project ON insights (project_key, generated_at);
 
--- JO-12: who viewed whose person-level data, and when (oversight/api/access_log.py). One row per request
--- that read it; ids only, and the viewer as the dashboard's server named them. Kept ACCESS_LOG_DAYS.
+-- Who viewed whose person-level data, and when; one row per request, ids only.
 CREATE TABLE IF NOT EXISTS access_log (
   id               TEXT PRIMARY KEY, -- uuid4 hex
   at               TEXT NOT NULL,    -- when it was read (UTC)
@@ -281,17 +273,16 @@ CREATE TABLE IF NOT EXISTS access_log (
   viewer_name      TEXT NOT NULL,    -- X-Oversight-Viewer-Name, decoded: a display name, never an email address
   level            TEXT NOT NULL,    -- team | people
   project_key      TEXT,             -- the board read; NULL for the access log itself
-  action           TEXT NOT NULL,    -- scorecard_view | people_compare_view | person_findings_view | person_ask
-                                     -- | access_log_view | access_log_export | person_card_view (JO-13)
+  action           TEXT NOT NULL,    -- the view or export that read the data
   subject_ids_json TEXT NOT NULL,    -- JSON list of the person ids whose data was read (ids, never names)
   detail_json      TEXT              -- JSON object: days, qa_id, filters, counts
 );
 CREATE INDEX IF NOT EXISTS ix_access_log_at ON access_log (at);
--- JO-12: the daily model budget and GET /usage count each UTC day's model calls and questions.
+-- the daily model budget and GET /usage count each UTC day's model calls and questions.
 CREATE INDEX IF NOT EXISTS ix_llm_calls_time ON llm_calls (called_at);
 CREATE INDEX IF NOT EXISTS ix_qa_log_time ON qa_log (asked_at);
 
--- JO-15: a board's rule settings, as admins saved them (one row per board and rule that differs from rules.yaml).
+-- a board's rule settings, as admins saved them (one row per board and rule that differs from rules.yaml).
 CREATE TABLE IF NOT EXISTS rule_settings (
   project_key TEXT NOT NULL,
   rule_id     TEXT NOT NULL,
@@ -301,7 +292,7 @@ CREATE TABLE IF NOT EXISTS rule_settings (
   updated_at  TEXT NOT NULL,
   PRIMARY KEY (project_key, rule_id)
 );
--- JO-15: every change to a board's rule settings, never purged: the audit trail and what undo restores.
+-- every change to a board's rule settings, never purged: the audit trail and what undo restores.
 CREATE TABLE IF NOT EXISTS rule_settings_changes (
   change_id    TEXT PRIMARY KEY,   -- uuid4 hex
   at           TEXT NOT NULL,      -- UTC
@@ -310,21 +301,19 @@ CREATE TABLE IF NOT EXISTS rule_settings_changes (
   viewer_hash  TEXT NOT NULL,      -- X-Oversight-Viewer (as the access log keeps it)
   viewer_name  TEXT NOT NULL,      -- X-Oversight-Viewer-Name, read as the access log reads it (never an email)
   reason       TEXT,               -- optional, at most 500 characters
-  changes_json TEXT NOT NULL,      -- [{"rule_id","field","from","to"}]; field: enabled | severity | params.<name>, and for
-                                   -- a custom rule (JO-20) rule (added, deleted, restored) | title | description | applies_to
+  changes_json TEXT NOT NULL,      -- enabled | severity | params.<name>, or a custom rule field
   undo_of      TEXT,               -- change_id this change undid, or NULL
   UNIQUE (project_key, revision)
 );
 
--- JO-20: rules an admin added to a board from the dashboard. Never hard-deleted: a deleted rule keeps its row (deleted_at),
--- so undo can bring it back with the same id and the same findings.
+-- Rules an admin added to a board; a deleted rule keeps its row (deleted_at) so undo can restore it.
 CREATE TABLE IF NOT EXISTS custom_rules (
   rule_id          TEXT PRIMARY KEY,   -- R-CUS-01 / W-CUS-01 ..., unique across every board, never reused
   project_key      TEXT NOT NULL,
   title            TEXT NOT NULL,
   description      TEXT,
   kind             TEXT NOT NULL,      -- rule | warning (from the seriousness picked at creation)
-  severity         TEXT NOT NULL,      -- breach | warning, as created (JO-15 settings may override it later)
+  severity         TEXT NOT NULL,      -- breach | warning, as created
   check_name       TEXT NOT NULL,
   params_json      TEXT NOT NULL,      -- the params as created / last edited
   applies_json     TEXT NOT NULL,      -- {"status_category": [...], "issue_type": [...] | null}

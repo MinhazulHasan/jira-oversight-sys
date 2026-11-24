@@ -1,12 +1,3 @@
-"""GET /overview (contract 4.2): the Overview page's first screen.
-
-Headline totals over rolling 7-day windows, hot spots, findings by rule,
-coverage, trend cards, where work sits now and the latest briefing's first two
-sentences. Every figure is computed from the same findings and issues the
-other routes read: the series helpers live in oversight.api.aggregates, and
-by_rule and coverage reuse the Ask catalogue's oversight_rule_status and
-oversight_coverage, so the Overview, the Findings page and Ask agree.
-"""
 from __future__ import annotations
 
 import json
@@ -81,8 +72,7 @@ def get_overview(
 
 
 def tracking_since(conn: sqlite3.Connection, project: str) -> str | None:
-    """When the rules first saw this project: findings history starts here, so the
-    interface does not read "everything is new" into the first week. None before any."""
+    """When the rules first saw this project"""
     row = conn.execute("SELECT MIN(first_seen_at) FROM findings WHERE project_key = ?", (project,)).fetchone()
     return row[0] if row and row[0] else None
 
@@ -91,9 +81,7 @@ def tracking_since(conn: sqlite3.Connection, project: str) -> str | None:
 
 
 def hot_spots(findings: list[Finding], now: datetime, limit: int = HOT_SPOTS) -> list[dict[str, Any]]:
-    """Epics by open breaches, then open warnings, then key; the no-epic group (work outside
-    every epic, and sprint findings) after the epics, as oversight_hot_spots ranks them. Each
-    group's open findings are exactly /findings?state=open&epic=<epic_key or none>."""
+    """Epics by open breaches, then open warnings, then key"""
     every: dict[str | None, list[Finding]] = defaultdict(list)
     for finding in findings:
         every[finding.epic_key].append(finding)
@@ -199,8 +187,7 @@ def _coverage_note(field: str, measurable: bool, catalog: CatalogContext, scope:
 
 
 def status_mix(conn: sqlite3.Connection, catalog: CatalogContext) -> list[dict[str, Any]]:
-    """Work (Epics left out) by its status now, in process order. The scope is the
-    issues_in_scope total's, so the counts add up to totals.issues_in_scope.current."""
+    """Work (Epics left out) by its status now, in process order."""
     exclusion, excluded = _type_exclusion(catalog, "i")
     rows = conn.execute(
         f"""

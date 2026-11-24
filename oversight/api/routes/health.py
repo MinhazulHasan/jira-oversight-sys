@@ -1,23 +1,3 @@
-"""GET /health (contract 4.1): is the service up, what it serves, when it last synced.
-
-Polled every minute by the interface's shell, so it stays cheap: one read-only
-connection and a few one-row queries. It opens that connection itself rather
-than through read_conn, because health must answer (degraded, with a plain
-message) even when there is no database at all.
-
-Degraded when:
-- there is no snapshot (no database file, or one that cannot be read);
-- no sync of the board has succeeded yet (the project has no last_synced_at in sync_state): health still answers 200
-  for such a board, never board_not_synced's 409 (JO-17), so the shell keeps its status;
-- the newest finished sync run that covered the board failed after its last successful sync. A run covers the boards
-  its stats name (`projects`; JO-18 syncs one board at a time); a run from before that names none and counts for
-  every board. A run that was stopped part way (Ctrl-C, or the sync service stopped or restarted: its stats say
-  KeyboardInterrupt) is said as stopped, not as failed: a routine restart is no fault, though the figures are still
-  the sync's before it.
-A sync still running decides nothing. `meta` is sent whenever the database can
-be read; without it the key is left out (the schema allows that here only, and
-null would not validate).
-"""
 from __future__ import annotations
 
 import json
@@ -46,8 +26,6 @@ SYNC_STOPPED = "The last Jira sync was stopped before it finished; the figures a
 # How a sync run stopped part way records its end (oversight/ingest/sync.py records a failed run on BaseException).
 _STOPPED = "KeyboardInterrupt"
 
-# The newest finished sync run that covered the board: one whose stats name it among their projects, or one from before
-# the stats named any (it counts for every board).
 _LAST_FINISHED_SYNC_SQL = """
 SELECT status, started_at, stats_json FROM runs
 WHERE kind = 'sync' AND status IN ('succeeded', 'failed')

@@ -11,7 +11,7 @@ class ConfigError(OversightError):
 
 
 class ReadOnlyViolation(OversightError):
-    """A Jira call outside the read-only allowlist. It never reaches Jira."""
+    """A Jira call outside the read-only allowlist."""
 
     def __init__(self, method: str, path: str) -> None:
         super().__init__(f"{method} {path} is not on the read-only allowlist")
@@ -37,5 +37,4 @@ class JiraUnavailable(JiraError):
 
 
 class JiraBudgetSpent(JiraError):
-    """A read stopped part way because the time its caller allowed ran out (between pages, before an attempt, or
-    instead of a retry wait that would reach it). What it had read is not used."""
+    """A read stopped part way because its time budget ran out."""

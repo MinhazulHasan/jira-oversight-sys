@@ -1,9 +1,4 @@
-"""Where evidence lives (oversight/rules/evidence.py): each source kind, found and not found.
-
-Every test configures code_review evidence on AIL with a five-stage workflow,
-builds its issues, and asks evidence_time for the earliest moment the evidence
-existed. Sources that carry no timestamp of their own answer created_at.
-"""
+"""Where evidence lives (oversight/rules/evidence.py): each source kind, found and not found."""
 from __future__ import annotations
 
 from typing import Any
@@ -34,10 +29,10 @@ def test_field_source_takes_the_first_change_that_records_a_value(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
     add_issue(store, "AIL-1", status="In Progress", created=CREATED, changes=STARTED, field_changes=[
-        (-80, "code_reviewers", None, "[]"),  # an empty value records nothing
+        (-80, "code_reviewers", None, "[]"),
         (-50, "code_reviewers", "[]", "acct-team-2"),
         (-40, "code_reviewers", "acct-team-2", "acct-team-3"),
-        (-60, "programmer", None, "acct-team-4"),  # another field
+        (-60, "programmer", None, "acct-team-4"),
     ])
     ctx = _ctx(store, process, fields, {"field": "code_reviewers"})
 
@@ -66,11 +61,11 @@ def test_status_source_is_the_first_entry_into_that_status(
         *STARTED, (-60, "In Progress", "Code Review"), (-50, "Code Review", "In Progress"),
         (-40, "In Progress", "Code Review"), (-30, "Code Review", "Done"),
     ])
-    add_issue(store, "AIL-2", status="Code Review", created=CREATED)  # created in it, no history
+    add_issue(store, "AIL-2", status="Code Review", created=CREATED)
     add_issue(store, "AIL-3", status="In Progress", created=CREATED,
-              changes=[(-90, "Code Review", "In Progress")])  # created in it, then left
+              changes=[(-90, "Code Review", "In Progress")])
     add_issue(store, "AIL-4", status="Done", created=CREATED, changes=[*STARTED, (-30, "In Progress", "Done")])
-    ctx = _ctx(store, process, fields, {"status": "code review"})  # matched ignoring case
+    ctx = _ctx(store, process, fields, {"status": "code review"})
 
     assert _time(ctx, "AIL-1") == at(-60)
     assert _time(ctx, "AIL-2") == at(CREATED)
@@ -107,20 +102,20 @@ def test_label_source_needs_that_exact_label(store: Store, process: ProcessConfi
 
 def test_null_evidence_is_not_recorded_anywhere(store: Store, process: ProcessConfig, fields: FieldsConfig) -> None:
     add_issue(store, "AIL-1", created=CREATED, labels=["code-reviewed"])
-    ctx = context(store, process, fields)  # AIL as configured: every evidence null
+    ctx = context(store, process, fields)
 
     assert evidence_source(ctx, "code_review") is None
     assert _time(ctx, "AIL-1") is None
-    assert _time(ctx, "AIL-404") is None  # and an unknown issue has none either
+    assert _time(ctx, "AIL-404") is None
 
 
 @pytest.mark.parametrize(
     "source",
     [
-        {"commit_message": "reviewed"},  # an unknown kind
-        {"field": "code_reviewers", "label": "code-reviewed"},  # two sources at once
-        {"label": "   "},  # no text
-        {"label": 7},  # not text
+        {"commit_message": "reviewed"},
+        {"field": "code_reviewers", "label": "code-reviewed"},
+        {"label": "   "},
+        {"label": 7},
     ],
 )
 def test_an_unknown_source_raises_config_error(
@@ -142,6 +137,6 @@ def test_has_evidence_before_compares_with_the_evidence_time(
     ctx = _ctx(store, process, fields, {"status": "Code Review"})
 
     assert has_evidence_before(ctx, "AIL-1", "code_review", at(-40))
-    assert has_evidence_before(ctx, "AIL-1", "code_review", at(-50))  # at the moment counts
+    assert has_evidence_before(ctx, "AIL-1", "code_review", at(-50))
     assert not has_evidence_before(ctx, "AIL-1", "code_review", at(-60))
     assert not has_evidence_before(ctx, "AIL-2", "code_review", at(0))

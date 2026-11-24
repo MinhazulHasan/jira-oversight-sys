@@ -58,7 +58,6 @@ def test_require_jira_passes_when_complete(settings: Settings) -> None:
 
 @pytest.mark.parametrize("url", ["http://x.atlassian.net", "x.atlassian.net", "ftp://x.atlassian.net"])
 def test_require_jira_wants_https(url: str) -> None:
-    # Regression: an http:// site would have been sent the API token unencrypted.
     with pytest.raises(ConfigError, match="https://") as err:
         Settings(jira_base_url=url, jira_email="dev@example.com", jira_api_token="t").require_jira()
     assert "x.atlassian.net" not in str(err.value)
@@ -84,7 +83,6 @@ def test_report_timezone_is_an_iana_zone_and_utc_when_blank(monkeypatch: pytest.
 
 
 def test_people_comparison_is_on_unless_an_organisation_turns_it_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PEOPLE_COMPARISON (JO-11): on by default; off only where an organisation does not want people compared."""
     assert Settings().people_comparison == "on"
     monkeypatch.setenv("PEOPLE_COMPARISON", "off")
     assert Settings().people_comparison == "off"
@@ -95,7 +93,6 @@ def test_people_comparison_is_on_unless_an_organisation_turns_it_off(monkeypatch
 
 
 def test_board_discovery_is_on_unless_an_organisation_turns_it_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """BOARD_DISCOVERY (JO-17): on by default, every board the Jira account can browse; off, JIRA_PROJECTS only."""
     assert Settings().board_discovery == "on" and Settings().discovers_boards
     monkeypatch.setenv("BOARD_DISCOVERY", "off")
     assert Settings().board_discovery == "off" and not Settings().discovers_boards
@@ -121,7 +118,7 @@ def test_a_bad_people_comparison_is_a_config_error_at_start(
     monkeypatch.setattr("uvicorn.run", lambda *_args, **_options: pytest.fail("the API was started"))
     get_settings.cache_clear()
     try:
-        assert main(["api", "--port", "3301"]) == EXIT_CONFIG  # refused before anything starts or opens
+        assert main(["api", "--port", "3301"]) == EXIT_CONFIG
     finally:
         get_settings.cache_clear()
     assert "config error: invalid settings" in capsys.readouterr().err

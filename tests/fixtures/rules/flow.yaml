@@ -1,19 +1,6 @@
-# Flow rules: R-FLOW-01 (entered testing with no code review recorded before
-# it), R-FLOW-02 (a status change jumped forward over a mapped stage) and
-# R-FLOW-03 (left a done status for one that isn't), on AIL and OPS.
-#
-# Mapped stages, in order: AIL backlog, development, done; OPS backlog,
-# development, code_review (In Review), testing (QA), done. OPS code review
-# evidence = the issue passed through In Review (or was created in it).
-# Format: see estimates.yaml. Every estimate was set at creation and every
-# effort ratio is 0.5 or less, so only flow rules fire here. AIL's finished
-# cases date from March 2026 (before the history window, as in estimates.yaml);
-# OPS's intervals are all in the window and feed its thresholds (warnings.yaml).
-
 defaults: {issue_type: Task, assignee_id: acc-team-1}
 
 cases:
-  # --- AIL ---------------------------------------------------------------------
   - about: "To Do straight to Done: skipped development"
     issue: {issue_key: AIL-301, status: Done, created_at: "2026-03-02T09:00:00.000Z",
             story_points: 1.0, time_spent_s: 7200}
@@ -64,8 +51,6 @@ cases:
       - {changelog_id: "13062", changed_at: "2026-10-29T10:00:00.000Z", from_status: In Progress, to_status: Done}
       - {changelog_id: "13063", changed_at: "2026-11-02T10:00:00.000Z", from_status: Done, to_status: In Progress}
 
-  # The status was renamed or moved: Closed has no `statuses` row and no stage,
-  # but it is the current status and the issue's category (from Jira) is done.
   - about: "Done, then Closed: still done work, as derive's reopen_count agrees"
     issue: {issue_key: AIL-307, status: Closed, status_category: done, created_at: "2026-03-30T09:00:00.000Z",
             story_points: 2.0, time_spent_s: 28800}
@@ -74,7 +59,6 @@ cases:
       - {changelog_id: "13072", changed_at: "2026-03-31T10:00:00.000Z", from_status: In Progress, to_status: Done}
       - {changelog_id: "13073", changed_at: "2026-04-01T09:00:00.000Z", from_status: Done, to_status: Closed}
 
-  # --- OPS (8 h estimates, 4 h logged) -------------------------------------------------
   - about: "In Progress straight to QA: no code review before testing"
     issue: {issue_key: OPS-301, status: Done, created_at: "2026-10-05T09:00:00.000Z",
             original_estimate_s: 28800, time_spent_s: 14400}

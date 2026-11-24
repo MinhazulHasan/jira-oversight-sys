@@ -46,8 +46,6 @@ def test_reopening_an_existing_database_keeps_data(tmp_path: Path) -> None:
 
 
 def test_a_version_2_database_migrates_to_the_current_schema_and_keeps_its_data(tmp_path: Path) -> None:
-    # A Phases 0-2 snapshot: no Phase 3-7 tables, and findings and qa_log in Planning.md's
-    # first shape (nothing wrote to them before Phase 3).
     path = tmp_path / "v2.sqlite"
     with Store.open(path) as s:
         s.upsert("issues", _issue())
@@ -70,19 +68,15 @@ def test_a_version_2_database_migrates_to_the_current_schema_and_keeps_its_data(
         tables = {r["name"] for r in s.query("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"rule_status", "warning_links", "digests", "llm_calls", "insights", "people", "board_members",
                 "access_log", "rule_settings", "rule_settings_changes"} <= tables
-        # rule_status, which a version 2 database lacks, is made whole by the schema script: version 9's column with it.
         assert "settings_hash" in {r["name"] for r in s.query("PRAGMA table_info(rule_status)")}
-        # qa_log, dropped and made again, has its time index too (version 8).
         assert "ix_qa_log_time" in {r["name"] for r in s.query("PRAGMA index_list(qa_log)")}
         assert {"avatar_url", "avatar", "avatar_type", "avatar_hash", "avatar_source", "avatar_fetched_at"} <= {
             r["name"] for r in s.query("PRAGMA table_info(people)")}
         findings = {r["name"] for r in s.query("PRAGMA table_info(findings)")}
         assert {"project_key", "kind", "evidence_key", "resolved_why", "settings_hash"} <= findings
-        # qa_log was dropped and made again whole, so version 6's two columns came with it, not by ALTER TABLE.
         assert {"citations_json", "level", "mentions_json"} <= {r["name"] for r in s.query("PRAGMA table_info(qa_log)")}
 
 
-# qa_log as version 5 had it: no level, no mentions.
 VERSION_5_QA_LOG = """
     DROP TABLE qa_log;
     CREATE TABLE qa_log (qa_id TEXT PRIMARY KEY, asked_at TEXT, asked_by TEXT, project_key TEXT, question TEXT,
@@ -102,8 +96,6 @@ def qa_log_columns(path: Path) -> list[str]:
 
 
 def test_a_version_5_database_records_every_earlier_question_at_team_level(tmp_path: Path) -> None:
-    """Version 6 gives qa_log the level a question was answered at and the person ids it mentioned. Every
-    question before it was answered at team level, which the new column's default records; nothing else changes."""
     path = tmp_path / "v5.sqlite"
     with Store.open(path) as s:
         s.conn.executescript(VERSION_5_QA_LOG)
@@ -132,7 +124,6 @@ def test_a_failed_version_6_migration_changes_nothing(tmp_path: Path, monkeypatc
     path = tmp_path / "v5.sqlite"
     with Store.open(path) as s:
         s.conn.executescript(VERSION_5_QA_LOG)
-    # Fails after the columns are added: the columns and the version are one transaction.
     monkeypatch.setitem(db._MIGRATIONS, 5, db._MIGRATIONS[5] + "\nSELECT no_such_function();")
     with pytest.raises(sqlite3.OperationalError, match="no_such_function"):
         Store.open(path)
@@ -144,20 +135,15 @@ def test_a_failed_version_6_migration_changes_nothing(tmp_path: Path, monkeypatc
     assert "level" not in qa_log_columns(path) and "mentions_json" not in qa_log_columns(path)
 
 
-# A version 9 database: everything but JO-17's boards (version 10).
-# A version 10 database: a version 11 one without JO-20's custom rules (version 11).
 VERSION_10 = """
     DROP INDEX ix_custom_rules_project;
     DROP TABLE custom_rules;
     PRAGMA user_version = 10;
 """
-# A version 9 database: a version 10 one without JO-17's boards (version 10).
 VERSION_9 = VERSION_10 + """
     DROP TABLE boards;
     PRAGMA user_version = 9;
 """
-# A version 8 database: a version 9 one without JO-15's rule settings (version 9): its two tables and settings_hash on
-# findings and rule_status.
 VERSION_8 = VERSION_9 + """
     DROP TABLE rule_settings_changes;
     DROP TABLE rule_settings;
@@ -165,7 +151,6 @@ VERSION_8 = VERSION_9 + """
     ALTER TABLE rule_status DROP COLUMN settings_hash;
     PRAGMA user_version = 8;
 """
-# A version 7 database: a version 8 one without the access log and the two time indexes (version 8).
 VERSION_7 = VERSION_8 + """
     DROP INDEX ix_access_log_at;
     DROP TABLE access_log;
@@ -173,7 +158,6 @@ VERSION_7 = VERSION_8 + """
     DROP INDEX ix_qa_log_time;
     PRAGMA user_version = 7;
 """
-# A version 6 database: a version 7 one without board_members.
 VERSION_6 = VERSION_7 + """
     DROP INDEX ix_board_members_account;
     DROP TABLE board_members;
@@ -184,8 +168,6 @@ VERSION_6 = VERSION_7 + """
 def test_every_served_worker_brings_an_older_snapshot_to_this_version(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """run.py serves serve_app, which uvicorn calls in each worker, a reloaded one too: new code started on a
-    version 6 snapshot migrates it before its first request, rather than answering 500 (no such table)."""
     with Store.open(settings.db_file) as s:
         s.conn.executescript(VERSION_6)
     monkeypatch.setattr(app_module, "get_settings", lambda: settings)
@@ -197,7 +179,6 @@ def test_every_served_worker_brings_an_older_snapshot_to_this_version(
 
 
 def board_members_shape(path: Path) -> tuple[list[tuple[str, str, int, int]], list[str]]:
-    """board_members' columns (name, type, not null, position in the primary key) and its indexes' names."""
     conn = sqlite3.connect(path)
     try:
         columns = [(row[1], row[2], row[3], row[5]) for row in conn.execute("PRAGMA table_info(board_members)")]
@@ -208,8 +189,6 @@ def board_members_shape(path: Path) -> tuple[list[tuple[str, str, int, int]], li
 
 
 def test_a_version_6_database_gains_board_members_and_keeps_everything_else(tmp_path: Path) -> None:
-    """Version 7 adds each board's members (board_members) and its account index. Nothing is backfilled: no
-    stored payload lists a board's members, so the table starts empty and the next sync fills it."""
     path = tmp_path / "v6.sqlite"
     with Store.open(path) as s:
         s.upsert("issues", _issue(assignee_id="acc-1"))
@@ -240,7 +219,6 @@ def test_a_failed_version_7_migration_changes_nothing(tmp_path: Path, monkeypatc
     path = tmp_path / "v6.sqlite"
     with Store.open(path) as s:
         s.conn.executescript(VERSION_6)
-    # Fails after the table is made: the table, its index and the version are one transaction.
     failing = tmp_path / "schema.sql"
     failing.write_text(db.SCHEMA_PATH.read_text(encoding="utf-8") + "\nSELECT no_such_function();\n", encoding="utf-8")
     monkeypatch.setattr(db, "SCHEMA_PATH", failing)
@@ -255,8 +233,6 @@ def test_a_failed_version_7_migration_changes_nothing(tmp_path: Path, monkeypatc
 
 
 def access_log_shape(path: Path) -> tuple[list[tuple[str, str, int, int]], list[str], list[str]]:
-    """access_log's columns (name, type, not null, position in the primary key), its indexes' names, and the time
-    indexes of llm_calls and qa_log."""
     conn = sqlite3.connect(path)
     try:
         columns = [(row[1], row[2], row[3], row[5]) for row in conn.execute("PRAGMA table_info(access_log)")]
@@ -269,8 +245,6 @@ def access_log_shape(path: Path) -> tuple[list[tuple[str, str, int, int]], list[
 
 
 def test_a_version_7_database_gains_the_access_log_and_keeps_everything_else(tmp_path: Path) -> None:
-    """Version 8 (JO-12) adds the access log, with its index on `at`, and indexes on llm_calls.called_at and
-    qa_log.asked_at. Nothing is backfilled: no read was recorded before it. Running it again changes nothing."""
     path = tmp_path / "v7.sqlite"
     with Store.open(path) as s:
         s.upsert("issues", _issue(assignee_id="acc-1"))
@@ -313,7 +287,6 @@ def test_a_failed_version_8_migration_changes_nothing(tmp_path: Path, monkeypatc
     path = tmp_path / "v7.sqlite"
     with Store.open(path) as s:
         s.conn.executescript(VERSION_7)
-    # Fails after the table and the indexes are made: they and the version are one transaction.
     failing = tmp_path / "schema.sql"
     failing.write_text(db.SCHEMA_PATH.read_text(encoding="utf-8") + "\nSELECT no_such_function();\n", encoding="utf-8")
     monkeypatch.setattr(db, "SCHEMA_PATH", failing)
@@ -328,7 +301,6 @@ def test_a_failed_version_8_migration_changes_nothing(tmp_path: Path, monkeypatc
 
 
 def rule_settings_shape(path: Path) -> tuple[list[str], list[str], list[str]]:
-    """Version 9's shape (JO-15): the rule settings tables, and the settings_hash columns of findings and rule_status."""
     conn = sqlite3.connect(path)
     try:
         tables = sorted(row[0] for row in conn.execute(
@@ -344,7 +316,7 @@ VERSION_9_SHAPE = (["rule_settings", "rule_settings_changes"], ["settings_hash"]
 
 
 def finding_row(n: int, **extra: object) -> dict[str, object]:
-    """A finding as version 8 wrote it: no settings_hash."""
+    """A finding as version 8 wrote it"""
     row: dict[str, object] = {
         "finding_id": f"{n:032x}", "rule_id": "R-EFF-01", "rule_version": "0.1.0", "issue_key": f"AIL-{n}",
         "project_key": "AIL", "kind": "rule", "severity": "breach", "evidence_key": "ratio-ge-1.5",
@@ -367,10 +339,6 @@ def findings_of(path: Path) -> list[tuple[object, ...]]:
 
 
 def test_a_version_8_database_gains_rule_settings_and_keeps_everything_else(tmp_path: Path) -> None:
-    """Version 9 (JO-15) adds each board's rule settings (rule_settings) and every change to them
-    (rule_settings_changes), both empty, and settings_hash on findings and rule_status, NULL for every row already
-    there: it ran with rules.yaml's params. Every finding keeps its id and its history. Running it again changes
-    nothing, and adds no column twice."""
     path = tmp_path / "v8.sqlite"
     with Store.open(path) as s:
         s.upsert("issues", _issue(assignee_id="acc-1"))
@@ -416,7 +384,6 @@ def test_a_failed_version_9_migration_changes_nothing(tmp_path: Path, monkeypatc
     with Store.open(path) as s:
         s.conn.executescript(VERSION_8)
         s.upsert("findings", finding_row(1))
-    # Fails after the columns are added and the tables made: they and the version are one transaction.
     failing = tmp_path / "schema.sql"
     failing.write_text(db.SCHEMA_PATH.read_text(encoding="utf-8") + "\nSELECT no_such_function();\n", encoding="utf-8")
     monkeypatch.setattr(db, "SCHEMA_PATH", failing)
@@ -434,9 +401,6 @@ def test_a_failed_version_9_migration_changes_nothing(tmp_path: Path, monkeypatc
 def test_two_processes_opening_a_version_8_database_at_once_both_end_at_version_9(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The API starting while a sync runs: both open the version 8 snapshot and gather the same steps. One migrates
-    it; the other's ALTER TABLE then finds settings_hash already there, so it rolls back, sees version 9 and carries
-    on: nothing lost, nothing added twice."""
     path = tmp_path / "v8.sqlite"
     with Store.open(path) as s:
         s.upsert("findings", finding_row(1))
@@ -465,7 +429,6 @@ def test_two_processes_opening_a_version_8_database_at_once_both_end_at_version_
 
 
 def boards_shape(path: Path) -> list[tuple[str, str, int, int]]:
-    """Version 10's boards table (JO-17): its columns (name, type, not null, position in the primary key)."""
     conn = sqlite3.connect(path)
     try:
         return [(row[1], row[2], row[3], row[5]) for row in conn.execute("PRAGMA table_info(boards)")]
@@ -481,9 +444,6 @@ BOARDS_SHAPE = [
 
 
 def test_a_version_9_database_gains_the_boards_table_and_keeps_everything_else(tmp_path: Path) -> None:
-    """Version 10 (JO-17) adds the boards discovery found (boards), empty: nothing is backfilled, the next discovery
-    fills it, and until then the service serves JIRA_PROJECTS. Every other row stays. Running it again changes
-    nothing."""
     path = tmp_path / "v9.sqlite"
     with Store.open(path) as s:
         s.upsert("issues", _issue(assignee_id="acc-1"))
@@ -518,7 +478,6 @@ def test_a_failed_version_10_migration_changes_nothing(tmp_path: Path, monkeypat
     path = tmp_path / "v9.sqlite"
     with Store.open(path) as s:
         s.conn.executescript(VERSION_9)
-    # Fails after the table is made: it and the version are one transaction.
     failing = tmp_path / "schema.sql"
     failing.write_text(db.SCHEMA_PATH.read_text(encoding="utf-8") + "\nSELECT no_such_function();\n", encoding="utf-8")
     monkeypatch.setattr(db, "SCHEMA_PATH", failing)
@@ -533,8 +492,6 @@ def test_a_failed_version_10_migration_changes_nothing(tmp_path: Path, monkeypat
 
 
 def custom_rules_shape(path: Path) -> tuple[list[tuple[str, str, int, int]], list[str]]:
-    """Version 11's custom_rules table (JO-20): its columns (name, type, not null, position in the primary key) and its
-    indexes."""
     conn = sqlite3.connect(path)
     try:
         columns = [(row[1], row[2], row[3], row[5]) for row in conn.execute("PRAGMA table_info(custom_rules)")]
@@ -566,10 +523,6 @@ def custom_rule_row(rule_id: str = "R-CUS-01", **extra: object) -> dict[str, obj
 
 
 def test_a_version_10_database_gains_custom_rules_and_keeps_everything_else(tmp_path: Path) -> None:
-    """Version 11 (JO-20) adds the rules admins add to a board (custom_rules, with its index on project_key), empty:
-    nothing is backfilled, so every board runs its catalogue rules as before and every finding keeps its id. A populated
-    version 10 snapshot migrates in place, its settings and their history as they were. Running it again changes
-    nothing."""
     path = tmp_path / "v10.sqlite"
     with Store.open(path) as s:
         s.upsert("issues", _issue(assignee_id="acc-1"))
@@ -612,7 +565,6 @@ def test_a_failed_version_11_migration_changes_nothing(tmp_path: Path, monkeypat
     with Store.open(path) as s:
         s.upsert("findings", finding_row(1))
         s.conn.executescript(VERSION_10)
-    # Fails after the table is made: it and the version are one transaction.
     failing = tmp_path / "schema.sql"
     failing.write_text(db.SCHEMA_PATH.read_text(encoding="utf-8") + "\nSELECT no_such_function();\n", encoding="utf-8")
     monkeypatch.setattr(db, "SCHEMA_PATH", failing)
@@ -630,9 +582,6 @@ def test_a_failed_version_11_migration_changes_nothing(tmp_path: Path, monkeypat
 def test_two_processes_opening_a_version_10_database_at_once_both_end_at_version_11(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The API starting while a sync runs: both open the version 10 snapshot and gather the same steps; one migrates it
-    while the other waits. The other's script then finds the table and its index there (CREATE ... IF NOT EXISTS) and
-    leaves them as they are: nothing lost, nothing made twice."""
     path = tmp_path / "v10.sqlite"
     with Store.open(path) as s:
         s.upsert("findings", finding_row(1))

@@ -1,8 +1,4 @@
-"""Per-issue metrics (Phase 2): the facts rules and AI use without touching Jira.
-
-Calendar hours throughout (Planning.md Phase 2 step 5: a working-day calendar
-only if James asks).
-"""
+"""Per-issue metrics: the facts rules and AI use without touching Jira."""
 from __future__ import annotations
 
 import math
@@ -32,19 +28,7 @@ def skipped_stages(
     changes: Sequence[Mapping[str, Any]],
     process: ProcessConfig,
 ) -> list[dict[str, Any]]:
-    """Forward jumps over mapped stages: [{"changelog_id", "from", "to", "skipped": [stage, ...]}].
-
-    Stages are ordered by process.ordered_stages(project) (only the stages the
-    project maps; AIL gives backlog, development, done). A change from stage a
-    to stage b with index(b) - index(a) > 1 skipped order[a+1:b]. Changes where
-    either side is unmapped, or that move backwards, are not skips. In AIL,
-    To Do -> Done skipped ["development"].
-
-    "from" and "to" are the change's status names as recorded, so a skip is
-    judged on what the changelog says (as JQL `status CHANGED FROM .. TO ..`
-    does), even when from_status disagrees with the rebuilt timeline. The list
-    is in changelog order.
-    """
+    """Forward jumps over mapped stages: [{"changelog_id", "from", "to", "skipped": [stage, ...]}]."""
     stage_of = process.project(project).stage_of
     skips: list[dict[str, Any]] = []
     for change in sort_changes(changes):
@@ -83,15 +67,7 @@ def estimate_set_at(
     field_changes: Sequence[Mapping[str, Any]],
     estimate: EstimateConfig,
 ) -> str | None:
-    """When the estimate was first set (refines the Planning.md pseudocode).
-
-    Consider field_changes for estimate.field ("story_points" or
-    "original_estimate"), sorted by (changed_at, numeric changelog_id). Take the
-    first change whose to_value has an estimate value: if its from_value also had
-    one, the estimate existed before any recorded change, so return created_at;
-    otherwise return its changed_at. With no such change, return created_at if
-    the issue has an estimate now (set at creation, no history), else None.
-    """
+    """When the estimate was first set."""
     relevant = [change for change in field_changes if change.get("field") == estimate.field]
     for change in sort_changes(relevant):
         if has_estimate_value(change.get("to_value")):
@@ -104,10 +80,7 @@ def estimate_set_at(
 
 
 def effort_ratio(issue: Mapping[str, Any], estimate: EstimateConfig) -> float | None:
-    """actual / estimate. actual = time_spent_s / 3600 (0 when null).
-    points: actual / (story_points * hours_per_point) when story_points > 0;
-    hours: actual / (original_estimate_s / 3600) when original_estimate_s > 0;
-    otherwise None."""
+    """actual / estimate. actual = time_spent_s / 3600 (0 when null)."""
     actual_h = (_number(issue.get("time_spent_s")) or 0.0) / 3600
     if estimate.basis == "points":
         points = _number(issue.get("story_points"))
@@ -129,22 +102,7 @@ def compute_metrics(
     category_of: Callable[[str | None], str | None],
     now: datetime,
 ) -> dict[str, Any]:
-    """One `issue_metrics` row (column names exactly as in schema.sql).
-
-    - started_at: entered_at of the first interval whose stage is in
-      process.work_stages() (development or later, before done); None if never.
-    - done_at: if the last interval is done (stage == process.done_stage, or
-      category_of(status) == "done" when the stage is unmapped), the entered_at
-      of the first interval in the trailing run of done intervals; else None.
-    - cycle_time_h: hours from started_at to done_at when both are set and
-      done_at >= started_at; else None.
-    - reopen_count, skipped_stages (a list), estimate_set_at, effort_ratio as above.
-    - estimate_basis: estimate.basis if the issue's current estimate field has an
-      estimate value, else "none".
-    - status_age_h: hours from the last interval's entered_at to now (never
-      negative, like interval hours: Jira's clock may run slightly ahead of ours).
-    - computed_at: to_iso(now).
-    """
+    """One `issue_metrics` row (column names exactly as in schema.sql)."""
     computed_at = to_iso(now)  # first, so a naive `now` fails before any work
     project = issue["project_key"]
     estimate = process.estimate_for(project)
@@ -176,8 +134,6 @@ def compute_metrics(
 def _done_at(
     intervals: Sequence[Interval], done_stage: str, category_of: Callable[[str | None], str | None]
 ) -> str | None:
-    # Walk back over the trailing done intervals (e.g. Done -> Closed): the work
-    # was done when the first of them began. A reopen breaks the run.
     done_at = None
     for interval in reversed(intervals):
         if interval.stage is not None:

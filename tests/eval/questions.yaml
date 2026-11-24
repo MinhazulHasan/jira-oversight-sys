@@ -1,24 +1,4 @@
-# The Q&A eval set (Planning.md section 8, ticket 15): 30 team-level questions,
-# run by `python -m oversight eval` and tests/test_eval.py through ask().
-#
-# Ground truth: project DEMO, the default demo seeded with seed 20261104 and
-# 1,150 issues at now = 2026-11-04T12:00:00Z (DEMO_NOW in tests/test_eval.py),
-# then derived and rules-run at that same time with tests/fixtures/config.
-# - expected_calls: the plan oversight.ask.router.route makes for the question.
-# - expected_numbers / expected_keys: computed in code, never by a model, from
-#   the rows oversight.ask.catalog.run_query returns for that plan on that data,
-#   written the way the scripted answer writes numbers (integers as is, floats
-#   as is up to two decimals else to one decimal, shares as whole percentages).
-#   Only values the answer states are listed; a findings list capped at its row
-#   limit is checked by its keys, since its length is not the open count.
-# - Outcomes: answered; not_understood for a per-person and an off-topic
-#   question; not_measurable where DEMO records no code-review evidence;
-#   no_data for a valid question that matches no rows.
-# Recompute the values whenever the demo seed, the router or the catalogue changes.
-#
-# `dataset` records that ground truth as data: `python -m oversight eval` rebuilds
-# it in a throwaway in-memory store (seed, derive and rules at `now`) and asks every
-# question at `now`, so the eval never depends on the snapshot or the real clock.
+# Q&A eval set: ground truth from DEMO, seed 20261104, 1,150 issues, now 2026-11-04T12:00:00Z.
 dataset:
   project: DEMO
   seed: 20261104
@@ -27,8 +7,6 @@ dataset:
 
 cases:
 
-# q01: oversight_count_issues(state=in_progress): the board's work in progress, Epics left out, as the Overview and
-#   the Portfolio count it; the count and the first three sample keys.
 - id: q01
   question: "How many tickets are in progress?"
   expected_calls: ["oversight_count_issues"]
@@ -36,8 +14,6 @@ cases:
   expected_numbers: ["115"]
   expected_keys: ["DEMO-1115", "DEMO-1114", "DEMO-1106"]
 
-# q02: oversight_count_issues(period=30d)
-#   the count and the first three sample keys.
 - id: q02
   question: "How many tickets were created in the last 30 days?"
   expected_calls: ["oversight_count_issues"]
@@ -45,8 +21,6 @@ cases:
   expected_numbers: ["479"]
   expected_keys: ["DEMO-1150", "DEMO-1149", "DEMO-1148"]
 
-# q03: oversight_count_issues(issue_type=Bug, has_estimate=False)
-#   the count and the first three sample keys.
 - id: q03
   question: "How many bugs have no estimate?"
   expected_calls: ["oversight_count_issues"]
@@ -54,8 +28,6 @@ cases:
   expected_numbers: ["87"]
   expected_keys: ["DEMO-1125", "DEMO-1064", "DEMO-1046"]
 
-# q04: oversight_top_issues(metric=cycle_time, n=5)
-#   the first three values and keys, highest first.
 - id: q04
   question: "Top 5 tickets by cycle time"
   expected_calls: ["oversight_top_issues"]
@@ -63,8 +35,6 @@ cases:
   expected_numbers: ["998.3", "780.4", "726.9"]
   expected_keys: ["DEMO-531", "DEMO-13", "DEMO-356"]
 
-# q05: oversight_top_issues(metric=status_age)
-#   the first three values and keys, highest first.
 - id: q05
   question: "Which tickets have been sitting in their status the longest?"
   expected_calls: ["oversight_top_issues"]
@@ -72,8 +42,6 @@ cases:
   expected_numbers: ["4268.5", "4265.0", "4263.0"]
   expected_keys: ["DEMO-2", "DEMO-1", "DEMO-22"]
 
-# q06: oversight_top_issues(metric=reopens)
-#   the first three values and keys, highest first.
 - id: q06
   question: "Which tickets were reopened the most?"
   expected_calls: ["oversight_top_issues"]
@@ -81,8 +49,6 @@ cases:
   expected_numbers: ["1"]
   expected_keys: ["DEMO-145", "DEMO-211", "DEMO-254"]
 
-# q07: oversight_top_issues(metric=effort_ratio)
-#   the first three values and keys, highest first.
 - id: q07
   question: "Which tickets burned through their estimate?"
   expected_calls: ["oversight_top_issues"]
@@ -90,10 +56,6 @@ cases:
   expected_numbers: ["4.4", "4.05", "3.1"]
   expected_keys: ["DEMO-703", "DEMO-595", "DEMO-693"]
 
-# q08: oversight_time_in_status(group_by=status, period=90d)
-#   the longest-median group's median, p90 and intervals; the runner-up's median.
-#   Time in the done stage is left out (it is the wait before a reopen), so
-#   In Progress (47.2 h) leads and To Do (35.3 h) follows.
 - id: q08
   question: "Where do tickets get stuck most?"
   expected_calls: ["oversight_time_in_status"]
@@ -101,8 +63,6 @@ cases:
   expected_numbers: ["47.2", "230.0", "324", "35.3"]
   expected_keys: []
 
-# q09: oversight_time_in_status(group_by=issue_type, period=90d)
-#   the longest-median group's median, p90 and intervals; the runner-up's median.
 - id: q09
   question: "How long does each issue type spend in a status?"
   expected_calls: ["oversight_time_in_status"]
@@ -110,9 +70,6 @@ cases:
   expected_numbers: ["69.6", "268.1", "39", "45.4"]
   expected_keys: []
 
-# q10: oversight_effort_vs_estimate(group_by=epic, period=90d)
-#   the highest-ratio group's median ratio, share over the threshold and finished issues,
-#   and its epic key (the group column is typed issue_key when grouping by epic).
 - id: q10
   question: "How does effort compare with the estimate by epic?"
   expected_calls: ["oversight_effort_vs_estimate"]
@@ -120,8 +77,6 @@ cases:
   expected_numbers: ["1.6", "55%", "11"]
   expected_keys: ["DEMO-151"]
 
-# q11: oversight_effort_vs_estimate(group_by=sprint, period=90d)
-#   the highest-ratio group's median ratio, share over the threshold and finished issues.
 - id: q11
   question: "How did effort compare to estimates by sprint?"
   expected_calls: ["oversight_effort_vs_estimate"]
@@ -129,8 +84,6 @@ cases:
   expected_numbers: ["1.3", "25%", "24"]
   expected_keys: []
 
-# q12: oversight_list_findings(rule_id=R-FLOW-02, state=open)
-#   the first three keys; the row count only when the list is not capped.
 - id: q12
   question: "Which tickets skipped a stage?"
   expected_calls: ["oversight_list_findings"]
@@ -138,8 +91,6 @@ cases:
   expected_numbers: []
   expected_keys: ["DEMO-411", "DEMO-323", "DEMO-75"]
 
-# q13: oversight_list_findings(rule_id=R-FLOW-03, state=open)
-#   the first three keys; the row count only when the list is not capped.
 - id: q13
   question: "Any tickets reopened after Done?"
   expected_calls: ["oversight_list_findings"]
@@ -147,8 +98,6 @@ cases:
   expected_numbers: ["18"]
   expected_keys: ["DEMO-412", "DEMO-211", "DEMO-663"]
 
-# q14: oversight_list_findings(rule_id=R-HYG-01, state=open)
-#   the first three keys; the row count only when the list is not capped.
 - id: q14
   question: "Any unassigned work in progress?"
   expected_calls: ["oversight_list_findings"]
@@ -156,8 +105,6 @@ cases:
   expected_numbers: ["7"]
   expected_keys: ["DEMO-1037", "DEMO-825", "DEMO-844"]
 
-# q15: oversight_list_findings(rule_id=W-SPR-01, state=all, period=sprint)
-#   the first three keys; the row count only when the list is not capped.
 - id: q15
   question: "Is the sprint at risk?"
   expected_calls: ["oversight_list_findings"]
@@ -165,8 +112,6 @@ cases:
   expected_numbers: ["1"]
   expected_keys: []
 
-# q16: oversight_list_findings(rule_id=W-AGE-01, state=open)
-#   the first three keys; the row count only when the list is not capped.
 - id: q16
   question: "Which tickets are stuck?"
   expected_calls: ["oversight_list_findings"]
@@ -174,8 +119,6 @@ cases:
   expected_numbers: []
   expected_keys: ["DEMO-553", "DEMO-560", "DEMO-601"]
 
-# q17: oversight_list_findings(rule_id=R-EFF-01, state=open)
-#   the first three keys; the row count only when the list is not capped.
 - id: q17
   question: "Show the open findings for R-EFF-01"
   expected_calls: ["oversight_list_findings"]
@@ -183,8 +126,6 @@ cases:
   expected_numbers: []
   expected_keys: ["DEMO-766", "DEMO-518", "DEMO-170"]
 
-# q18: oversight_list_findings(severity=breach, state=open)
-#   the first three keys; the row count only when the list is not capped.
 - id: q18
   question: "List the open breaches"
   expected_calls: ["oversight_list_findings"]
@@ -192,8 +133,6 @@ cases:
   expected_numbers: []
   expected_keys: ["DEMO-411", "DEMO-766", "DEMO-518"]
 
-# q19: oversight_issue_timeline(issue_key=DEMO-412)
-#   the intervals and the longest completed stay in hours.
 - id: q19
   question: "Show the timeline of DEMO-412"
   expected_calls: ["oversight_issue_timeline"]
@@ -201,8 +140,6 @@ cases:
   expected_numbers: ["5", "116.6"]
   expected_keys: []
 
-# q20: oversight_trend(metric=median_cycle_time_h, last_n=12)
-#   the latest week's value against the oldest week's.
 - id: q20
   question: "Is cycle time trending up week by week?"
   expected_calls: ["oversight_trend"]
@@ -210,8 +147,6 @@ cases:
   expected_numbers: ["50.7", "40.9"]
   expected_keys: []
 
-# q21: oversight_trend(metric=open_breaches, last_n=12)
-#   the latest week's value against the oldest week's.
 - id: q21
   question: "How are open breaches trending?"
   expected_calls: ["oversight_trend"]
@@ -219,8 +154,6 @@ cases:
   expected_numbers: ["454", "0"]
   expected_keys: []
 
-# q22: oversight_coverage(field=time_logged, period=90d)
-#   covered, total and the share.
 - id: q22
   question: "How much of the work has time logged?"
   expected_calls: ["oversight_coverage"]
@@ -228,8 +161,6 @@ cases:
   expected_numbers: ["359", "745", "48%"]
   expected_keys: []
 
-# q23: oversight_coverage(field=estimate, period=90d); oversight_list_findings(rule_id=R-EST-02, state=open)
-#   covered, total and the share; the findings list's first three keys.
 - id: q23
   question: "Were tickets estimated before work started?"
   expected_calls: ["oversight_coverage", "oversight_list_findings"]
@@ -237,9 +168,6 @@ cases:
   expected_numbers: ["497", "745", "67%"]
   expected_keys: ["DEMO-776", "DEMO-124", "DEMO-360"]
 
-# q24: oversight_hot_spots()
-#   the top epic's breaches, warnings and issues; the runner-up's breaches; both keys.
-#   Work outside any epic (65 breaches) is listed after the epics, so DEMO-36 leads.
 - id: q24
   question: "Which epics are the hot spots?"
   expected_calls: ["oversight_hot_spots"]
@@ -247,8 +175,6 @@ cases:
   expected_numbers: ["55", "30", "74", "50"]
   expected_keys: ["DEMO-36", "DEMO-21"]
 
-# q25: oversight_rule_status()
-#   the most open findings of any rule.
 - id: q25
   question: "Which rules can't be measured?"
   expected_calls: ["oversight_rule_status"]
@@ -256,8 +182,6 @@ cases:
   expected_numbers: ["247"]
   expected_keys: []
 
-# q26: no call
-#   a per-person question, declined at team level ("Ask answers at team level. ...").
 - id: q26
   question: "Which developer logged the most hours?"
   expected_calls: []
@@ -265,8 +189,6 @@ cases:
   expected_numbers: []
   expected_keys: []
 
-# q27: no call
-#   off-topic: nothing in the catalogue matches.
 - id: q27
   question: "What is the weather in Paris tomorrow?"
   expected_calls: []
@@ -274,8 +196,6 @@ cases:
   expected_numbers: []
   expected_keys: []
 
-# q28: oversight_list_findings(rule_id=R-FLOW-01, state=open)
-#   DEMO records no code-review evidence, so R-FLOW-01 cannot be measured.
 - id: q28
   question: "Which tickets reached testing without code review?"
   expected_calls: ["oversight_list_findings"]
@@ -283,8 +203,6 @@ cases:
   expected_numbers: []
   expected_keys: []
 
-# q29: oversight_coverage(field=code_review, period=90d)
-#   DEMO records no code-review evidence, so this coverage cannot be measured.
 - id: q29
   question: "What share of tickets has code review evidence?"
   expected_calls: ["oversight_coverage"]
@@ -292,8 +210,6 @@ cases:
   expected_numbers: []
   expected_keys: []
 
-# q30: oversight_list_findings(rule_id=R-FLOW-02, state=resolved)
-#   a valid question with no rows: no R-FLOW-02 finding is resolved yet.
 - id: q30
   question: "Which skipped-stage findings were resolved?"
   expected_calls: ["oversight_list_findings"]

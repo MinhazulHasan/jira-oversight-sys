@@ -1,9 +1,3 @@
-"""scripts/run_cycle.ps1, the scheduled cycle: its steps, exit codes and log.
-
-A stub interpreter (a .cmd file) stands in for jira_env's Python, so nothing
-here touches the oversight CLI or Jira. Windows PowerShell 5.1 runs it, as Task
-Scheduler does.
-"""
 from __future__ import annotations
 
 import os
@@ -47,7 +41,6 @@ def cycle(
     digest_exit: int = 0,
     script: Path = SCRIPT,
 ) -> tuple[int, list[str]]:
-    """Run the script with the stub; return its exit code and the log's lines."""
     stub = tmp_path / "py with spaces" / "python.cmd"
     stub.parent.mkdir(exist_ok=True)
     stub.write_text(STUB, encoding="ascii", newline="")
@@ -70,7 +63,6 @@ def cycle(
 
 
 def commands(lines: list[str]) -> list[str]:
-    """The oversight commands the stub ran, in order."""
     return [line.removeprefix("stub-python -m oversight ") for line in lines if line.startswith("stub-python")]
 
 
@@ -90,7 +82,6 @@ def test_a_cycle_runs_sync_then_derive_and_logs_both(tmp_path: Path) -> None:
 
 
 def test_a_failed_discovery_is_noted_and_the_cycle_goes_on(tmp_path: Path) -> None:
-    # JO-17: the boards stored before stay, so the sync never depends on the search.
     code, lines = cycle(tmp_path, "-Rules", discover_exit=4)
     assert code == 0
     assert commands(lines) == ["discover", "sync --incremental", "derive", "rules", "baseline --missing"]
@@ -112,9 +103,6 @@ def test_a_full_cycle_and_a_failed_derive(tmp_path: Path) -> None:
     assert lines[-1].endswith("cycle FAILED at derive (exit 2); later steps were not run")
 
 
-# --- the -Rules switch and the morning run ----------------------------------------------------
-
-
 def test_rules_runs_after_derive_in_the_same_cycle_then_the_missing_baselines(tmp_path: Path) -> None:
     code, lines = cycle(tmp_path, "-Rules")
     assert code == 0
@@ -125,7 +113,6 @@ def test_rules_runs_after_derive_in_the_same_cycle_then_the_missing_baselines(tm
 
 
 def test_a_failed_baseline_is_noted_and_the_cycle_has_still_succeeded(tmp_path: Path) -> None:
-    # 18 Nov 2026: the boards' figures are in once the rules have run; the next cycle writes the reports still missing.
     code, lines = cycle(tmp_path, "-Rules", baseline_exit=2)
     assert code == 0
     assert commands(lines) == ["discover", "sync --incremental", "derive", "rules", "baseline --missing"]
@@ -157,7 +144,6 @@ def test_the_morning_run_is_a_cycle_with_rules_then_the_digest(tmp_path: Path) -
 
 
 def test_the_morning_digest_still_goes_out_after_a_failed_sync(tmp_path: Path) -> None:
-    # The digest flags stale data at its top, so a broken sync never reads as a quiet day.
     code, lines = cycle(tmp_path, script=MORNING, sync_exit=4)
     assert code == 4
     assert commands(lines) == ["discover", "sync --incremental", "digest"]

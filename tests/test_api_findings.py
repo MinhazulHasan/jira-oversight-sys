@@ -1,12 +1,3 @@
-"""GET /findings and GET /findings/{finding_id} (contract 4.3, 4.4) on a seeded DEMO store.
-
-Shapes are checked field by field against the zod schemas (src/lib/api/schemas.ts in
-jira-oversight-ui), values against the database with SQL written here, not the API's.
-The store holds a findings lifecycle: the rules ran at T-35d with lower effort
-thresholds (findings that later clear), at T-10d and at T with the catalogue, so there
-are open and resolved findings first seen on three days, warning links and a sprint
-finding. test_api_people.py imports the fixture helpers and checkers from here.
-"""
 from __future__ import annotations
 
 import json
@@ -37,8 +28,6 @@ from tests.conftest import CONFIG_FIXTURES, VIEWER_HEADERS
 
 T = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)  # a Wednesday; the demo is seeded "now"
 KEY = "test-key"
-
-# --- the store and the app ---------------------------------------------------------------------
 
 
 def seed_lifecycle(db_path: Path) -> None:
@@ -107,8 +96,6 @@ def api(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Api]:
     yield from open_api(tmp_path_factory.mktemp("api_findings"))
 
 
-# --- the contract's shapes (schemas.ts), field by field ------------------------------------------
-
 ISO_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$")
 ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ISSUE_KEY = re.compile(r"^[A-Z][A-Z0-9_]{1,19}-[1-9]\d{0,8}$")
@@ -128,7 +115,6 @@ AVATAR = re.compile(r"^[0-9a-f]{12}$")
 
 
 def fields_are(obj: Any, *names: str) -> None:
-    """Every field the contract names is present, and nothing else."""
     assert isinstance(obj, dict), obj
     assert sorted(obj) == sorted(names), sorted(set(obj) ^ set(names))
 
@@ -170,7 +156,6 @@ def check_avatar(value: Any) -> None:
 
 
 def check_person(value: Any) -> None:
-    """A person (contract 2): {id: "p" and 12 hex characters, name: 1 to 128 characters, avatar}, or null."""
     if value is not None:
         fields_are(value, "id", "name", "avatar")
         assert PERSON_ID.match(value["id"]) and isinstance(value["name"], str) and 1 <= len(value["name"]) <= 128
@@ -213,7 +198,6 @@ def check_finding(finding: Any) -> None:
         assert RULE_ID.match(warned["warning_rule_id"]) and FINDING_ID.match(warned["warning_finding_id"])
         assert is_ts(warned["warned_at"])
     check_person(finding["assignee"])
-    # schemas.ts superRefine
     assert (finding["scope"] == "issue") == (finding["issue_key"] is not None)
     assert (finding["scope"] == "sprint") == (finding["sprint"] is not None)
     assert (finding["state"] == "resolved") == (finding["resolved_at"] is not None)
@@ -231,7 +215,7 @@ def check_page(body: Any) -> None:
     fields_are(body["facets"], "rules", "epics", "severity", "state", "people")
     for name, entries in body["facets"].items():
         for entry in entries:
-            if name == "people":  # a person's entry carries their picture's version too; Unassigned's is null
+            if name == "people":
                 fields_are(entry, "value", "label", "count", "avatar")
                 check_avatar(entry["avatar"])
                 assert entry["value"] != "unassigned" or entry["avatar"] is None
@@ -239,8 +223,6 @@ def check_page(body: Any) -> None:
                 fields_are(entry, "value", "label", "count")
             assert entry["value"] and entry["label"] and isinstance(entry["count"], int) and entry["count"] >= 0
 
-
-# --- the same questions in SQL -------------------------------------------------------------------
 
 FROM = """
     FROM findings AS f
@@ -251,7 +233,6 @@ FROM = """
 """
 EPIC = "COALESCE(i.epic_key, p.epic_key)"
 OPEN = " AND f.resolved_at IS NULL"
-# The API's issue key: none for a sprint finding (stored as "sprint:<id>").
 API_KEY = "CASE WHEN f.issue_key LIKE 'sprint:%' THEN NULL ELSE f.issue_key END"
 
 
@@ -300,8 +281,6 @@ def account_ids(api: Api) -> set[str]:
 
 
 RULES = RulesConfig.load(CONFIG_FIXTURES / "rules.yaml")
-
-# --- the list -----------------------------------------------------------------------------------
 
 
 def test_needs_the_service_key(api: Api) -> None:
@@ -399,9 +378,6 @@ def test_a_subtasks_epic_is_its_parents(api: Api) -> None:
     assert row["finding_id"] not in {item["finding_id"] for item in all_items(api, [("epic", "none"), ("state", "all")])}
 
 
-# --- facets -------------------------------------------------------------------------------------
-
-
 def test_facets_list_every_entry_in_a_fixed_order(api: Api) -> None:
     body = api.get("/findings")
     assert [(e["value"], e["label"]) for e in body["facets"]["rules"]] == [(r.id, r.title) for r in RULES.rules]
@@ -420,7 +396,6 @@ def test_facets_list_every_entry_in_a_fixed_order(api: Api) -> None:
 
 
 def test_facet_counts_apply_every_filter_but_their_own(api: Api) -> None:
-    # q and first_seen are filters, not facets: they narrow every facet.
     body = api.get("/findings", [("severity", "breach"), ("epic", "DEMO-36"), ("first_seen", "90d"), ("q", "Fix")])
     window = " AND f.first_seen_at >= ? AND lower(i.summary) LIKE '%fix%'"
     breach, epic, state = " AND f.severity = 'breach'", f" AND {EPIC} = 'DEMO-36'", OPEN
@@ -435,13 +410,10 @@ def test_facet_counts_apply_every_filter_but_their_own(api: Api) -> None:
     assert sum(facet(body, "epics").values()) < sum(facet(unfiltered, "epics").values())
 
 
-# --- sorting and paging -------------------------------------------------------------------------
-
 SORT_RULES = ("W-SPR-01", "R-FLOW-03", "R-HYG-01", "W-EFF-01")  # 94 findings: nulls, both states, three days
 
 
 def expected_order(rows: Sequence[sqlite3.Row], sort: str, order: str) -> list[str]:
-    """The contract's order: the column, empty values last either way, then newest first, then finding_id."""
 
     def value(row: sqlite3.Row) -> Any:
         if sort == "severity":

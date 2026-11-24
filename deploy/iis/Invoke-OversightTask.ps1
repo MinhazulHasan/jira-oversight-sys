@@ -2,22 +2,6 @@
 .SYNOPSIS
     One scheduled job of the IIS deployment: the sync cycle, the nightly full cycle or the daily backup.
 
-.DESCRIPTION
-    Install-JiraOversight.ps1 registers three Task Scheduler jobs that run this script. It runs from the backend's folder
-    with the venv's Python and appends everything the command prints (the report on stdout, the JSON logs on stderr) to
-    logs\task_<name>_YYYY-MM-DD.log. It exits with the command's own exit code (docs/REFERENCE.md, "Exit codes"); 0 means the
-    job succeeded.
-
-    Cycle and FullCycle run `python -m oversight cycle` (every board's discovery, then sync, derive and rules, then the
-    baseline report of each synced board that has none yet) and
-    `cycle --full` (every issue is read: only a full sync notices issues deleted or moved in Jira). Only one cycle runs
-    at a time on this machine, with scripts\run_cycle.ps1 as well: a cycle that cannot start within -WaitMinutes is
-    skipped (exit 0, noted in the log), and the next one catches up.
-
-    Backup runs `python -m oversight backup` (SQLite's online backup, taken while everything keeps running; the
-    BACKUP_KEEP newest are kept). Then it deletes the task logs, and the web server's own logs in -PruneDir, that are older
-    than -KeepDays.
-
 .PARAMETER Task
     Cycle, FullCycle or Backup.
 
@@ -34,11 +18,10 @@
     Log files older than this many days are deleted. Default: 30; 0 keeps every file.
 
 .PARAMETER PruneDir
-    More folders whose *.log files older than -KeepDays are deleted, with Backup (the web server's stdout logs). One
-    value, folders separated by semicolons, as a scheduled job passes it.
+    More folders whose *.log files older than -KeepDays are deleted, with Backup (the web server's stdout logs).
 
 .PARAMETER LockName
-    The name of the lock that keeps cycles apart. Leave it: scriptsun_cycle.ps1 takes the same one.
+    The name of the lock that keeps cycles apart.
 
 .EXAMPLE
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy\iis\Invoke-OversightTask.ps1 -Task Cycle
@@ -78,9 +61,6 @@ function Invoke-Oversight([string[]] $Arguments) {
     $text = 'python -m oversight ' + ($Arguments -join ' ')
     Write-Log "start: $text"
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
-    # cmd.exe appends the bytes exactly as Python writes them (UTF-8, below), and Python's stderr never turns into
-    # PowerShell errors (Windows PowerShell 5.1 would stop on the first JSON log line). The command travels in a
-    # variable: cmd expands it before it parses quotes and redirections, so PowerShell never has to quote it.
     $env:OVERSIGHT_COMMAND = '"{0}" -m oversight {1} >> "{2}" 2>&1' -f $Python, ($Arguments -join ' '), $log
     & $env:ComSpec /d /c '%OVERSIGHT_COMMAND%' | Out-Null
     $code = $LASTEXITCODE

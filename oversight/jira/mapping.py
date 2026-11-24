@@ -1,19 +1,4 @@
-"""Jira JSON to our rows. Pure functions: no I/O, no database.
-
-Real payload shapes and their gotchas: tests/fixtures/jira/SHAPES.md and the
-sanitised AIL samples next to it.
-
-Every row is a dict whose keys are exactly the table's columns
-(oversight/store/schema.sql). Timestamps go through oversight.timeutil.iso(),
-so they are stored as UTC "YYYY-MM-DDTHH:MM:SS.mmmZ". Lists and dicts may be
-left as Python objects: Store.upsert stores them as stable JSON.
-
-Optional values that are missing or null (no assignee, no parent, no sprint)
-map to None and never raise. What a row is keyed on (issue key and id,
-changelog id and time, worklog id, status id and name) must be present, and
-timestamps must parse: otherwise the payload is not the shape Jira documents,
-and JiraError stops the sync cleanly instead of storing a broken row.
-"""
+"""Jira JSON to our rows. Pure functions: no I/O, no database."""
 from __future__ import annotations
 
 import math
@@ -24,9 +9,6 @@ from oversight.config import SYSTEM_TRACKED, FieldsConfig
 from oversight.errors import JiraError
 from oversight.timeutil import iso
 
-# Legacy sprint strings look like "...Sprint@1a2b[id=12,rapidViewId=21,state=CLOSED,name=...]".
-# The id comes first, so taking the first match means a sprint name (ticket
-# text) that contains ",id=" cannot change it.
 _LEGACY_SPRINT_ID = re.compile(r"[\[,]id=([0-9]+)")
 
 # What an Epic Link field holds: an issue key such as "AIL-5".
@@ -34,32 +16,7 @@ _ISSUE_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_]*-[0-9]+")
 
 
 def map_issue(issue: dict[str, Any], fields: FieldsConfig) -> dict[str, Any]:
-    """One search result -> an `issues` row.
-
-    - issue_key = issue["key"]; issue_id = str(issue["id"]).
-    - project_key = fields.project.key (fall back to the key's prefix).
-    - issue_type = fields.issuetype.name; summary = fields.summary.
-    - status = fields.status.name; status_category = fields.status.statusCategory.key.
-    - assignee_id = fields.assignee.accountId, or None.
-    - parent_key = fields.parent.key, or None.
-    - epic_key: the parent's key when the parent is an epic (parent.fields.issuetype
-      hierarchyLevel == 1, or name "Epic" if hierarchyLevel is absent); else the
-      value of the `epic_link` field when fields.yaml has one and the issue holds a
-      key string there; else None. A subtask's parent is a task, so its epic_key
-      is None (parent_key keeps the link).
-    - created_at, updated_at, resolved_at from created, updated, resolutiondate.
-    - original_estimate_s / remaining_estimate_s / time_spent_s /
-      aggregate_time_spent_s from timeoriginalestimate / timeestimate /
-      timespent / aggregatetimespent (ints or None).
-    - story_points: float of the `story_points` field (fields.yaml id), or None.
-    - sprint_ids: None if fields.yaml has no sprint field; otherwise a list of sprint
-      ids (ints) from the sprint field (a list of {"id", ...} objects; tolerate the
-      legacy string form "...Sprint@abc[id=12,...]" by extracting the id), [] when empty.
-      The ids come out unique and in ascending order, so the stored JSON is stable.
-    - raw_json: the whole issue dict.
-    Missing or null nested objects never raise; they give None. A missing key or
-    id, or a timestamp that does not parse, raises JiraError.
-    """
+    """One search result -> an `issues` row."""
     issue_key = _required(_dig(issue, "key"), "an issue without a key")
     values = _dig(issue, "fields")
     parent_key = _text(_dig(values, "parent", "key"))
@@ -90,16 +47,7 @@ def map_issue(issue: dict[str, Any], fields: FieldsConfig) -> dict[str, Any]:
 
 
 def map_assignee(issue: dict[str, Any], seen_at: str) -> dict[str, Any] | None:
-    """A search result's assignee -> a `people` row, or None when nobody is assigned.
-
-    account_id = fields.assignee.accountId (the issue row's assignee_id);
-    display_name = its displayName, or None; active = 1 or 0 from its `active`
-    flag, None when Jira does not say; updated_at = seen_at, when the sync saw it;
-    avatar_url = its avatarUrls["48x48"], or None: the picture's address, which
-    the sync fetches the picture from (oversight/ingest/avatars.py) and which is
-    never sent anywhere. Nothing else of the user object is kept: not the email
-    address, the other picture sizes or the time zone.
-    """
+    """A search result's assignee -> a `people` row, or None when nobody is assigned."""
     assignee = _dig(issue, "fields", "assignee")
     account_id = _text(_dig(assignee, "accountId"))
     if account_id is None:
@@ -115,16 +63,7 @@ def map_assignee(issue: dict[str, Any], seen_at: str) -> dict[str, Any] | None:
 
 
 def map_member(user: dict[str, Any], seen_at: str) -> dict[str, Any] | None:
-    """One of a board's assignable users (GET user/assignable/search) -> a `people` row, or None when the
-    account is not a member.
-
-    Members are people: accountType "atlassian" and active true, nothing else. App accounts (Tempo,
-    Automation for Jira and the like), customer accounts (Jira Service Management) and deactivated or
-    suspended ones are never members, nor is a user object without an accountId. The row is map_assignee's:
-    account_id, display_name (or None), active = 1, updated_at = seen_at, avatar_url = avatarUrls["48x48"]
-    (or None). Nothing else of the user object is kept: not the email address, the time zone, the locale,
-    the self link or the other picture sizes.
-    """
+    """One assignable user (GET user/assignable/search) -> a `people` row, or None."""
     account_id = _text(_dig(user, "accountId"))
     if account_id is None or _dig(user, "accountType") != "atlassian" or _dig(user, "active") is not True:
         return None
@@ -138,17 +77,7 @@ def map_member(user: dict[str, Any], seen_at: str) -> dict[str, Any] | None:
 
 
 def map_status_changes(issue_key: str, histories: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Changelog histories -> `status_changes` rows, sorted by (changed_at, numeric id).
-
-    A history counts when it has an item with fieldId "status" (or, if fieldId is
-    missing, field "status" and fieldtype "jira"); use the first such item.
-    Row: issue_key, changelog_id = str(history["id"]), changed_at = iso(history["created"])
-    (bulk fetch may send epoch milliseconds, the other endpoints ISO strings),
-    author_id = history["author"]["accountId"] or None, from_status = fromString,
-    to_status = toString.
-    A history delivered twice gives one row. A counted history without an id or a
-    created time raises JiraError.
-    """
+    """Changelog histories -> `status_changes` rows, sorted by (changed_at, numeric id)."""
     rows: dict[str, dict[str, Any]] = {}
     for history in histories or ():
         item = next((item for item in _items(history) if _is_status_item(item)), None)
@@ -172,24 +101,7 @@ def map_status_changes(issue_key: str, histories: list[dict[str, Any]]) -> list[
 def map_field_changes(
     issue_key: str, histories: list[dict[str, Any]], fields: FieldsConfig
 ) -> list[dict[str, Any]]:
-    """Changelog histories -> `field_changes` rows for tracked fields other than status.
-
-    Tracked fields come from fields.tracked_changelog_fields() (Jira field id ->
-    logical name). Match items by fieldId; when an item has no fieldId, match
-    its `field` display name (case-insensitive) against the FieldRef names in
-    fields.yaml and the system ids (timeoriginalestimate, timeestimate, assignee).
-    Skip "status" (it goes to status_changes) and every untracked item.
-
-    Values: use `from`/`to` when they are neither None nor "", else
-    `fromString`/`toString`; "" becomes None; keep strings as strings.
-    So story points read "0.5" from toString, sprints read sprint ids ("4427",
-    or "4400, 4427" for several), assignee reads account ids, estimates read seconds.
-    Row: issue_key, changelog_id, field (logical name), changed_at, from_value, to_value.
-    If one history changes the same logical field twice, keep the last item.
-    Sorted by (changed_at, numeric changelog id, field).
-    A display name shared by two tracked fields is ambiguous and matches neither.
-    A history with a tracked item but no id or created time raises JiraError.
-    """
+    """Changelog histories -> `field_changes` rows for tracked fields other than status."""
     tracked = {
         field_id: logical
         for field_id, logical in fields.tracked_changelog_fields().items()
@@ -224,9 +136,7 @@ def map_field_changes(
 
 
 def map_worklog(issue_key: str, worklog: dict[str, Any]) -> dict[str, Any]:
-    """A worklog -> a `worklogs` row: worklog_id = str(id), issue_key, started_at,
-    seconds = timeSpentSeconds, author_id = author.accountId, updated_at.
-    A worklog without an id raises JiraError."""
+    """A worklog -> a `worklogs` row."""
     worklog_id = _required(_dig(worklog, "id"), f"a worklog of {issue_key} without an id")
     where = f"worklog {worklog_id} of {issue_key}"
     return {
@@ -240,8 +150,7 @@ def map_worklog(issue_key: str, worklog: dict[str, Any]) -> dict[str, Any]:
 
 
 def map_remote_links(issue_key: str, links: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Remote links -> `links` rows: kind "remote_link", target = object.url,
-    title = object.title. Skip links without a URL; one row per target (first wins)."""
+    """Remote links -> `links` rows: kind "remote_link", target = object.url, title = object.title."""
     rows: dict[str, dict[str, Any]] = {}
     for link in links or ():
         url = _dig(link, "object", "url")
@@ -258,15 +167,7 @@ def map_remote_links(issue_key: str, links: list[dict[str, Any]]) -> list[dict[s
 
 
 def map_issue_links(issue: dict[str, Any]) -> list[dict[str, Any]]:
-    """fields.issuelinks -> `links` rows: kind "issue_link".
-
-    outwardIssue: target = its key, title = type.outward (e.g. "blocks").
-    inwardIssue: target = its key, title = type.inward (e.g. "is blocked by").
-    Several links to the same target become one row whose titles are joined with
-    "; " in sorted order.
-    Links without a linked issue are skipped; a link type without the direction's
-    text adds no title.
-    """
+    """fields.issuelinks -> `links` rows: kind "issue_link"."""
     issue_key = _required(_dig(issue, "key"), "an issue without a key")
     links = _dig(issue, "fields", "issuelinks")
     titles: dict[str, list[str]] = {}
@@ -291,9 +192,7 @@ def map_issue_links(issue: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def map_statuses(project_key: str, project_statuses: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """GET project/{key}/statuses (one entry per issue type) -> `statuses` rows,
-    one per status id: project_key, status_id = str(id), name, category =
-    statusCategory.key. A status without an id or a name raises JiraError."""
+    """GET project/{key}/statuses -> `statuses` rows."""
     rows: dict[str, dict[str, Any]] = {}
     for issue_type in project_statuses or ():
         statuses = _dig(issue_type, "statuses")
@@ -335,11 +234,7 @@ def _bad_payload(what: str) -> JiraError:
 
 
 def _required(value: Any, what: str) -> str:
-    """A key, id or name that a row cannot exist without, as text.
-
-    Jira sends ids as strings or numbers. The message names only keys and ids,
-    never ticket text.
-    """
+    """A key, id or name that a row cannot exist without, as text."""
     if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
         raise _bad_payload(what)
     return str(value)
@@ -450,12 +345,7 @@ def _id_order(changelog_id: str) -> tuple[int, int, str]:
 
 
 def _tracked_names(tracked: dict[str, str], fields: FieldsConfig) -> dict[str, str]:
-    """Casefolded display name -> logical name, for items that carry no fieldId.
-
-    Custom fields go by their fields.yaml name. System fields go by their id,
-    which Jira also uses as their item's `field`. Field names are not unique on a
-    site, so a name that two tracked fields share is left out.
-    """
+    """Casefolded display name -> logical name, for items that carry no fieldId."""
     candidates: dict[str, set[str]] = {}
     for field_id, logical in tracked.items():
         ref = None if field_id in SYSTEM_TRACKED else fields.fields.get(logical)

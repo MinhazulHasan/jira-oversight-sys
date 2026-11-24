@@ -1,12 +1,3 @@
-"""Every Jira board through the API (JO-17): GET /projects lists every board the service serves, a board-scoped route
-on a board never synced is 409 board_not_synced, a discovered board is served with a mapping worked out from its status
-categories, health reads each board's own syncs, and discovery runs in the background (at start, and when the list is
-old), never holding a request.
-
-Three synthetic boards share one store: DEMO (the default) and AIL in JIRA_PROJECTS, and OPS, found by discovery and
-synced once from the dashboard (it has no process.yaml entry); ZED was discovered and never synced, GONE left Jira.
-Discovery itself is a stand-in here: nothing talks to Jira.
-"""
 from __future__ import annotations
 
 import threading
@@ -136,7 +127,6 @@ def test_health_still_answers_for_a_board_never_synced(client: TestClient) -> No
 
 
 def test_health_reads_each_boards_own_syncs(tmp_path: Path) -> None:
-    """JO-18 syncs one board at a time: a failed sync of OPS says nothing about DEMO."""
     settings = make_settings(tmp_path, "DEMO")
     seed(settings, {"DEMO": 30})
     discovered(settings, ("OPS", "Operations", "business"))
@@ -187,9 +177,6 @@ def test_a_boards_mapping_is_worked_out_once_after_each_of_its_syncs(
             assert before is not None and before.last_synced_at is not None
             store.set_cursor("OPS", last_synced_at=before.last_synced_at, run_id=before.last_run_id or "r1",
                              account_timezone=None)
-
-
-# --- discovery in the API's process ----------------------------------------------------------------------------------
 
 
 def test_the_api_starts_a_discovery_when_it_starts_serving(boards: Settings) -> None:

@@ -1,62 +1,4 @@
-"""AnthropicProvider: Claude through the official `anthropic` SDK (2.x).
-
-The SDK facts below come from the current API reference and were checked
-against the installed SDK (2.4.0): `messages.parse` takes `output_format` (a
-pydantic type) and `output_config`; `beta.messages.create` takes
-`fallbacks="default"` under the "server-side-fallback-2026-07-01" beta. They
-differ from older patterns, so do not "fix" them from memory.
-
-Client: anthropic.Anthropic(api_key=..., timeout=settings.llm_timeout_s,
-max_retries=settings.llm_max_retries). The client is injectable
-(`client=`) so tests use a fake with the same method shapes; no test calls the
-real API. tests/test_live_llm.py (marked live) is the only live check.
-
-structured(): structured outputs, not forced tool use.
-    response = client.messages.parse(
-        model=model, max_tokens=max_tokens, system=system,
-        messages=[{"role": "user", "content": user}],
-        output_format=schema,                     # the pydantic model
-        output_config={"effort": effort},         # low | medium | high
-    )
-    response.parsed_output is the validated instance. Never send tool_choice
-    {"type": "tool"|"any"}: current models (Sonnet 5.5, Opus 5.5) reject it
-    with a 400. Never send `temperature`, `top_p` or `top_k` (rejected). Never
-    send a `thinking` parameter: adaptive thinking is on by default; `effort`
-    is the only depth control. No assistant prefill (rejected).
-
-compose(): plain text.
-    kwargs = dict(model=model, max_tokens=max_tokens, system=system,
-                  messages=[{"role": "user", "content": user}],
-                  output_config={"effort": effort})
-    if settings.llm_fallbacks:
-        response = client.beta.messages.create(
-            **kwargs, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-    else:
-        response = client.messages.create(**kwargs)
-    Text = the concatenation of blocks with .type == "text" (skip thinking
-    blocks). Check response.stop_reason first: "refusal" -> raise LLMRefusal;
-    "max_tokens" -> return the text with stop_reason "max_tokens" (the caller
-    treats it as incomplete). response.model names the model that answered
-    (it may be the fallback model).
-
-Usage: response.usage.input_tokens / output_tokens. Latency measured around the
-call with time.perf_counter(). Log one line per call (model, purpose is the
-caller's, latency_ms, stop_reason, tokens); never log prompt text or the key.
-
-Errors, most specific first: anthropic.AuthenticationError /
-PermissionDeniedError -> LLMError(retryable=False, "check ANTHROPIC_API_KEY");
-NotFoundError -> LLMError("unknown model <model>"); RateLimitError ->
-LLMError(retryable=True); APIStatusError with status >= 500 -> retryable=True,
-else retryable=False with the status; APIConnectionError (includes timeouts)
--> retryable=True. A parse() whose parsed_output is None or raises a
-validation error -> LLMError(retryable=False). The exception text never
-includes the key or the prompt. A failure after a response came back (a
-refusal; no structured output, as when it stopped at max_tokens; an output
-that does not fit the schema once it is in hand) carries the response's
-usage and stop_reason: those tokens are billed, and the caller records them.
-A reply the SDK itself refuses inside parse() comes back as no response, so
-it has none to carry.
-"""
+"""AnthropicProvider: Claude through the official anthropic SDK."""
 from __future__ import annotations
 
 import time
@@ -123,8 +65,7 @@ class AnthropicProvider:
                 output_config={"effort": effort},
             )
         except pydantic.ValidationError as exc:
-            # The SDK validates the JSON reply against `schema` before returning
-            # it; a reply that does not fit is final, not a transport problem.
+            # The SDK already validated the reply against the schema, so a mismatch is final, not transient.
             error = LLMError(
                 f"the model's structured output did not match {schema.__name__}: {_validation_summary(exc)}",
                 retryable=False,
@@ -205,9 +146,7 @@ class AnthropicProvider:
         max_tokens: int = 16000,
         tool_choice: dict[str, Any] | None = None,
     ) -> ConverseResult:
-        """One turn with client tools (the Ask analyst). tool_choice is "auto" by
-        default; {"type": "none"} asks for text only. Forced choice ("any",
-        "tool") is never sent: current models reject it."""
+        """One turn with client tools; forced tool choice is never sent because current models reject it."""
         request: dict[str, Any] = {
             "model": self._model(model),
             "max_tokens": max_tokens,
@@ -276,11 +215,7 @@ def _mapped(
     service: str = "the Anthropic API",
     credentials_hint: str = "check ANTHROPIC_API_KEY",
 ) -> LLMError:
-    """The SDK's exception as an LLMError, most specific first.
-
-    The SDK's own message is left out on purpose: it can echo the request,
-    and the API's error type (a short enum) says enough.
-    """
+    """The SDK's exception as an LLMError; its message is dropped because it can echo the request."""
     if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
         return LLMError(
             f"{service} rejected the credentials (HTTP {exc.status_code}): {credentials_hint}",

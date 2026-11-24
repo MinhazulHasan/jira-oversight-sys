@@ -1,5 +1,4 @@
-"""`python -m oversight cycle` (oversight/cycle.py): the deployment's sync service. Fake steps and a fake clock: no
-test starts a real step."""
+"""`python -m oversight cycle` (oversight/cycle.py)"""
 from __future__ import annotations
 
 import signal
@@ -31,8 +30,6 @@ START = datetime(2026, 11, 12, 22, 0, tzinfo=UTC)
 
 
 class World:
-    """A clock both the loop's `now` and its monotonic clock read, steps that take time, and a stop that ends the
-    loop after a number of waits (each wait moves the clock on)."""
 
     def __init__(self, settings: Settings, *, cycles: int, step_minutes: float = 1,
                  codes: dict[tuple[str, ...], list[int]] | None = None) -> None:
@@ -83,9 +80,6 @@ def loop(world: World) -> int:
     return run_loop(world.settings, world.runner, stop=world.stop, now=world.now, clock=world.clock)
 
 
-# --- one cycle -----------------------------------------------------------------------------------------------------
-
-
 def test_a_cycle_is_sync_derive_rules_then_the_missing_baselines() -> None:
     assert cycle_steps(full=False) == [("sync", "--incremental"), ("derive",), ("rules",), ("baseline", "--missing")]
     assert cycle_steps(full=True) == [("sync", "--full"), ("derive",), ("rules",), ("baseline", "--missing")]
@@ -97,8 +91,6 @@ def test_with_board_discovery_on_a_cycle_discovers_first() -> None:
 
 
 def test_a_baseline_that_fails_never_fails_the_cycle() -> None:
-    """18 Nov 2026: the boards' figures are in once the rules have run; the next cycle writes the reports still
-    missing."""
     from structlog.testing import capture_logs
 
     ran: list[tuple[str, ...]] = []
@@ -115,7 +107,6 @@ def test_a_baseline_that_fails_never_fails_the_cycle() -> None:
 
 
 def test_a_discovery_that_fails_never_stops_the_cycle() -> None:
-    """JO-17: the boards stored before stay, and the boards the cycle keeps never depend on this one search."""
     from structlog.testing import capture_logs
 
     ran: list[tuple[str, ...]] = []
@@ -149,7 +140,6 @@ def test_a_cycle_stops_at_the_first_failed_step_with_its_code() -> None:
 
 
 def test_a_step_a_stop_interrupts_is_logged_as_stopped_never_as_failed() -> None:
-    # Regression: docker stop (or an upgrade's restart) mid-step logged cycle_failed, which the guide says to alert on.
     from structlog.testing import capture_logs
 
     stop = threading.Event()
@@ -181,11 +171,7 @@ def test_a_stop_between_steps_ends_the_cycle_without_failing() -> None:
     assert ran == ["sync"]
 
 
-# --- the loop ------------------------------------------------------------------------------------------------------
-
-
 def test_the_first_cycle_is_full_then_incremental_until_the_next_utc_day(settings: Settings) -> None:
-    # 22:00 UTC, every 60 minutes: 22:00 full, 23:00 incremental, 00:00 (a new UTC day) full, 01:00 incremental.
     world = World(settings, cycles=4)
     assert loop(world) == 0
     assert world.syncs() == ["--full", "--incremental", "--full", "--incremental"]
@@ -203,7 +189,6 @@ def test_cycles_start_an_interval_apart_and_an_overrun_is_followed_at_once(setti
 
 
 def test_a_failed_full_sync_is_tried_again_in_full(settings: Settings) -> None:
-    # 22:00 full fails, 23:00 full again, 00:00 a new UTC day (full), 01:00 incremental.
     world = World(settings, cycles=4, codes={("sync", "--full"): [4]})
     loop(world)
     assert world.syncs() == ["--full", "--full", "--full", "--incremental"]
@@ -220,13 +205,12 @@ def test_a_backup_follows_the_first_cycle_and_then_the_first_cycle_of_each_utc_d
     world = World(settings, cycles=26)
     loop(world)
     backups = [at for at, step in world.ran if step == ("backup",)]
-    # 22:05 after the first cycle; then 00:05, after the first cycle of 13 Nov (UTC), not 22:05 the next evening.
     assert backups == [START + timedelta(minutes=5), START + timedelta(hours=2, minutes=5)]
     assert len(list_backups(settings.backups_path)) == 2
 
 
 class VariedWorld(World):
-    """A day of real cycles: the first of each UTC day a full sync of 8 to 12 minutes, the rest 1 to 4."""
+    """A day of real cycles"""
 
     def __init__(self, settings: Settings, *, cycles: int) -> None:
         super().__init__(settings, cycles=cycles)
@@ -249,8 +233,6 @@ class VariedWorld(World):
 
 @pytest.mark.parametrize("interval", [60, 240, 1440])
 def test_over_sixty_days_one_backup_a_utc_day_and_the_doctor_never_warns(settings: Settings, interval: int) -> None:
-    # Regression: "a day since the newest" checked after each cycle let the backup creep later each day and skip days
-    # (59 in 60 days at 60 minutes, 37 at 1440), and the doctor then warned about backups on a healthy stack.
     configured = settings.model_copy(update={"sync_interval_minutes": interval})
     Store.open(configured.db_file).close()
     days = 60
@@ -285,9 +267,9 @@ def test_a_backup_is_due_once_each_utc_day(settings: Settings) -> None:
     Store.open(settings.db_file).close()
     assert backup_due(settings, START)
     settings.backups_path.mkdir(parents=True)
-    (settings.backups_path / backup_name(START)).write_bytes(b"backup")  # 22:00 UTC, 12 Nov
+    (settings.backups_path / backup_name(START)).write_bytes(b"backup")
     assert not backup_due(settings, START + timedelta(hours=1, minutes=59))  # 23:59, the same UTC day
-    assert backup_due(settings, START + timedelta(hours=2))  # 00:00, 13 Nov
+    assert backup_due(settings, START + timedelta(hours=2))
 
 
 def test_a_stop_during_a_cycle_ends_the_loop_with_no_backup(settings: Settings) -> None:
@@ -301,9 +283,6 @@ def test_a_stop_during_a_cycle_ends_the_loop_with_no_backup(settings: Settings) 
 
     assert run_loop(settings, runner, stop=world.stop, now=world.now, clock=world.clock) == 0
     assert [step for _, step in world.ran] == [("discover",)]
-
-
-# --- the real step runner, with a stand-in process -------------------------------------------------------------------
 
 
 class FakeChild:
@@ -355,7 +334,6 @@ def test_each_step_is_its_own_oversight_process_in_the_project_folder(children: 
 
 
 def test_a_real_step_is_its_own_process_with_its_exit_code() -> None:
-    # Both stop in argparse, before any setting (or .env) is read and before anything is opened.
     runner = StepRunner(timeout_s=60)
     assert runner(("--version",)) == 0
     assert runner(("no-such-command",)) == 2
@@ -429,8 +407,6 @@ print("returned", stop.is_set(), runner._stopping)
 
 
 def test_a_stop_signal_never_waits_on_the_runners_lock() -> None:
-    # Regression: the handler took a plain lock the main thread could be holding: it waited on itself until Docker's
-    # SIGKILL. Run in its own process, so a regression fails on the timeout rather than hanging the suite.
     done = subprocess.run([sys.executable, "-c", STOP_WITH_THE_LOCK_HELD], cwd=PROJECT_ROOT, capture_output=True,
                           text=True, timeout=60)
     assert done.returncode == 0, done.stderr
@@ -449,9 +425,6 @@ def test_a_stop_while_a_step_starts_still_interrupts_it_once(children: list[Fake
     assert runner(("sync", "--incremental")) == (1 if sys.platform == "win32" else 130)
     (child,) = children
     assert child.signals == ["terminate" if sys.platform == "win32" else "SIGINT"]  # once, not twice
-
-
-# --- the command ---------------------------------------------------------------------------------------------------
 
 
 def test_the_command_needs_jira_settings_before_any_step(

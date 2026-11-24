@@ -1,8 +1,3 @@
-"""The rules engine (oversight/rules/engine.py): what a run records, opens, resolves and links.
-
-Small stories built with tests/rules_helpers.py and run at fixed clocks; the
-last test runs the whole catalogue over the seeded demo project.
-"""
 from __future__ import annotations
 
 import json
@@ -24,7 +19,6 @@ from tests.rules_helpers import FIVE_STAGES, NOW, add_issue, at, catalogue, deri
 LATER = NOW + timedelta(hours=1)
 STARTED = [(-48.0, "To Do", "In Progress")]
 
-# What _story trips, as (rule, issue key): a sprint-scoped finding sits under "sprint:<id>".
 STORY_FINDINGS = {
     ("R-EST-01", "AIL-1"),
     ("R-HYG-01", "AIL-1"),
@@ -37,12 +31,11 @@ STORY_FINDINGS = {
 
 
 def _story(store: Store) -> None:
-    """A small AIL board that trips seven measurable rules once each."""
-    add_issue(store, "AIL-1", status="In Progress", changes=STARTED, assignee=None)  # no estimate, nobody on it
-    add_issue(store, "AIL-2", status="Done", changes=[(-30, "To Do", "Done")], points=1)  # skipped development
-    add_issue(store, "AIL-3", status="In Progress", points=2, spent_h=14,  # reopened; 14 h of 16 burnt
+    add_issue(store, "AIL-1", status="In Progress", changes=STARTED, assignee=None)
+    add_issue(store, "AIL-2", status="Done", changes=[(-30, "To Do", "Done")], points=1)
+    add_issue(store, "AIL-3", status="In Progress", points=2, spent_h=14,
               changes=[*STARTED, (-20, "In Progress", "Done"), (-10, "Done", "In Progress")])
-    add_issue(store, "AIL-4", sprints=[sprint(4401)])  # unestimated, and its sprint ends in 2 days unstarted
+    add_issue(store, "AIL-4", sprints=[sprint(4401)])
 
 
 def _findings(store: Store, rule_id: str | None = None) -> list[sqlite3.Row]:
@@ -77,11 +70,11 @@ def test_a_run_records_findings_rule_status_and_the_run(
         assert isinstance(json.loads(row["evidence_json"]), dict) and row["message"]
     hygiene = store.query_one("SELECT * FROM rule_status WHERE run_id = ? AND rule_id = 'R-HYG-01'", (result.run_id,))
     assert hygiene is not None
-    assert (hygiene["measurable"], hygiene["issues_checked"], hygiene["hits"]) == (1, 2, 1)  # 2 in progress
+    assert (hygiene["measurable"], hygiene["issues_checked"], hygiene["hits"]) == (1, 2, 1)
     run = store.query_one("SELECT * FROM runs WHERE run_id = ?", (result.run_id,))
     assert run is not None
     assert (run["kind"], run["status"], run["rules_version"]) == ("rules", "succeeded", "0.1.0")
-    assert (run["started_at"], run["finished_at"]) == (at(0), at(0))  # both from the injected clock
+    assert (run["started_at"], run["finished_at"]) == (at(0), at(0))
     assert json.loads(run["stats_json"])["AIL"]["opened"] == 7
 
 
@@ -96,7 +89,6 @@ def test_not_measurable_rules_are_recorded_with_the_missing_evidence_named(
     rows = store.query("SELECT * FROM rule_status WHERE run_id = ?", (result.run_id,))
     assert len(rows) == len(catalogue().enabled_rules) == 12
     missing = {r["rule_id"]: json.loads(r["missing_json"]) for r in rows if r["measurable"] == 0}
-    # AIL records no code review anywhere, and its workflow maps no testing stage.
     assert missing == {"R-FLOW-01": ["code_review", "testing"], "W-REV-01": ["code_review"]}
     assert [(s.rule_id, s.missing) for s in result.not_measurable] == list(missing.items())
     assert all(r["missing_json"] is None for r in rows if r["measurable"] == 1)
@@ -130,7 +122,7 @@ def test_render_names_the_not_measurable_rules(store: Store, process: ProcessCon
     assert lines["R-FLOW-01"] == "  R-FLOW-01  not measurable: nothing in Jira shows code review and testing"
     assert lines["W-REV-01"] == "  W-REV-01   not measurable: nothing in Jira shows code review"
     assert lines["R-HYG-01"] == "  R-HYG-01   1 hits (1 new) on 2 checked"
-    assert "fewer than 20 closed intervals in 180 days, no threshold" in lines["W-AGE-01"]  # the thin-history note
+    assert "fewer than 20 closed intervals in 180 days, no threshold" in lines["W-AGE-01"]
 
 
 def test_a_second_run_with_no_change_opens_and_resolves_nothing(
@@ -163,13 +155,13 @@ def test_a_cleared_hit_resolves_and_a_reappearance_reopens_keeping_first_seen(
     run_at(store, process, fields)
     [row] = _findings(store, "R-HYG-01")
 
-    board("acct-team-2")  # somebody picks it up
+    board("acct-team-2")
     [cleared] = run_at(store, process, fields, now=NOW + timedelta(hours=1))
     [resolved] = _findings(store, "R-HYG-01")
     assert (cleared.opened, cleared.resolved) == (0, 1)
     assert (resolved["resolved_at"], resolved["resolved_why"]) == (at(1), "cleared")
 
-    board(None)  # and puts it down again
+    board(None)
     [again] = run_at(store, process, fields, now=NOW + timedelta(hours=2))
     [reopened] = _findings(store, "R-HYG-01")
     assert (again.opened, again.resolved, _stat(again, "R-HYG-01").opened) == (1, 0, 1)
@@ -224,13 +216,12 @@ def test_epics_are_excluded_unless_a_rule_names_them(
 
     [result] = run_at(store, process, fields)
 
-    # The epic is started, unestimated and unassigned, and still trips nothing.
     assert _open(store) == {("R-HYG-01", "AIL-2")}
     assert _stat(result, "R-HYG-01").checked == 1
 
     data = catalogue().model_dump()
     [hygiene] = [rule for rule in data["rules"] if rule["id"] == "R-HYG-01"]
-    hygiene["applies_to"]["issue_type"] = ["epic"]  # named (in any case): overrides exclude_types
+    hygiene["applies_to"]["issue_type"] = ["epic"]
     run_at(store, process, fields, RulesConfig.model_validate(data), now=LATER)
 
     assert _open(store) == {("R-HYG-01", "AIL-1")}
@@ -239,14 +230,13 @@ def test_epics_are_excluded_unless_a_rule_names_them(
 def test_a_warning_link_is_written_once_when_the_warning_preceded_the_breach(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:
-    add_issue(store, "AIL-1", status="In Progress", changes=STARTED, points=1, spent_h=7)  # 7 h of 8: burning fast
+    add_issue(store, "AIL-1", status="In Progress", changes=STARTED, points=1, spent_h=7)
     add_issue(store, "AIL-2", status="Done", changes=[*STARTED, (-2, "In Progress", "Done")], points=1, spent_h=16)
     derive(store, process)
     [first] = run_at(store, process, fields)
     [warning] = _findings(store, "W-EFF-01")
-    assert first.linked == 0  # AIL-2 breached with no warning before it
+    assert first.linked == 0
 
-    # AIL-1 finishes at twice its estimate: warned at NOW, breached two hours later.
     add_issue(store, "AIL-1", status="Done", changes=[*STARTED, (1, "In Progress", "Done")], points=1, spent_h=16)
     derive(store, process, now=NOW + timedelta(hours=2))
     [second] = run_at(store, process, fields, now=NOW + timedelta(hours=2))
@@ -273,11 +263,10 @@ def test_a_link_keeps_its_time_and_never_crosses_catalogue_versions(
         [result] = run_at(store, process, fields, rules, now=when)
         return result
 
-    assert step(0, "In Progress", 7).linked == 0  # warned
-    assert step(2, "Done", 16).linked == 1  # breached
-    assert step(3, "Done", 4).resolved == 1  # the logged time is corrected: the breach clears
-    assert step(4, "Done", 16).linked == 0  # it reappears: the same link, still dated at the breach
-    # Under 0.2.0 the breach is new, and no 0.2.0 warning preceded it: no link to the 0.1.0 warning.
+    assert step(0, "In Progress", 7).linked == 0
+    assert step(2, "Done", 16).linked == 1
+    assert step(3, "Done", 4).resolved == 1
+    assert step(4, "Done", 16).linked == 0
     bumped = step(5, "Done", 16, catalogue(version="0.2.0"))
     assert (bumped.opened, bumped.linked) == (1, 0)
     assert [r["linked_at"] for r in store.query("SELECT linked_at FROM warning_links")] == [at(2)]
@@ -296,13 +285,12 @@ def test_an_exception_in_a_check_rolls_the_project_back_and_fails_the_run(
             raise RuntimeError("check exploded")
         return original(issue, ctx, params)
 
-    # R-FLOW-03 runs after R-EST-01 and R-HYG-01, which have already written DEMO-1's findings by then.
     monkeypatch.setitem(checks.CHECKS, "reopened", fails_on_demo)
 
     with pytest.raises(RuntimeError, match="check exploded"):
         run_at(store, process, fields, projects=("AIL", "DEMO"))
 
-    assert {r["issue_key"] for r in _findings(store)} == {"AIL-1"}  # AIL committed, DEMO rolled back
+    assert {r["issue_key"] for r in _findings(store)} == {"AIL-1"}
     assert {r["project_key"] for r in store.query("SELECT project_key FROM rule_status")} == {"AIL"}
     run = store.query_one("SELECT * FROM runs WHERE kind = 'rules'")
     assert run is not None and (run["status"], run["finished_at"]) == ("failed", at(0))
@@ -324,7 +312,6 @@ def test_a_failure_to_record_the_failed_run_never_hides_the_original_error(
     monkeypatch.setitem(checks.CHECKS, "reopened", explode)
     monkeypatch.setattr(store, "finish_run", broken_bookkeeping)
 
-    # The check's error is what the caller sees, not the bookkeeping's.
     with pytest.raises(RuntimeError, match="check exploded"):
         run_at(store, process, fields)
 
@@ -334,7 +321,7 @@ def test_issues_without_metrics_are_skipped_with_a_note(
 ) -> None:
     add_issue(store, "AIL-1", status="In Progress", changes=STARTED, assignee=None, points=1)
     derive(store, process)
-    add_issue(store, "AIL-2", status="In Progress", changes=STARTED, assignee=None, points=1)  # synced after derive
+    add_issue(store, "AIL-2", status="In Progress", changes=STARTED, assignee=None, points=1)
 
     [result] = run_at(store, process, fields)
 
@@ -353,7 +340,6 @@ def test_an_unknown_project_fails_before_anything_is_written(
 
 
 def _people(store: Store) -> set[str]:
-    """Every account id and display name the issues carry: none may reach a finding."""
     people: set[str] = set()
     for row in store.query("SELECT assignee_id, raw_json FROM issues"):
         people.add(row["assignee_id"] or "")

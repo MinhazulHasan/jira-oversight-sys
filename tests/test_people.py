@@ -1,16 +1,3 @@
-"""People (JO-05): the accounts tickets are assigned to, by Jira display name and picture.
-
-The people table is filled from the synced issues' raw_json by the 3 -> 4
-migration, with no Jira call, its picture URLs by the 4 -> 5 one, with no
-network call, and every sync keeps both current. It holds an account's id,
-display name and active flag, when a sync last saw it, Jira's picture URL and
-the picture fetched from it (tests/test_avatars.py fetches them): never an email
-address or a time zone. Every database here is built in the test (a version 3
-one is today's schema without the people table, a version 4 one without the
-picture columns), so the real snapshot is never opened. The person the API sends
-({id, name, avatar}, oversight.api.people) is pinned here too, and Ask is shown
-unable to read it.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -41,8 +28,7 @@ from tests.fakes import fake_jira
 from tests.fakes.builders import START, ail_and_ops
 from tests.fakes.fake_jira import FakeJira
 
-ZONE = "Pacific/Chatham"  # the users' own zone in these payloads: nothing else here uses it
-# What a sync maps an assignee to, and the table: those, then the picture fetched from avatar_url.
+ZONE = "Pacific/Chatham"
 MAPPED_COLUMNS = ["account_id", "display_name", "active", "updated_at", "avatar_url"]
 PICTURE_COLUMNS = ["avatar", "avatar_type", "avatar_hash", "avatar_source", "avatar_fetched_at"]
 PEOPLE_COLUMNS = MAPPED_COLUMNS + PICTURE_COLUMNS
@@ -53,7 +39,6 @@ def picture_url(account: str, size: str = "48x48") -> str:
 
 
 def user(account: str, name: str | None = None, **fields: Any) -> dict[str, Any]:
-    """A Jira user object as an issue carries it, with everything that must never be kept."""
     found: dict[str, Any] = {
         "self": f"https://example.invalid/rest/api/3/user?accountId={account}",
         "accountId": account,
@@ -69,7 +54,6 @@ def user(account: str, name: str | None = None, **fields: Any) -> dict[str, Any]
 
 
 def issue_row(key: str, assignee: dict[str, Any] | None, updated: str, raw: Any = None) -> dict[str, Any]:
-    """An issues row as a sync stores it: the assignee's account id, and the payload in raw_json."""
     payload = {
         "key": key,
         "fields": {"assignee": assignee, "reporter": user("acc-reporter", "Report Er"), "updated": updated},
@@ -86,7 +70,6 @@ def issue_row(key: str, assignee: dict[str, Any] | None, updated: str, raw: Any 
 
 
 def version_3(path: Path, rows: list[dict[str, Any]], synced: dict[str, str]) -> None:
-    """A version 3 snapshot holding these issues and these boards' last syncs."""
     with Store.open(path) as store:
         with store.transaction():
             for row in rows:
@@ -96,7 +79,6 @@ def version_3(path: Path, rows: list[dict[str, Any]], synced: dict[str, str]) ->
         store.conn.executescript("DROP TABLE people; PRAGMA user_version = 3;")
 
 
-# The people table as version 4 made it: no picture columns.
 VERSION_4_PEOPLE = """
     DROP TABLE people;
     CREATE TABLE people (account_id TEXT PRIMARY KEY, display_name TEXT, active INTEGER, updated_at TEXT NOT NULL);
@@ -104,7 +86,6 @@ VERSION_4_PEOPLE = """
 
 
 def version_4(path: Path, rows: list[dict[str, Any]], people: dict[str, str | None]) -> None:
-    """A version 4 snapshot holding these issues, and these accounts by display name in its people table."""
     with Store.open(path) as store:
         with store.transaction():
             for row in rows:
@@ -118,7 +99,6 @@ def version_4(path: Path, rows: list[dict[str, Any]], people: dict[str, str | No
 
 
 def read(path: Path, sql: str) -> list[tuple[Any, ...]]:
-    """Straight from the file, without the store (which would migrate it)."""
     conn = sqlite3.connect(path)
     try:
         return [tuple(row) for row in conn.execute(sql).fetchall()]
@@ -127,7 +107,6 @@ def read(path: Path, sql: str) -> list[tuple[Any, ...]]:
 
 
 def people_of(path: Path) -> dict[str, tuple[Any, ...]]:
-    """account id -> (display name, active, last seen), as version 4 made them."""
     return {row[0]: row[1:] for row in read(path, "SELECT account_id, display_name, active, updated_at FROM people")}
 
 
@@ -143,11 +122,7 @@ def version_of(path: Path) -> int:
     return read(path, "PRAGMA user_version")[0][0]
 
 
-# --- the person the API sends -------------------------------------------------------------------
-
-
 def test_a_persons_id_is_p_and_twelve_hex_characters_of_the_account_ids_sha256() -> None:
-    # Pinned, so the interface's sample data can make the same ids, and a change cannot slip through.
     assert (person_id("acc-01"), person_id("acc-08")) == ("pbc7fe62842ca", "pe0f1fe0c54ec")
     account = "712020:5f0c0001-a1b2-4c3d-8e9f-0123456789ab"
     assert person_id(account) == "p" + hashlib.sha256(account.encode("utf-8")).hexdigest()[:12]
@@ -165,8 +140,8 @@ def test_a_persons_id_is_p_and_twelve_hex_characters_of_the_account_ids_sha256()
         (42, UNNAMED),
         ("x" * 128, "x" * 128),
         ("x" * 129, "x" * 128),
-        ("abc " * 40, ("abc " * 32).rstrip()),  # cut at 128, with no space left at the end
-        ("\U0001f600" * 130, "\U0001f600" * 128),  # characters are code points, as the interface counts them
+        ("abc " * 40, ("abc " * 32).rstrip()),
+        ("\U0001f600" * 130, "\U0001f600" * 128),
         ("a" + "\U0001f600" * 128, "a" + "\U0001f600" * 127),
     ],
 )
@@ -187,12 +162,9 @@ def test_a_person_is_an_id_a_name_and_a_picture_version_and_nobody_is_none() -> 
     "stored", [None, "", "1E76EE511549", "1e76ee51154", "1e76ee5115490", "1e76ee51154g", " 1e76ee511549", 42, b"1e76"]
 )
 def test_a_stored_hash_that_is_not_12_lower_case_hex_characters_sends_no_avatar(stored: object) -> None:
-    """The contract's avatar is exactly 12 lower-case hex characters or null: anything else in the column is null."""
     assert avatar(stored) is None
     assert person("acc-01", "Ada Brooks", stored) == {"id": "pbc7fe62842ca", "name": "Ada Brooks", "avatar": None}
 
-
-# --- mapping ------------------------------------------------------------------------------------
 
 SEEN = "2026-11-04T15:00:30.000Z"
 
@@ -200,7 +172,7 @@ SEEN = "2026-11-04T15:00:30.000Z"
 def test_an_assignee_maps_to_its_account_id_display_name_active_flag_and_picture_url_and_nothing_else() -> None:
     row = map_assignee({"key": "AIL-1", "fields": {"assignee": user("acc-a", "Ada Brooks")}}, SEEN)
     assert row == {"account_id": "acc-a", "display_name": "Ada Brooks", "active": 1, "updated_at": SEEN,
-                   "avatar_url": picture_url("acc-a")}  # the 48x48 picture only
+                   "avatar_url": picture_url("acc-a")}
     assert list(row) == MAPPED_COLUMNS
 
 
@@ -217,7 +189,7 @@ def test_an_assignee_without_a_48_pixel_picture_url_maps_to_none(pictures: objec
     [
         ({"active": False}, ("Ada Brooks", 0)),
         ({"active": None}, ("Ada Brooks", None)),
-        ({"active": "true"}, ("Ada Brooks", None)),  # not a flag Jira documents: unknown
+        ({"active": "true"}, ("Ada Brooks", None)),
         ({"displayName": ""}, (None, 1)),
         ({"displayName": 7}, (None, 1)),
     ],
@@ -237,26 +209,21 @@ def test_an_issue_with_nobody_assigned_maps_to_no_row(issue: dict[str, Any]) -> 
     assert map_assignee(issue, SEEN) is None
 
 
-# --- the migration from version 3 ---------------------------------------------------------------
-
 AIL_SYNCED = "2026-11-04T09:00:00.000Z"
 DEMO_SYNCED = "2026-11-05T09:00:00.000Z"
 
 
 def snapshot_rows() -> list[dict[str, Any]]:
     return [
-        # acc-a on three AIL issues: the most recently updated one's name wins; and on DEMO, synced later.
         issue_row("AIL-1", user("acc-a", "Ada Older"), "2026-10-01T10:00:00.000Z"),
         issue_row("AIL-2", user("acc-a", "Ada Brooks"), "2026-11-01T10:00:00.000Z"),
         issue_row("AIL-3", user("acc-a", "Ada Middle"), "2026-10-15T10:00:00.000Z"),
         issue_row("DEMO-1", user("acc-a", "Ada Oldest"), "2026-09-01T10:00:00.000Z"),
-        # acc-b: inactive, on AIL and on OPS (which has never synced).
         issue_row("AIL-4", user("acc-b", "Ben Okafor", active=False), "2026-10-20T10:00:00.000Z"),
         issue_row("OPS-2", user("acc-b", "Ben Okafor", active=False), "2026-10-02T10:00:00.000Z"),
-        # acc-c: Jira gave no name and no flag; its only board has never synced.
         issue_row("OPS-1", {"accountId": "acc-c", "avatarUrls": {"16x16": "https://avatars.example.invalid/c.png"}},
                   "2026-10-03T10:00:00.000Z"),
-        issue_row("AIL-5", None, "2026-10-04T10:00:00.000Z"),  # unassigned
+        issue_row("AIL-5", None, "2026-10-04T10:00:00.000Z"),
         issue_row("AIL-6", user("acc-z", "Zed Broken"), "2026-10-05T10:00:00.000Z", raw="{not json"),
         issue_row("AIL-7", user("acc-y", "Yan Null"), "2026-10-06T10:00:00.000Z", raw=[1, 2]),
     ]
@@ -268,20 +235,19 @@ def test_a_version_3_snapshot_gains_its_people_from_raw_json(tmp_path: Path) -> 
     assert version_of(path) == 3 and not read(path, "SELECT name FROM sqlite_master WHERE name = 'people'")
     before = to_iso(datetime.now(UTC) - timedelta(seconds=2)) or ""
 
-    with Store.open(path) as store:  # any command's first open migrates
+    with Store.open(path) as store:
         assert store.count("issues") == 10
 
     after = to_iso(datetime.now(UTC) + timedelta(seconds=2)) or ""
-    assert version_of(path) == SCHEMA_VERSION == 11  # through versions 4, 5, 6, 7, 8, 9 and 10, to 11
+    assert version_of(path) == SCHEMA_VERSION == 11
     found = people_of(path)
-    assert sorted(found) == ["acc-a", "acc-b", "acc-c"]  # not the unassigned issue, not unreadable payloads
-    assert found["acc-a"] == ("Ada Brooks", 1, DEMO_SYNCED)  # the latest issue's name; the latest board's sync
+    assert sorted(found) == ["acc-a", "acc-b", "acc-c"]
+    assert found["acc-a"] == ("Ada Brooks", 1, DEMO_SYNCED)
     assert found["acc-b"] == ("Ben Okafor", 0, AIL_SYNCED)
     name, active, seen = found["acc-c"]
-    assert (name, active) == (None, None) and before <= seen <= after  # no board synced: the migration's time
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", seen)  # the storage format
-    assert "acc-reporter" not in found  # only assignees
-    # And version 5 their picture URLs: acc-c's issue gave a 16x16 picture only. No picture yet: a sync fetches them.
+    assert (name, active) == (None, None) and before <= seen <= after
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", seen)
+    assert "acc-reporter" not in found
     assert urls_of(path) == {"acc-a": picture_url("acc-a"), "acc-b": picture_url("acc-b"), "acc-c": None}
     assert read(path, "SELECT COUNT(*) FROM people WHERE COALESCE(avatar, avatar_type, avatar_hash, avatar_source,"
                       " avatar_fetched_at) IS NOT NULL") == [(0,)]
@@ -295,7 +261,7 @@ def test_the_migrations_keep_no_email_address_or_time_zone_and_one_picture_url(t
     stored = " ".join(str(value) for row in read(path, "SELECT * FROM people") for value in row)
     for kept_out in ("@", ZONE, "Europe/London", "16x16", "24x24", "32x32", "example.invalid/rest"):
         assert kept_out not in stored
-    assert stored.count("https://") == 2  # acc-a's and acc-b's 48x48 picture URLs, and nothing else
+    assert stored.count("https://") == 2
 
 
 def test_the_migration_is_idempotent(tmp_path: Path) -> None:
@@ -305,14 +271,14 @@ def test_the_migration_is_idempotent(tmp_path: Path) -> None:
     first, urls = people_of(path), urls_of(path)
 
     conn = sqlite3.connect(path)
-    conn.execute("PRAGMA user_version = 3")  # as if it had to run again
+    conn.execute("PRAGMA user_version = 3")
     conn.close()
     Store.open(path).close()
     assert people_of(path) == first and urls_of(path) == urls and version_of(path) == SCHEMA_VERSION
-    assert columns_of(path) == PEOPLE_COLUMNS  # no column added twice
+    assert columns_of(path) == PEOPLE_COLUMNS
 
     conn = sqlite3.connect(path)
-    conn.executescript(db._MIGRATIONS[3])  # and once more, by hand
+    conn.executescript(db._MIGRATIONS[3])
     conn.close()
     assert people_of(path) == first
 
@@ -320,7 +286,6 @@ def test_the_migration_is_idempotent(tmp_path: Path) -> None:
 def test_a_failed_migration_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "v3.sqlite"
     version_3(path, snapshot_rows(), {"AIL": AIL_SYNCED})
-    # Fails after the table is made and filled: the migration, the schema and the version are one transaction.
     monkeypatch.setitem(db._MIGRATIONS, 3, db._MIGRATIONS[3] + "\nSELECT no_such_function();")
     with pytest.raises(sqlite3.OperationalError, match="no_such_function"):
         Store.open(path)
@@ -338,48 +303,37 @@ def test_the_migration_is_fast(tmp_path: Path) -> None:
     ]
     version_3(path, rows, {"AIL": AIL_SYNCED})
     started = time.perf_counter()
-    Store.open(path).close()  # both migrations: 3 to 4, then 4 to 5
+    Store.open(path).close()
     assert time.perf_counter() - started < 5.0
     assert len(people_of(path)) == 40
     assert urls_of(path) == {f"acc-{n:02d}": picture_url(f"acc-{n:02d}") for n in range(40)}
 
 
 def test_a_demo_seeded_before_it_named_anyone_gets_its_fictional_names(tmp_path: Path) -> None:
-    """The demo once gave its accounts no display name, and a snapshot seeded then has none in its raw_json:
-    the migration names acc-01 to acc-08 as the demo now does (ASSIGNEE_NAMES), rather than eight
-    "Unnamed account"s. Never an account that holds a ticket outside the demo."""
     path = tmp_path / "v3.sqlite"
     with Store.open(path) as store:
         seed_demo(store, now=datetime(2026, 11, 4, 12, 0, tzinfo=UTC), issues=200)
         with store.transaction():
             store.conn.execute("UPDATE issues SET raw_json = json_remove(raw_json, '$.fields.assignee.displayName')")
-            # acc-08 also holds a ticket on a real site, which gave no name there either.
             store.upsert("issues", issue_row("AIL-1", {"accountId": "acc-08"}, "2026-10-01T10:00:00.000Z"))
         assert not store.query("SELECT 1 FROM issues WHERE json_extract(raw_json, '$.fields.assignee.displayName') NOTNULL")
         store.conn.executescript("DROP TABLE people; PRAGMA user_version = 3;")
 
     Store.open(path).close()
     names = {account: name for account, (name, _active, _seen) in people_of(path).items()}
-    assert names == {**ASSIGNEE_NAMES, "acc-08": None}  # all eight have demo tickets; acc-08 is not the demo's alone
+    assert names == {**ASSIGNEE_NAMES, "acc-08": None}
 
     conn = sqlite3.connect(path)
-    conn.executescript(db._MIGRATIONS[3])  # running it again changes nothing
+    conn.executescript(db._MIGRATIONS[3])
     conn.close()
     assert {account: name for account, (name, _active, _seen) in people_of(path).items()} == names
 
 
-# --- the migration from version 4: the picture URLs -----------------------------------------------
-
-
 def pictures(**urls: str) -> dict[str, str]:
-    """A user object's avatarUrls holding just these sizes ("_48x48" for "48x48")."""
     return {size.lstrip("_"): url for size, url in urls.items()}
 
 
 def test_a_version_4_snapshot_gains_its_picture_urls_from_raw_json(tmp_path: Path) -> None:
-    """Version 5 fills avatar_url from the issues already synced, with no network call: each account's 48x48
-    URL from its most recently updated issue, as version 4 took the name. Nothing else changes, no account is
-    added, and no picture is stored yet: the next sync fetches them."""
     path = tmp_path / "v4.sqlite"
     rows = [
         issue_row("AIL-1", user("acc-a", "Ada Brooks", avatarUrls=pictures(_48x48="https://a.example.invalid/old")),
@@ -391,7 +345,7 @@ def test_a_version_4_snapshot_gains_its_picture_urls_from_raw_json(tmp_path: Pat
         issue_row("AIL-3", user("acc-b", "Ben Okafor", avatarUrls=pictures(_16x16="https://b.example.invalid/16")),
                   "2026-10-02T10:00:00.000Z"),
         issue_row("AIL-4", user("acc-c", "Carmen Ruiz"), "2026-10-03T10:00:00.000Z"),
-        issue_row("AIL-5", user("acc-d", "Dev Malhotra"), "2026-10-04T10:00:00.000Z"),  # not in people
+        issue_row("AIL-5", user("acc-d", "Dev Malhotra"), "2026-10-04T10:00:00.000Z"),
         issue_row("AIL-6", user("acc-e", "Elif Aydin"), "2026-10-05T10:00:00.000Z", raw="{not json"),
         issue_row("AIL-7", None, "2026-10-06T10:00:00.000Z"),
     ]
@@ -399,16 +353,16 @@ def test_a_version_4_snapshot_gains_its_picture_urls_from_raw_json(tmp_path: Pat
     before = people_of(path)
     assert version_of(path) == 4 and columns_of(path) == PEOPLE_COLUMNS[:4]
 
-    with Store.open(path) as store:  # any command's first open migrates
+    with Store.open(path) as store:
         assert store.count("issues") == 8
 
     assert version_of(path) == SCHEMA_VERSION and columns_of(path) == PEOPLE_COLUMNS
     assert people_of(path) == before
     assert urls_of(path) == {
-        "acc-a": "https://a.example.invalid/new",  # the latest issue's
-        "acc-b": None,  # Jira gave no 48x48 picture
+        "acc-a": "https://a.example.invalid/new",
+        "acc-b": None,
         "acc-c": picture_url("acc-c"),
-        "acc-e": None,  # its only payload is not JSON
+        "acc-e": None,
     }
     assert read(path, "SELECT COUNT(*) FROM people WHERE COALESCE(avatar, avatar_type, avatar_hash, avatar_source,"
                       " avatar_fetched_at) IS NOT NULL") == [(0,)]
@@ -418,7 +372,7 @@ def test_the_version_5_migration_is_idempotent(tmp_path: Path) -> None:
     path = tmp_path / "v4.sqlite"
     version_4(path, snapshot_rows(), {"acc-a": "Ada Brooks", "acc-b": "Ben Okafor"})
     Store.open(path).close()
-    with Store.open(path) as store, store.transaction():  # a picture fetched since, as a sync stores one
+    with Store.open(path) as store, store.transaction():
         store.conn.execute(
             "UPDATE people SET avatar = x'89504e470d0a1a0a', avatar_type = 'image/png', avatar_hash = '0123456789ab',"
             " avatar_source = avatar_url, avatar_fetched_at = ? WHERE account_id = 'acc-a'", (AIL_SYNCED,))
@@ -426,14 +380,14 @@ def test_the_version_5_migration_is_idempotent(tmp_path: Path) -> None:
     assert everything[0][4] == picture_url("acc-a") and everything[0][7] == "0123456789ab"
 
     conn = sqlite3.connect(path)
-    conn.execute("PRAGMA user_version = 4")  # as if it had to run again
+    conn.execute("PRAGMA user_version = 4")
     conn.close()
     Store.open(path).close()
-    assert version_of(path) == SCHEMA_VERSION and columns_of(path) == PEOPLE_COLUMNS  # no column added twice
+    assert version_of(path) == SCHEMA_VERSION and columns_of(path) == PEOPLE_COLUMNS
     assert read(path, "SELECT * FROM people ORDER BY account_id") == everything
 
     conn = sqlite3.connect(path)
-    conn.executescript(db._MIGRATIONS[4])  # and its statement once more, by hand
+    conn.executescript(db._MIGRATIONS[4])
     conn.close()
     assert read(path, "SELECT * FROM people ORDER BY account_id") == everything
 
@@ -441,7 +395,6 @@ def test_the_version_5_migration_is_idempotent(tmp_path: Path) -> None:
 def test_a_failed_version_5_migration_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "v4.sqlite"
     version_4(path, snapshot_rows(), {"acc-a": "Ada Brooks"})
-    # Fails after the columns are added and filled: the columns, the fill and the version are one transaction.
     monkeypatch.setitem(db._MIGRATIONS, 4, db._MIGRATIONS[4] + "\nSELECT no_such_function();")
     with pytest.raises(sqlite3.OperationalError, match="no_such_function"):
         Store.open(path)
@@ -452,35 +405,28 @@ def test_a_failed_version_5_migration_changes_nothing(tmp_path: Path, monkeypatc
 def test_a_process_that_finds_the_migration_done_by_another_carries_on(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two processes open a version 4 snapshot together (the API starting while a sync runs). The one that
-    waits meant to add the picture columns, which another has added by the time it runs: it finds the
-    snapshot at version 5 and carries on, rather than failing the command."""
     path = tmp_path / "v4.sqlite"
     version_4(path, snapshot_rows(), {"acc-a": "Ada Brooks"})
     real = Store._new_columns
     raced: list[str] = []
 
     def other_process_first(self: Store, version: int) -> str:
-        statements = real(self, version)  # read while the snapshot was at version 4 ...
+        statements = real(self, version)
         if not raced:
             raced.append(statements)
-            Store.open(path).close()  # ... and then the other process migrated it
+            Store.open(path).close()
         return statements
 
     monkeypatch.setattr(Store, "_new_columns", other_process_first)
     with Store.open(path) as store:
         assert store.count("people") == 1
-    assert "ADD COLUMN avatar_url" in raced[0]  # it did mean to add them
+    assert "ADD COLUMN avatar_url" in raced[0]
     assert version_of(path) == SCHEMA_VERSION and columns_of(path) == PEOPLE_COLUMNS
     assert urls_of(path) == {"acc-a": picture_url("acc-a")}
 
 
-# --- every sync keeps it current -----------------------------------------------------------------
-
-
 @pytest.fixture
 def fake() -> FakeJira:
-    """AIL (34 issues) and OPS on one site, the clock at START; every assigned AIL issue is acc-dev-1's."""
     return ail_and_ops()
 
 
@@ -489,7 +435,6 @@ def sync(fake: FakeJira, store: Store, fields: FieldsConfig, mode: str = "full")
 
 
 def people_in(store: Store) -> dict[str, tuple[Any, ...]]:
-    """account id -> (display name, active, last seen)."""
     sql = "SELECT account_id, display_name, active, updated_at FROM people ORDER BY account_id"
     return {row[0]: tuple(row)[1:] for row in store.query(sql)}
 
@@ -502,11 +447,11 @@ def test_a_sync_stores_each_assignee_by_display_name_and_counts_them_apart(
     assert people_in(store) == {"acc-dev-1": ("Developer One", 1, to_iso(START))}
     assigned = store.count("issues") - len(store.query("SELECT 1 FROM issues WHERE assignee_id IS NULL"))
     assert result.people.as_dict() == {"inserted": 1, "updated": 0, "deleted": 0, "unchanged": assigned - 1}
-    assert result.rows_written == 137  # the snapshot's rows, as before: people are counted apart
+    assert result.rows_written == 137
     run = store.query_one("SELECT stats_json FROM runs WHERE run_id = ?", (result.run_id,))
     assert '"people": {"deleted": 0, "inserted": 1' in run[0]
     assert f"people (assignees): 1 inserted, 0 updated, {assigned - 1} unchanged" in result.render()
-    assert [row[1] for row in store.query("PRAGMA table_info(people)")] == PEOPLE_COLUMNS  # no email address, no zone
+    assert [row[1] for row in store.query("PRAGMA table_info(people)")] == PEOPLE_COLUMNS
 
 
 def test_every_sync_keeps_people_current_and_the_latest_display_name_wins(
@@ -514,13 +459,13 @@ def test_every_sync_keeps_people_current_and_the_latest_display_name_wins(
 ) -> None:
     sync(fake, store, fields)
     fake.clock = START + timedelta(minutes=30)
-    monkeypatch.setitem(fake_jira.PEOPLE, "acc-dev-1", "Developer One Renamed")  # renamed in Jira
-    fake.set_points("AIL-7", 5)  # one of acc-dev-1's issues changes, so an incremental run reads it again
-    fake.assign("AIL-16", "acc-dev-2")  # and someone new gets work
+    monkeypatch.setitem(fake_jira.PEOPLE, "acc-dev-1", "Developer One Renamed")
+    fake.set_points("AIL-7", 5)
+    fake.assign("AIL-16", "acc-dev-2")
     fake.clock += timedelta(minutes=2)
 
     incremental = sync(fake, store, fields, "incremental")
-    seen = incremental.started_at  # the run's start: when it saw them
+    seen = incremental.started_at
     assert seen > to_iso(START + timedelta(minutes=32))
     assert people_in(store) == {
         "acc-dev-1": ("Developer One Renamed", 1, seen),
@@ -528,8 +473,6 @@ def test_every_sync_keeps_people_current_and_the_latest_display_name_wins(
     }
     assert (incremental.people.inserted, incremental.people.updated) == (1, 1)
 
-    # A full read takes the new name into every payload it reads again (raw_json), and a second one,
-    # with nothing changed in Jira, writes no snapshot row but still notes when it saw everyone.
     fake.clock += timedelta(hours=1)
     assert sync(fake, store, fields).rows_written > 0
     fake.clock += timedelta(hours=1)
@@ -548,9 +491,6 @@ def test_a_sync_with_nothing_new_to_read_writes_no_people(fake: FakeJira, store:
     assert incremental.issues_seen == 0 and incremental.people.as_dict() == {
         "inserted": 0, "updated": 0, "deleted": 0, "unchanged": 0}
     assert people_in(store) == before
-
-
-# --- the api command, the demo and Ask ------------------------------------------------------------
 
 
 def api_settings(root: Path) -> Settings:
@@ -584,7 +524,6 @@ def test_the_api_command_leaves_a_missing_snapshot_missing(tmp_path: Path, monke
 
 
 def test_run_py_migrates_the_snapshot_before_serving(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """run.py (how the README restarts the server) migrates too, so /people never meets a version 3 snapshot."""
     settings = api_settings(tmp_path)
     version_3(settings.db_file, snapshot_rows(), {"AIL": AIL_SYNCED})
     served: list[tuple[str, int]] = []
@@ -604,17 +543,15 @@ def test_seeding_the_demo_twice_writes_its_people_once(store: Store) -> None:
     pictures = store.query("SELECT * FROM people WHERE avatar IS NOT NULL ORDER BY account_id")
     assert first and all(seen == to_iso(now) for _name, _active, seen in first.values())
     assert [row["account_id"] for row in pictures] == ["acc-01", "acc-05"]
-    seed_demo(store, now=now + timedelta(days=1), issues=60)  # a later seeding draws the same pictures
+    seed_demo(store, now=now + timedelta(days=1), issues=60)
     assert people_in(store) == {account: (name, active, to_iso(now + timedelta(days=1)))
                                 for account, (name, active, _seen) in first.items()}
     again = store.query("SELECT * FROM people WHERE avatar IS NOT NULL ORDER BY account_id")
     assert [tuple(row) for row in again] == [tuple(row)[:3] + (to_iso(now + timedelta(days=1)),) + tuple(row)[4:]
-                                             for row in pictures]  # the pictures not written again
+                                             for row in pictures]
 
 
 def test_ask_cannot_read_people(tmp_path: Path) -> None:
-    """At team level Ask's views hold no person, and the people table is out of its reach (people level, for
-    admins, is test_ask_people.py)."""
     path = tmp_path / "oversight.db"
     with Store.open(path) as store:
         seed_demo(store, now=datetime(2026, 11, 4, 12, 0, tzinfo=UTC), issues=30)
