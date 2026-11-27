@@ -58,8 +58,8 @@ def _field_time(ctx: RuleContext, issue_key: str, logical: str, created: str | N
     for change in ctx.field_changes(issue_key, logical):
         if _present(change["to_value"]):
             return change["changed_at"]
-    field_id = ctx.fields.id_of(logical)
-    if field_id and _present((ctx.raw(issue_key).get("fields") or {}).get(field_id)):
+    now = ctx.raw(issue_key).get("fields") or {}
+    if any(_present(now.get(field_id)) for field_id in ctx.fields.ids_of(logical)):
         return created
     return None
 

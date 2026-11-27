@@ -496,7 +496,7 @@ class _Sync:
         self, projects: list[str], fetcher: PictureFetcher | None, now: Callable[[], datetime]
     ) -> None:
         """The synced boards' people's pictures."""
-        named = [ref.id for ref in self.fields.people_fields().values()]
+        named = [field_id for ref in self.fields.people_fields().values() for field_id in ref.ids]
         try:
             if fetcher is not None:
                 self.pictures = refresh_pictures(self.store, fetcher, projects=projects, now=now, people_fields=named)

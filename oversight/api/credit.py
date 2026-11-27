@@ -45,7 +45,7 @@ class Setting:
 class PeopleField:
     key: str  # its logical name in fields.yaml
     name: str  # Jira's name for it
-    id: str | None  # Jira's field id; None: the site has no such people field, so it names no one
+    ids: tuple[str, ...]  # Jira's ids for it, one per team-managed board that has its own; none: it names no one
 
 
 class StaleRevision(Exception):
@@ -56,7 +56,7 @@ class StaleRevision(Exception):
 
 def people_fields(fields: FieldsConfig) -> list[PeopleField]:
     """The site's fields that name people, by name."""
-    found = [PeopleField(key, ref.name, ref.id) for key, ref in fields.people_fields().items()]
+    found = [PeopleField(key, ref.name, ref.ids) for key, ref in fields.people_fields().items()]
     return sorted(found, key=lambda one: (fold(one.name), one.key))
 
 
@@ -78,7 +78,7 @@ def step_one(choice: Choice, fields: FieldsConfig) -> PeopleField | None:
     named = field_named(fields, choice.field)
     if found is None and choice.source == "field" and named is not None:
         # A chosen field the site has lost is still the choice: it reads as naming no one, not as Assignee.
-        return PeopleField(named["key"], named["name"], None)
+        return PeopleField(named["key"], named["name"], ())
     return found
 
 
@@ -224,12 +224,16 @@ def _builders(facts: _Facts, field: PeopleField | None, *, assignee: bool) -> tu
 
 
 def _read(conn: sqlite3.Connection, project: str, wanted: Sequence[PeopleField]) -> dict[str, _Facts]:
-    readable = [(one.key, one.id) for one in wanted if one.id is not None]
+    readable = [(one.key, field_id) for one in wanted for field_id in one.ids]
     sql = _TICKETS_SQL.format(fields="".join(_FIELD_SQL.format(n=n) for n in range(len(readable))))
     params = [_path(field_id) for _key, field_id in readable for _use in ("json_type", "json_extract")]
     found: dict[str, _Facts] = {}
     for row in _rows(conn, sql, (*params, project)):
-        users = {field_key: _users(row[f"f{n}"]) for n, (field_key, _field_id) in enumerate(readable)}
+        users: dict[str, tuple[str, ...]] = {}
+        for n, (field_key, _field_id) in enumerate(readable):
+            # A ticket holds only its own board's copy of the field: the first that names anyone is it.
+            if not users.get(field_key):
+                users[field_key] = _users(row[f"f{n}"])
         found[row["issue_key"]] = _Facts(row["issue_type"], _account(row["assignee_id"]), users)
     return found
 

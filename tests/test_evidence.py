@@ -54,6 +54,20 @@ def test_field_source_set_at_creation_answers_created_at(
     assert _time(ctx, "AIL-3") is None
 
 
+def test_field_source_reads_the_boards_own_copy_of_the_field(
+    store: Store, process: ProcessConfig, fields: FieldsConfig
+) -> None:
+    reviewers = fields.fields["code_reviewers"]
+    assert reviewers is not None
+    copied = fields.model_copy(update={"fields": {
+        **fields.fields, "code_reviewers": reviewers.model_copy(update={"also": ["customfield_20065"]})}})
+    add_issue(store, "AIL-1", status="In Progress", created=CREATED, changes=STARTED,
+              raw_fields={"customfield_20065": [{"accountId": "acct-team-2"}]})
+
+    assert _time(_ctx(store, process, copied, {"field": "code_reviewers"}), "AIL-1") == at(CREATED)
+    assert _time(_ctx(store, process, fields, {"field": "code_reviewers"}), "AIL-1") is None
+
+
 def test_status_source_is_the_first_entry_into_that_status(
     store: Store, process: ProcessConfig, fields: FieldsConfig
 ) -> None:

@@ -156,6 +156,27 @@ def test_fields_round_trip_through_dump(tmp_path: Path, fields: FieldsConfig) ->
     assert [p.name for p in path.parent.iterdir()] == ["fields.yaml"]  # no temporary file left
 
 
+def test_a_people_field_copied_on_other_boards_is_requested_tracked_and_kept_under_each_id(
+    tmp_path: Path, fields: FieldsConfig
+) -> None:
+    programmer = fields.fields["programmer"]
+    assert programmer is not None
+    copied = fields.model_copy(update={"fields": {
+        **fields.fields, "programmer": programmer.model_copy(update={"also": ["customfield_20068", "customfield_20069"]})}})
+    assert copied.ids_of("programmer") == (programmer.id, "customfield_20068", "customfield_20069")
+    assert copied.id_of("programmer") == programmer.id
+    wanted = copied.search_fields()
+    assert [one for one in wanted if one not in fields.search_fields()] == ["customfield_20068", "customfield_20069"]
+    assert len(wanted) == len(set(wanted)) == len(fields.search_fields()) + 2
+    tracked = copied.tracked_changelog_fields()
+    assert tracked["customfield_20068"] == tracked["customfield_20069"] == tracked[programmer.id] == "programmer"
+    path = tmp_path / "fields.yaml"
+    copied.dump(path)
+    assert FieldsConfig.load(path) == copied
+    # A field with no copies is written as before, with no empty list.
+    assert path.read_text(encoding="utf-8").count("also:") == 1
+
+
 def test_a_failed_dump_keeps_the_previous_file(
     tmp_path: Path, fields: FieldsConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:

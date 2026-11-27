@@ -55,11 +55,12 @@ def map_field_people(issue: dict[str, Any], fields: FieldsConfig, seen_at: str) 
     """The people a search result's people fields name now (Programmer, Testers, ...) -> `people` rows, each once."""
     rows: dict[str, dict[str, Any]] = {}
     for ref in fields.people_fields().values():
-        value = _dig(issue, "fields", ref.id)
-        for user in value if isinstance(value, list) else [value]:
-            row = _user_row(user, seen_at)
-            if row is not None:
-                rows.setdefault(row["account_id"], row)
+        for field_id in ref.ids:
+            value = _dig(issue, "fields", field_id)
+            for user in value if isinstance(value, list) else [value]:
+                row = _user_row(user, seen_at)
+                if row is not None:
+                    rows.setdefault(row["account_id"], row)
     return list(rows.values())
 
 

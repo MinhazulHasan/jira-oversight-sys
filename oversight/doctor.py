@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from oversight.boards import category_stages
-from oversight.config import FIELD_CANDIDATES, FieldRef, FieldsConfig, ProcessConfig
+from oversight.config import FIELD_CANDIDATES, PEOPLE_FIELDS, PEOPLE_TYPES, FieldRef, FieldsConfig, ProcessConfig
 from oversight.errors import ConfigError, JiraAuthError, JiraError, JiraUnavailable
 from oversight.logs import get_logger
 from oversight.settings import validate_project_keys
@@ -336,6 +336,12 @@ class _Doctor:
             chosen = matches[0]
             if len(matches) > 1:
                 chosen, note = self._choose(logical, matches)
+                copies = [item["id"] for item in matches if item is not chosen and _holds_people(item)]
+                if logical in PEOPLE_FIELDS and _holds_people(chosen) and copies:
+                    # Each team-managed board has its own copy of a people field: read every copy, each on its board.
+                    notes.append(f"{note}; also reading {', '.join(_clean(one) for one in copies)} on their own boards")
+                    resolved[logical] = _field_ref(chosen, also=copies)
+                    continue
                 notes.append(note)
             resolved[logical] = _field_ref(chosen)
         return resolved, notes
@@ -570,14 +576,19 @@ def _field_order(item: dict[str, Any]) -> tuple[int, int, str]:
     return (0, int(number.group(1)), item["id"]) if number else (1, 0, item["id"])
 
 
-def _field_ref(item: dict[str, Any]) -> FieldRef:
+def _field_ref(item: dict[str, Any], also: list[str] | None = None) -> FieldRef:
     schema = item.get("schema")
     custom_type = schema.get("custom") if isinstance(schema, dict) else None
     return FieldRef(
         id=item["id"],
         name=item["name"],
         custom_type=custom_type if isinstance(custom_type, str) and custom_type else None,
+        also=also or [],
     )
+
+
+def _holds_people(item: dict[str, Any]) -> bool:
+    return (_field_ref(item).custom_type or "").endswith(PEOPLE_TYPES)
 
 
 def _fold(name: str) -> str:

@@ -741,6 +741,30 @@ def test_duplicate_story_point_fields_pick_the_populated_one(
     assert report.ok
 
 
+def test_a_people_field_on_several_team_managed_boards_keeps_every_copy(
+    site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
+) -> None:
+    # Two more boards with their own Programmer; a Programmer of another type is not a copy.
+    site.fields += [custom_field(10068, "Programmer", PEOPLE), custom_field(10069, "Programmer", PEOPLE),
+                    custom_field(10200, "Programmer", f"{GREENHOPPER}:jsw-story-points", "number")]
+
+    report = doctor(client, store, tmp_path)
+
+    assert report.fields is not None
+    programmer = report.fields.fields["programmer"]
+    assert programmer is not None and programmer.id == "customfield_10138"  # the one set on in-scope issues
+    assert programmer.also == ["customfield_10068", "customfield_10069"]
+    assert report.fields.ids_of("programmer") == ("customfield_10138", "customfield_10068", "customfield_10069")
+    written = FieldsConfig.load(tmp_path / "config" / "fields.yaml")
+    assert written.ids_of("programmer") == report.fields.ids_of("programmer")
+    assert written.ids_of("testers") == ("customfield_10140",)
+    assert (
+        "programmer: 4 fields match (customfield_10068, customfield_10069, customfield_10138, customfield_10200); "
+        "using customfield_10138, the one set on in-scope issues; "
+        "also reading customfield_10068, customfield_10069 on their own boards"
+    ) in check(report, "fields").detail
+
+
 def test_populated_preferred_field_wins_after_one_probe(
     site: FakeJiraSite, client: JiraClient, store: Store, tmp_path: Path
 ) -> None:

@@ -234,8 +234,20 @@ def test_a_field_the_site_does_not_have_skips_the_first_step(cases: sqlite3.Conn
     assert step_one(AUTOMATIC, without) is None
     # A chosen field the site has lost stays the choice and names no one, so every ticket counts for no one.
     assert credited(cases, Choice("field", "testers"), without) == expected(NOBODY, None)
-    assert step_one(Choice("field", "testers"), without) == PeopleField("testers", "Testers", None)
+    assert step_one(Choice("field", "testers"), without) == PeopleField("testers", "Testers", ())
     assert credited(cases, Choice("field", "nope")) == expected(NOBODY, None)
+
+
+def test_each_board_reads_its_own_copy_of_a_people_field(cases: sqlite3.Connection) -> None:
+    # Another team-managed board's Programmer comes first; this board fills only its own copy, read as Programmer.
+    elsewhere = FIELDS.fields["programmer"].model_copy(update={"id": "customfield_99001", "also": [PROGRAMMER]})
+    copies = FIELDS.model_copy(update={"fields": {**FIELDS.fields, "programmer": elsewhere}})
+    assert credited(cases, AUTOMATIC, copies) == expected(BY_PROGRAMMER, "Programmer")
+    assert credited(cases, Choice("field", "programmer"), copies) == expected(
+        {**NOBODY, **{name: credits for name, credits in BY_PROGRAMMER.items() if name != "assignee kept"}}, "Programmer")
+    # Without its own copy the board's Programmer reads as empty: Automatic falls to the assignee now.
+    alone = FIELDS.model_copy(update={"fields": {**FIELDS.fields, "programmer": elsewhere.model_copy(update={"also": []})}})
+    assert credited(cases, AUTOMATIC, alone) == expected(BY_ASSIGNEE, None)
 
 
 def test_several_people_in_the_field_each_count_once_in_its_order(cases: sqlite3.Connection) -> None:
@@ -448,6 +460,16 @@ class PeopleFieldsJira(FakeJira):
         body = super().payload(issue, fields)
         body["fields"].update(self.named.get(issue.key, {}))
         return body
+
+
+def test_a_people_field_is_read_from_whichever_copy_the_ticket_has() -> None:
+    programmer = FIELDS.fields["programmer"]
+    assert programmer is not None
+    copied = FIELDS.model_copy(update={"fields": {
+        **FIELDS.fields, "programmer": programmer.model_copy(update={"also": ["customfield_20068"]})}})
+    issue = {"key": "MJH-1", "fields": {"customfield_20068": [user("pat")], TESTERS: None}}
+    assert [row["account_id"] for row in map_field_people(issue, copied, at(0))] == [account("pat")]
+    assert map_field_people(issue, FIELDS, at(0)) == []
 
 
 def test_a_sync_keeps_the_people_fields_people_and_counts_only_assignees(store: Store, fields: FieldsConfig) -> None:

@@ -8,7 +8,16 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    model_serializer,
+    model_validator,
+)
 
 from oversight.errors import ConfigError
 
@@ -261,6 +270,19 @@ class FieldRef(BaseModel):
     id: str
     name: str
     custom_type: str | None = None
+    # The same field on other team-managed boards: each of those boards has its own copy, under its own id.
+    also: list[str] = Field(default_factory=list)
+
+    @property
+    def ids(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((self.id, *self.also)))
+
+    @model_serializer(mode="wrap")
+    def _without_empty_also(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if not data.get("also"):
+            data.pop("also", None)
+        return data
 
 
 class FieldsConfig(BaseModel):
@@ -294,6 +316,11 @@ class FieldsConfig(BaseModel):
         ref = self.fields.get(logical)
         return ref.id if ref else None
 
+    def ids_of(self, logical: str) -> tuple[str, ...]:
+        """Every id the field has on this site: its own, then its copies on other team-managed boards."""
+        ref = self.fields.get(logical)
+        return ref.ids if ref else ()
+
     def people_fields(self) -> dict[str, FieldRef]:
         """The site's fields that hold people, by logical name"""
         return {logical: ref for logical, ref in self.fields.items()
@@ -303,8 +330,7 @@ class FieldsConfig(BaseModel):
         """Jira field id -> logical name for every field whose history we keep."""
         tracked = dict(SYSTEM_TRACKED)
         for logical in CUSTOM_TRACKED:
-            field_id = self.id_of(logical)
-            if field_id:
+            for field_id in self.ids_of(logical):
                 tracked[field_id] = logical
         return tracked
 
@@ -312,6 +338,7 @@ class FieldsConfig(BaseModel):
         """Issue fields to request from search: the base set plus every resolved custom field."""
         out = list(BASE_SEARCH_FIELDS)
         for ref in self.fields.values():
-            if ref and ref.id not in out:
-                out.append(ref.id)
+            for field_id in ref.ids if ref else ():
+                if field_id not in out:
+                    out.append(field_id)
         return out
