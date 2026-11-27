@@ -90,7 +90,8 @@ def _views(project: str, sprint_field: str | None, assignees: str | None = None)
                    CASE WHEN f.issue_key LIKE 'sprint:%' THEN CAST(substr(f.issue_key, 8) AS INTEGER) END AS sprint_id,
                    f.message, f.first_seen_at, f.last_seen_at, f.resolved_at, f.resolved_why,
                    CASE WHEN f.resolved_at IS NULL THEN 1 ELSE 0 END AS is_open{who}
-            FROM snap.findings AS f{assignee_of("f.issue_key")} WHERE f.project_key = {p}""",
+            FROM snap.findings AS f{assignee_of("f.issue_key")}
+            WHERE f.project_key = {p} AND COALESCE(f.resolved_why, '') != 'ignored'""",
         "rule_status": f"""
             SELECT rule_id, measurable, missing_json AS missing_evidence, issues_checked, hits, note
             FROM snap.rule_status
@@ -141,17 +142,18 @@ PEOPLE_DATA_DICTIONARY = _DATA.format(
     ),
     people=(
         "- people(person_id, name, tickets, open_tickets, open_breaches, open_warnings, tickets_with_findings): one row "
-        "per person assigned a ticket on the board now, and one with person_id NULL and name Unassigned for the tickets "
-        "nobody holds; tickets are the board's work (Epics left out, as the scorecard counts them) and open_tickets "
-        "those not done; open_breaches and open_warnings are the open findings on those tickets (a sprint finding is "
-        "no one's)\n"
+        "per person with tickets on the board, and one with person_id NULL and name Unassigned for the tickets that "
+        "count for no one; tickets are the board's work that counts for them, open or finished (the board's credit "
+        "setting; Epics left out, as the scorecard counts them), open_tickets those not done, and open_breaches and "
+        "open_warnings the open findings on their tickets (a sprint finding is no one's)\n"
         "- scorecard(person_id, name, measure, label, kind [count|rate|ratio], direction [neutral|higher_is_closer|"
         "lower_is_closer], measurable [0|1], value, numerator, denominator, shown, enough [0|1], vs_board [closer|further|"
         "level], board_value, board_numerator, board_denominator, board_shown, days, period_from, period_to): how closely "
         "each person's tickets follow the process over the last 90 days (days, and period_from and period_to as the "
-        "answer may write them: select them to say the period), one row per person holding a ticket and measure, and "
+        "answer may write them: select them to say the period), one row per person with tickets and measure, and "
         "the whole board's rows "
-        "with person_id and name NULL; by each ticket's current assignee, Epics left out. A rate's value is a whole "
+        "with person_id and name NULL; every ticket, open or finished, by whom it counts for (the board's credit "
+        "setting), Epics left out. A rate's value is a whole "
         "percentage of its denominator, a count's the number, open_findings_per_10's the open findings per 10 open "
         "tickets; shown and board_shown are the figures as written (\"72% · 18 of 25\"): select them to quote a "
         "percentage. enough is at least 5 tickets behind the figure, and vs_board is set only when both sides have "
@@ -159,7 +161,9 @@ PEOPLE_DATA_DICTIONARY = _DATA.format(
         "estimated_before_start, time_logged, within_estimate, stuck_now, reopened, skipped_stage, code_review, "
         "open_findings_per_10\n"
         "People appear only as a person id and a display name: never an account id, an email address, a reporter, a "
-        "creator, who logged time or who held a ticket before. Findings follow the ticket's current assignee."
+        "creator, who logged time or who held a ticket before. A person's tickets and findings are the ones that count "
+        "for them, as the people and scorecard views give them; assignee and assignee_id say only who holds a ticket "
+        "now."
     ),
 )
 
@@ -187,7 +191,7 @@ class SnapshotQuery:
         people: PeopleScope | None = None,
         mentioned: Sequence[str] = (),
     ) -> None:
-        """mentioned: the person ids the question mentions who hold a ticket."""
+        """mentioned: the person ids the question mentions who have tickets."""
         self.row_limit = row_limit
         self.time_limit_s = time_limit_s
         self._deadline = 0.0
@@ -425,9 +429,9 @@ _TEAM_RULES = (
 )
 _PEOPLE_RULES = """- The lead is an admin and may see everyone's work and how it follows the process. Name a person only by their display name exactly as the data gives it (the assignee and name columns, or <mentions>), never by an id. Every person you name must appear in a tool result from this conversation or in <mentions>.
 - <mentions> lists the people the question mentions, each with a name and a person id: filter by that id (assignee_id or person_id, or the person tools' person and person_ids parameters), never by name.
-- <no_tickets> lists people the question mentions who hold no ticket on this board. Leave them out: a sentence saying so is added after the answer.
-- You may name people, count their tickets and findings and rank them by a count. Only when you rank two or more people by their findings, say in a few words that findings follow the ticket's current assignee; never say it otherwise.
-- A ranking of people ranks people only: never rank the Unassigned row (the tickets nobody holds). Say its figure after the ranking in one sentence of its own: "Unassigned: <n> open tickets." (the figure ranked, from the data). A person's tickets leave Epics out, as the people and scorecard views count them.
+- <no_tickets> lists people the question mentions who have no tickets on this board. Leave them out: a sentence saying so is added after the answer.
+- You may name people, count their tickets and findings and rank them by a count. Only when you rank two or more people by their findings, say in a few words that a person's findings are those on their tickets; never say it otherwise.
+- A ranking of people ranks people only: never rank the Unassigned row (the tickets that count for no one). Say its figure after the ranking in one sentence of its own: "Unassigned: <n> open tickets." (the figure ranked, from the data). A person's tickets leave Epics out, as the people and scorecard views count them.
 - Answer every question about people with data, never refuse one. When it asks how someone is doing, who follows the process, who is best or worst, for a rank, or about firing, promoting, rewarding, blaming or trusting someone, their effort or their attitude, answer with figures next to the whole board's: oversight_person_scorecard (one to ten people){compare}, or the scorecard view. Say plainly where each figure stands: closer to the process than the board, further from it, level with it, or too few tickets to compare. You may order people and say who follows the process most closely; never write "best". When you order people by a figure, say the order you used in plain words ("highest first", "lowest first", "closest to the process first"), as the question asked it: never call the highest worst or the lowest best.
 - Never insult anyone or label their character (lazy, useless, incompetent, careless, dishonest, stupid): the figures are facts, and the decision about a person is the lead's. A sentence saying the decision is theirs, and the period the figures cover, are added after the answer."""
 _COMPARE_ON = (

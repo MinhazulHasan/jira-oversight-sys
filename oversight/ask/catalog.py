@@ -617,12 +617,13 @@ def run_effort_vs_estimate(conn: sqlite3.Connection, params: BaseModel, ctx: Cat
 
 # --- oversight_list_findings ---------------------------------------------------------------
 
+# An ignored finding is neither open nor resolved: no listing names it.
 _FINDINGS_SQL = f"""
     SELECT f.finding_id, f.rule_id, f.severity, f.issue_key, f.message, f.first_seen_at, f.resolved_at,
            i.summary, {_EPIC_OF_I} AS epic_key
     FROM findings AS f LEFT JOIN issues AS i ON i.issue_key = f.issue_key
     {_PARENT_JOIN}
-    WHERE f.project_key = ?
+    WHERE f.project_key = ? AND COALESCE(f.resolved_why, '') != 'ignored'
 """
 _FINDING_COLUMNS = [
     Column("finding_id", "Finding", "text"),
@@ -720,9 +721,15 @@ _TIMELINE_COLUMNS = [
     Column("hours", "Hours", "hours"),
 ]
 _ISSUE_FINDINGS_SQL = """
-    SELECT rule_id, resolved_at FROM findings WHERE issue_key = ?
+    SELECT rule_id, resolved_at, resolved_why FROM findings WHERE issue_key = ?
     ORDER BY (resolved_at IS NULL) DESC, first_seen_at, finding_id
 """
+
+
+def _finding_state(row: sqlite3.Row) -> str:
+    if row["resolved_at"] is None:
+        return "open"
+    return "ignored" if row["resolved_why"] == "ignored" else "resolved"
 
 
 def run_issue_timeline(conn: sqlite3.Connection, params: BaseModel, ctx: CatalogContext) -> Facts:
@@ -743,7 +750,7 @@ def run_issue_timeline(conn: sqlite3.Connection, params: BaseModel, ctx: Catalog
         findings = _rows(conn, _ISSUE_FINDINGS_SQL, (key,))
         if findings:
             listed = "; ".join(
-                f"{f['rule_id']} {_rule_title(ctx.rules, f['rule_id'])} ({'open' if f['resolved_at'] is None else 'resolved'})"
+                f"{f['rule_id']} {_rule_title(ctx.rules, f['rule_id'])} ({_finding_state(f)})"
                 for f in findings
             )
             note = f"Findings for {key}: {listed}"
@@ -788,6 +795,7 @@ _DONE_IN_WEEKS_SQL = """
 _FINDINGS_IN_WEEKS_SQL = """
     SELECT first_seen_at, resolved_at FROM findings
     WHERE project_key = ? AND severity = ? AND first_seen_at IS NOT NULL AND first_seen_at < ?
+      AND COALESCE(resolved_why, '') != 'ignored'
 """
 
 

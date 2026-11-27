@@ -311,7 +311,10 @@ def test_the_overall_comparisons_note_says_what_each_column_means(client: TestCl
     assert body["facts"][0]["params"]["measure"] == "overall"
     assert "is Open findings" not in note and "per 10 Open" not in note
     assert note.endswith(
-        "; by each ticket's current assignee, Epics left out; the closer, further and level counts are the measures on "
+        "; every ticket, open or finished, by whom it counts for (the board's credit setting: a people field such as "
+        "Programmer, the assignee, or Automatic: Programmer where it is filled, otherwise the assignee; a ticket without "
+        "one counts for no one), Epics left out; "
+        "the closer, further and level counts are the measures on "
         "which the person's figure stands closer to the process than the board's, further from it, or level with it "
         "(within 5 points, 0.5 for the ratio); measures compared is their sum; too few tickets counts the measures "
         "where either side rests on fewer than 5 tickets; open findings per 10 open tickets is the open breaches and "

@@ -4,11 +4,12 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from oversight.api.deps import ApiContext, get_ctx, read_conn
 from oversight.api.meta import build_meta
 from oversight.api.people import person
+from oversight.api.routes.findings import reading_level
 from oversight.api.timelines import (
     CATEGORIES,
     ISSUE_KEY,
@@ -55,7 +56,7 @@ def _open_then_newest(records: list[FindingRecord]) -> list[FindingRecord]:
     """Open first, then newest first, then finding_id (stable sorts, last key first)."""
     ordered = sorted(records, key=lambda record: record.finding_id)
     ordered.sort(key=lambda record: record.first_seen_at, reverse=True)
-    ordered.sort(key=lambda record: record.state == "resolved")
+    ordered.sort(key=lambda record: record.state != "open")
     return ordered
 
 
@@ -100,10 +101,12 @@ def _facts(
 
 @router.get("/issues/{key}/timeline", response_model=None)
 def issue_timeline(
+    request: Request,
     key: str,
     ctx: ApiContext = Depends(get_ctx),
     conn: sqlite3.Connection = Depends(read_conn),
 ) -> dict[str, Any]:
+    people = reading_level(request) == "people"
     key = key.strip().upper()
     rows = _rows(conn, _ISSUE_SQL, (key, ctx.project))
     if not rows:
@@ -120,5 +123,5 @@ def issue_timeline(
         "skipped": skipped_items(issue["skipped_stages"], history, key),
         "changes": change_items(history, key),
         "worklogs": weekly_worklogs(conn, key),
-        "findings": finding_payloads(conn, ctx, findings, history),
+        "findings": finding_payloads(conn, ctx, findings, history, people=people),
     }

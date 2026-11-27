@@ -103,7 +103,7 @@ def test_who_is_on_the_board_names_everyone_on_it_members_with_no_tickets_too(cl
     held = ", ".join(holders[:-1]) + f" and {holders[-1]}"
     others = ", ".join(members[:-1]) + f" and {members[-1]}"
     assert body["answer"] == (f"{len(directory)} people are on this board: {held}, and {len(members)} members who "
-                              f"hold none of its tickets: {others}.")
+                              f"have none of its tickets: {others}.")
     assert all(body["answer"].count(name) == 1 for name in holders + members)
     assert [who["name"] for who in body["people"]] == holders + members
     assert not re.search(r"\bp[0-9a-f]{12}\b", body["answer"])
@@ -115,16 +115,16 @@ def test_who_is_on_the_board_names_everyone_on_it_members_with_no_tickets_too(cl
 
 def test_where_every_member_holds_a_ticket_the_answer_says_so() -> None:
     empty = {"tool": "oversight_board_people", "params": {"holding": "none"}, "rows": [], "note": "", "columns": []}
-    assert _render(empty) == ["Everyone on this board holds at least one of its tickets."]
+    assert _render(empty) == ["Everyone on this board has at least one of its tickets."]
 
 
 @pytest.mark.parametrize(
     ("tickets", "in_all", "said"),
     [
-        ([4, 0], 2, "2 people are on this board: Ada Brooks, and 1 member who holds none of its tickets: Ben Okafor."),
+        ([4, 0], 2, "2 people are on this board: Ada Brooks, and 1 member who has none of its tickets: Ben Okafor."),
         ([4, 2], 2, "2 people are on this board: Ada Brooks and Ben Okafor."),
-        ([0, 0], 2, "2 people are on this board, all members who hold none of its tickets: Ada Brooks and Ben Okafor."),
-        ([0], 1, "1 person is on this board, a member who holds none of its tickets: Ada Brooks."),
+        ([0, 0], 2, "2 people are on this board, all members who have none of its tickets: Ada Brooks and Ben Okafor."),
+        ([0], 1, "1 person is on this board, a member who has none of its tickets: Ada Brooks."),
     ],
 )
 def test_who_is_on_the_board_says_each_name_once(tickets: list[int], in_all: int, said: str) -> None:

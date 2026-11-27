@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import re
 import sqlite3
 import time
@@ -15,6 +16,7 @@ from typing import Any, Literal
 import httpx
 
 from oversight.api.people import person_id
+from oversight.jira.mapping import people_named
 from oversight.logs import get_logger
 from oversight.store.db import Store
 from oversight.timeutil import to_iso
@@ -256,19 +258,43 @@ _DUE_SQL = """
     FROM people
     WHERE avatar_url IS NOT NULL AND avatar_url != ''
       AND (account_id IN (SELECT assignee_id FROM issues WHERE project_key IN ({marks}))
-           OR account_id IN (SELECT account_id FROM board_members WHERE project_key IN ({marks})))
+           OR account_id IN (SELECT account_id FROM board_members WHERE project_key IN ({marks}))
+           OR account_id IN (SELECT value FROM json_each(?)))
       AND (avatar_hash IS NULL OR avatar_source IS NOT avatar_url
            OR avatar_fetched_at IS NULL OR avatar_fetched_at < ?)
     ORDER BY avatar_hash IS NOT NULL, avatar_fetched_at, account_id
     LIMIT ?
 """
+# What one people field holds on each of the boards' issues now (JSON), where it holds anything.
+_FIELD_SQL = """
+    SELECT CASE WHEN json_valid(raw_json) THEN CASE WHEN json_type(raw_json, ?) IN ('array', 'object')
+           THEN json_extract(raw_json, ?) END END AS value
+    FROM issues WHERE project_key IN ({marks})
+"""
 
 
-def due(store: Store, projects: Sequence[str], now: datetime, limit: int = MAX_PER_RUN) -> list[sqlite3.Row]:
+def due(store: Store, projects: Sequence[str], now: datetime, limit: int = MAX_PER_RUN,
+        people_fields: Sequence[str] = ()) -> list[sqlite3.Row]:
     if not projects:
         return []
+    named = json.dumps(sorted(named_in_fields(store, projects, people_fields)))
     sql = _DUE_SQL.format(marks=", ".join("?" * len(projects)))
-    return store.query(sql, (*projects, *projects, to_iso(now - REFRESH_AFTER), limit))
+    return store.query(sql, (*projects, *projects, named, to_iso(now - REFRESH_AFTER), limit))
+
+
+def named_in_fields(store: Store, projects: Sequence[str], people_fields: Sequence[str]) -> set[str]:
+    """The accounts the boards' people fields (by Jira field id: Programmer, Testers, ...) name now"""
+    found: set[str] = set()
+    for field_id in people_fields:
+        path = f'$.fields."{field_id}"'
+        for row in store.query(_FIELD_SQL.format(marks=", ".join("?" * len(projects))), (path, path, *projects)):
+            if not row["value"]:
+                continue
+            try:
+                found.update(people_named(json.loads(row["value"])))
+            except (ValueError, RecursionError):
+                continue
+    return found
 
 
 def refresh_pictures(
@@ -280,10 +306,11 @@ def refresh_pictures(
     limit: int = MAX_PER_RUN,
     budget_s: float = RUN_BUDGET_S,
     clock: Callable[[], float] = time.monotonic,
+    people_fields: Sequence[str] = (),
 ) -> PictureStats:
     """Fetch the pictures due for these boards' people, each kept in its own short transaction."""
     stats = PictureStats()
-    people = due(store, projects, now(), limit)
+    people = due(store, projects, now(), limit, people_fields)
     ends = clock() + budget_s
     for index, row in enumerate(people):
         if clock() >= ends:

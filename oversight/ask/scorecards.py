@@ -34,7 +34,13 @@ COMPARE_TOOL = "oversight_people_compare"
 NOW_MEASURES = frozenset({"stuck_now", "open_findings_per_10"})
 SCORECARD_TOOLS = frozenset((SCORECARD_TOOL, COMPARE_TOOL))
 WHOLE_BOARD = "Whole board"
-# The tickets nobody holds, said after a ranking by a count; matches the dashboard's sample.
+# Whose a ticket's figures are, as the notes say it.
+CREDIT_READING = (
+    "every ticket, open or finished, by whom it counts for (the board's credit setting: a people field such as "
+    "Programmer, the assignee, or Automatic: Programmer where it is filled, otherwise the assignee; a ticket without "
+    "one counts for no one)"
+)
+# The tickets that count for no one, said after a ranking by a count; matches the dashboard's sample.
 UNASSIGNED_WORDS: dict[str, tuple[str, str]] = {
     "open_tickets": ("open ticket", "open tickets"),
     "in_progress": ("ticket in progress", "tickets in progress"),
@@ -136,14 +142,14 @@ def _period_words(period: Period) -> str:
 
 # Each fact set's reading in plain words; the dashboard's sample writes the same notes.
 _READING = (
-    "by each ticket's current assignee, Epics left out; a rate's value is a percentage of its denominator, a count's "
+    f"{CREDIT_READING}, Epics left out; a rate's value is a percentage of its denominator, a count's "
     "value is the count, and open findings per 10 open tickets is the open breaches and warnings on the person's open "
     f"tickets for every 10 of those tickets; enough tickets means the figure rests on at least {MIN_TICKETS} tickets; "
     "next to the board says closer to the process than the board, further from it, or level with it (within 5 "
     "points, 0.5 for the ratio), only when both sides have enough"
 )
 _OVERALL_READING = (
-    "by each ticket's current assignee, Epics left out; the closer, further and level counts are the measures on "
+    f"{CREDIT_READING}, Epics left out; the closer, further and level counts are the measures on "
     "which the person's figure stands closer to the process than the board's, further from it, or level with it "
     "(within 5 points, 0.5 for the ratio); measures compared is their sum; too few tickets counts the measures where "
     f"either side rests on fewer than {MIN_TICKETS} tickets; open findings per 10 open tickets is the open breaches "
@@ -191,7 +197,7 @@ def compare_rows(board: Board, measure: str, days: int, *, first: str = "closer"
     ordered = order(standings(board, period, against), measure, first=first)
     if only is not None:
         ordered = [one for one in ordered if one.person["id"] in only]
-    everyone = "the people asked about" if only is not None else "everyone who holds a ticket"
+    everyone = "the people asked about" if only is not None else "everyone with tickets"
     if measure == OVERALL:
         rows = []
         for one in ordered:
@@ -224,8 +230,8 @@ def compare_rows(board: Board, measure: str, days: int, *, first: str = "closer"
             None if counted else STANDING.get(one.values[chosen.key]["vs_board"] or "", TOO_FEW))
         for one in ordered
     ]
-    # A ranking by a count ranks people only; the tickets nobody holds follow as one unranked row.
-    nobody = [ticket for ticket in board.work if ticket.holder is None] if only is None else []
+    # A ranking by a count ranks people only; the tickets that count for no one follow as one unranked row.
+    nobody = [ticket for ticket in board.work if not ticket.builders] if only is None else []
     if counted and reason is None and nobody:
         rows.append(row(None, values(board, nobody, period)[chosen.key], None, name=UNASSIGNED_LABEL))
     rows.append(row(None, against[chosen.key], None))
@@ -244,7 +250,8 @@ def compare_rows(board: Board, measure: str, days: int, *, first: str = "closer"
             when = "" if chosen.label.endswith(" now") else " now"
         else:
             when = f" over {_period_words(period)}"
-        then = "the tickets nobody holds (Unassigned, never ranked), then the whole board" if nobody else "the whole board"
+        then = ("the tickets that count for no one (Unassigned, never ranked), then the whole board" if nobody
+                else "the whole board")
         note = (f"{everyone}, by {named}{when}, {'fewest' if first == 'fewest' else 'most'} first, ties by "
                 f"name, then {then} (a count is never set beside the board as closer or further); {_READING}")
     if reason is not None:
@@ -357,7 +364,7 @@ def _compare_answer(fact: Mapping[str, Any]) -> list[list[Piece]]:
                                 _cell(fact, index, "compared", str(row.get("compared")))] for index, row in compared])
             pieces.append(".")
     else:
-        # The whole board's row is the last with no person; a count's ranking has the tickets nobody holds before it.
+        # The board's row is the last with no person; in a count's ranking, Unassigned comes just before it.
         nobody_rows = [(index, row) for index, row in enumerate(rows) if not row.get("person_id")]
         board = nobody_rows[-1] if nobody_rows else None
         unassigned = next(((index, row) for index, row in nobody_rows[:-1] if row.get("name") == UNASSIGNED_LABEL),

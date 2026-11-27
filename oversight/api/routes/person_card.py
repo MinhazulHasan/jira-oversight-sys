@@ -9,10 +9,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from oversight.api.access_log import PERSON_CARD_ONCE_IN, PERSON_CARD_VIEW, AccessLog, need_viewer
+from oversight.api.credit import board_credit
 from oversight.api.deps import LEVEL_PARAM, LEVELS, PROJECT_PARAM, ApiContext, get_ctx, people_level_only, read_conn
 from oversight.api.meta import build_meta
 from oversight.api.people import PERSON_ID
-from oversight.api.routes.people import board_tickets, people_rows
+from oversight.api.routes.people import board_tickets, credited, people_rows
 from oversight.api.scorecard import (
     COMPARABLE,
     DEFAULT_DAYS,
@@ -179,8 +180,9 @@ def other_boards(conn: sqlite3.Connection, ctx: ApiContext, person_id: str) -> l
         key = board.key
         if key == ctx.project or not board.synced:
             continue
+        credit = board_credit(conn, ctx.process, ctx.fields, key)
         theirs = sum(
-            ticket.work and ticket.open and ticket.person is not None and ticket.person["id"] == person_id
+            ticket.work and ticket.open and person_id in credited(ticket, credit)
             for ticket in board_tickets(conn, replace(ctx, selected=key))
         )
         if theirs:
@@ -192,20 +194,21 @@ def person_card(conn: sqlite3.Connection, ctx: ApiContext, person_id: str, days:
     """The card's body but meta (contract 4.19); None when the person is not on the board."""
     if not PERSON_ID.fullmatch(person_id):
         return None
-    board = load_board(conn, ctx)
+    credit = board_credit(conn, ctx.process, ctx.fields, ctx.project)
+    board = load_board(conn, ctx, credit)
     who = board.who(person_id)
     if who is None:
         return None
     period = board.period(days)
     values = person_values(board, person_id, period, board_values(board, period))
     standing = Standing(person=who, tickets=board.holdings.get(person_id, 0), values=values)
-    row = next((row for row in people_rows(conn, ctx)
+    row = next((row for row in people_rows(conn, ctx, credit=credit, findings_by_credit=True)
                 if row["person"] is not None and row["person"]["id"] == person_id), None)
     theirs = board.tickets_of(person_id)
     listed, more = in_progress_now(conn, ctx, theirs)
 
     def count(key: str) -> int:
-        return int(values[key]["value"] or 0)  # null only for someone who holds no tickets: they have 0
+        return int(values[key]["value"] or 0)  # null only for someone with no tickets: they have 0
 
     return {
         "person": who,

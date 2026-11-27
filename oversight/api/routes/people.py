@@ -6,8 +6,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 
-from oversight.api.access_log import PEOPLE_COMPARE_VIEW, SCORECARD_VIEW, AccessLog, need_viewer
+from oversight.api.access_log import (
+    PEOPLE_COMPARE_VIEW,
+    SCORECARD_TICKETS_VIEW,
+    SCORECARD_VIEW,
+    AccessLog,
+    Viewer,
+    need_viewer,
+)
 from oversight.api.deps import (
     LEVELS,
     PROJECT_PARAM,
@@ -17,8 +25,20 @@ from oversight.api.deps import (
     people_level_only,
     read_conn,
 )
+from oversight.api.credit import BoardCredit, board_credit
 from oversight.api.meta import build_meta
-from oversight.api.people import PERSON_ID, UNASSIGNED, Person, board_account, directory_key, person, sort_key
+from oversight.api.people import (
+    PERSON_ID,
+    UNASSIGNED,
+    Person,
+    board_account,
+    board_everyone,
+    directory_key,
+    person,
+    sort_key,
+)
+from oversight.api.people_credit import CreditQuery, credit_body, credit_json, credit_query, parse_credit, save_credit
+from oversight.api.proof import MEASURE_KEYS, proof
 from oversight.api.scorecard import DEFAULT_DAYS, PERIODS, load_board, scorecard
 from oversight.api.timelines import Categories, issue_category, load_records
 from oversight.ask.catalog import _rows
@@ -29,28 +49,15 @@ router = APIRouter()
 
 _PARAMETERS = frozenset({PROJECT_PARAM})
 _SCORECARD_PARAMETERS = frozenset({PROJECT_PARAM, "level", "days", "person"})
+_PROOF_PARAMETERS = frozenset({PROJECT_PARAM, "level", "days", "measure", "person"})
 _UNPROCESSABLE = 422
 COMPARISON_OFF = "comparison_off"
+NOT_MEASURABLE = "not_measurable"
 # The board's tickets with their type, their assignee, the display name the last sync saw and their picture's version.
 _TICKETS_SQL = """
     SELECT i.issue_key, i.issue_type, i.status, i.status_category, i.assignee_id, a.display_name, a.avatar_hash
     FROM issues AS i LEFT JOIN people AS a ON a.account_id = i.assignee_id
     WHERE i.project_key = ?
-"""
-_DIRECTORY_SQL = """
-    SELECT b.account_id, b.tickets, a.display_name, a.avatar_hash
-    FROM (
-        SELECT assignee_id AS account_id,
-               SUM(CASE WHEN LOWER(COALESCE(issue_type, '')) IN ({excluded}) THEN 0 ELSE 1 END) AS tickets
-        FROM issues
-        WHERE project_key = ? AND assignee_id IS NOT NULL AND assignee_id != ''
-        GROUP BY assignee_id
-        UNION ALL
-        SELECT account_id, 0
-        FROM board_members
-        WHERE project_key = ?
-          AND account_id NOT IN (SELECT assignee_id FROM issues WHERE project_key = ? AND assignee_id IS NOT NULL)
-    ) AS b LEFT JOIN people AS a ON a.account_id = b.account_id
 """
 _PICTURE_SQL = "SELECT avatar, avatar_type FROM people WHERE account_id = ?"
 # Contract 4.13. The middleware's no-store gives way to the Cache-Control set here.
@@ -131,59 +138,76 @@ def board_tickets(conn: sqlite3.Connection, ctx: ApiContext) -> list[BoardTicket
     ]
 
 
+def credited(ticket: BoardTicket, credit: BoardCredit) -> dict[str, Person]:
+    """Whom a ticket counts for under the board's credit setting, each once"""
+    return {one.person_id: credit.people[one.person_id] for one in credit.of(ticket.issue_key)}
+
+
 def people_rows(
-    conn: sqlite3.Connection, ctx: ApiContext, tickets: Sequence[BoardTicket] | None = None
+    conn: sqlite3.Connection, ctx: ApiContext, tickets: Sequence[BoardTicket] | None = None,
+    credit: BoardCredit | None = None, *, findings_by_credit: bool = False,
 ) -> list[dict[str, Any]]:
-    """The list's rows for the board, in its order (the board's tickets, when the caller has read them)"""
+    """The list's rows, in its order: tickets by the credit setting, open findings by the assignee or by credit too"""
+    credit = credit if credit is not None else board_credit(conn, ctx.process, ctx.fields, ctx.project)
     tallies: dict[str, _Tally] = {}
-    work: set[str] = set()
+    work: dict[str, tuple[str, ...]] = {}  # each work ticket -> whom it counts for (UNASSIGNED: no one)
     for ticket in board_tickets(conn, ctx) if tickets is None else tickets:
         if not ticket.work:
             continue  # a container, not anyone's work
-        work.add(ticket.issue_key)
-        tally = tallies.setdefault(ticket.person["id"] if ticket.person is not None else UNASSIGNED, _Tally(ticket.person))
-        tally.tickets += 1
-        tally.open_tickets += ticket.open
-    # The same records, and the same person key, as /findings?person=...
+        whom = credited(ticket, credit)
+        work[ticket.issue_key] = tuple(whom) or (UNASSIGNED,)
+        for key in work[ticket.issue_key]:
+            tally = tallies.setdefault(key, _Tally(whom.get(key)))
+            tally.tickets += 1
+            tally.open_tickets += ticket.open
+    # By /findings' person key (the assignee) unless asked otherwise, so a row clicks through to Findings exactly.
     for record in load_records(conn, ctx):
-        tally = tallies.get(record.person or "")  # no one's (a sprint finding, a gone issue's): no row
-        if tally is None or record.state != "open" or record.issue_key not in work:
-            continue
-        if record.severity == "breach":
-            tally.open_breaches += 1
-        elif record.severity == "warning":
-            tally.open_warnings += 1
-        tally.with_findings.add(record.issue_key)
+        if record.state != "open" or record.person is None or record.issue_key not in work:
+            continue  # no one's (a sprint finding, a gone issue's), or not the board's work
+        for key in work[record.issue_key] if findings_by_credit else (record.person,):
+            tally = tallies.setdefault(key, _Tally(record.assignee))
+            if record.severity == "breach":
+                tally.open_breaches += 1
+            elif record.severity == "warning":
+                tally.open_warnings += 1
+            tally.with_findings.add(record.issue_key)
     return [tally.body() for tally in sorted(tallies.values(), key=_Tally.order)]
 
 
-def directory_rows(conn: sqlite3.Connection, ctx: ApiContext) -> list[dict[str, Any]]:
-    """The directory's entries for the board, in its order"""
-    containers = sorted(excluded_types(ctx))
-    sql = _DIRECTORY_SQL.replace("{excluded}", ", ".join("?" * len(containers)) or "NULL")
-    project = ctx.project
-    entries: list[dict[str, Any]] = []
-    for row in _rows(conn, sql, (*containers, project, project, project)):
-        who = person(row["account_id"], row["display_name"], row["avatar_hash"])
-        if who is not None:
-            entries.append({"person": who, "tickets": row["tickets"]})
-    return sorted(entries, key=lambda entry: directory_key(entry["person"]))
+def directory_rows(
+    conn: sqlite3.Connection, ctx: ApiContext, tickets: Sequence[BoardTicket] | None = None,
+    credit: BoardCredit | None = None,
+) -> list[dict[str, Any]]:
+    """The directory's entries for the board, in its order: everyone with tickets, then anyone else on it with 0"""
+    credit = credit if credit is not None else board_credit(conn, ctx.process, ctx.fields, ctx.project)
+    entries: dict[str, dict[str, Any]] = {}
+    for ticket in board_tickets(conn, ctx) if tickets is None else tickets:
+        if ticket.work:
+            for person_id, who in credited(ticket, credit).items():
+                entries.setdefault(person_id, {"person": who, "tickets": 0})["tickets"] += 1
+    # A member, or someone assigned only work that counts for others (or only Epics).
+    for who in board_everyone(conn, ctx.project):
+        entries.setdefault(who["id"], {"person": who, "tickets": 0})
+    return sorted(entries.values(), key=lambda entry: directory_key(entry["person"]))
 
 
 def people_scope(conn: sqlite3.Connection, ctx: ApiContext) -> PeopleScope:
     """What Ask may know about the board's people at people level"""
+    credit = board_credit(conn, ctx.process, ctx.fields, ctx.project)
     tickets = board_tickets(conn, ctx)
-    rows = tuple(people_rows(conn, ctx, tickets))
+    rows = tuple(people_rows(conn, ctx, tickets, credit, findings_by_credit=True))
     holding = {row["person"]["id"] for row in rows if row["person"] is not None}
     return PeopleScope(
         rows=rows,
         assignees={ticket.issue_key: ticket.person for ticket in tickets if ticket.person is not None},
         open_keys=frozenset(ticket.issue_key for ticket in tickets if ticket.open),
         in_progress_keys=frozenset(ticket.issue_key for ticket in tickets if ticket.category == "indeterminate"),
-        members=tuple(entry["person"] for entry in directory_rows(conn, ctx)
+        members=tuple(entry["person"] for entry in directory_rows(conn, ctx, tickets, credit)
                       if entry["person"]["id"] not in holding),
-        scorecard=load_board(conn, ctx),
+        scorecard=load_board(conn, ctx, credit),
         comparison=ctx.settings.people_comparison == "on",
+        builders={ticket.issue_key: tuple(one.person_id for one in credit.of(ticket.issue_key))
+                  for ticket in tickets if ticket.work and credit.of(ticket.issue_key)},
     )
 
 
@@ -225,6 +249,44 @@ def scorecard_query(request: Request) -> ScorecardQuery:
     if problems:
         raise HTTPException(_UNPROCESSABLE, problems)
     return ScorecardQuery(level=level, days=int(days), people=wanted or None)
+
+
+@dataclass(frozen=True)
+class ProofQuery:
+    """GET /people/scorecard/tickets's parameters, checked."""
+
+    level: str
+    days: int
+    measure: str
+    person: str | None  # None: the whole board
+
+
+def proof_query(request: Request) -> ProofQuery:
+    """The proof's parameters as the contract allows them (4.25); a 422 naming every problem otherwise."""
+    query = request.query_params
+    problems: list[dict[str, Any]] = []
+    for name in dict.fromkeys(query.keys()):
+        if name not in _PROOF_PARAMETERS:
+            problems.append(_problem(name, "is not a parameter of this endpoint", "unknown"))
+        elif len(query.getlist(name)) > 1:
+            problems.append(_problem(name, "may be given only once", "repeated"))
+    level = query.get("level", "team")
+    if level not in LEVELS:
+        problems.append(_problem("level", "must be team or people"))
+    days = query.get("days", str(DEFAULT_DAYS))
+    if days not in {str(period) for period in PERIODS}:
+        problems.append(_problem("days", f"must be {', '.join(map(str, PERIODS[:-1]))} or {PERIODS[-1]}"))
+    measure = query.get("measure")
+    if measure is None:
+        problems.append(_problem("measure", "is required", "missing"))
+    elif measure not in MEASURE_KEYS:
+        problems.append(_problem("measure", f"must be one of {', '.join(MEASURE_KEYS)}"))
+    who = query.get("person")
+    if who is not None and not PERSON_ID.fullmatch(who):
+        problems.append(_problem("person", "must be a person id: p and 12 lower-case hex characters"))
+    if problems or measure is None:
+        raise HTTPException(_UNPROCESSABLE, problems)
+    return ProofQuery(level=level, days=int(days), measure=measure, person=who)
 
 
 @router.get("/people", dependencies=[Depends(_known_parameters)])
@@ -274,6 +336,60 @@ def people_scorecard(
     return body
 
 
+@router.get("/people/scorecard/tickets", response_class=JSONResponse)
+def people_scorecard_tickets(
+    request: Request,
+    query: ProofQuery = Depends(proof_query),
+    ctx: ApiContext = Depends(get_ctx),
+    conn: sqlite3.Connection = Depends(read_conn),
+) -> JSONResponse:
+    # Least privilege first, as the scorecard: a team-level request learns nothing about anyone.
+    people_level_only(query.level, "person scorecards")
+    viewer = need_viewer(request)
+    board = load_board(conn, ctx)
+    if query.person is not None and board.who(query.person) is None:
+        raise HTTPException(404, "nobody by that id is on this board")
+    reason = board.reason(query.measure, board.period(query.days))
+    if reason is not None:
+        raise ApiError(409, NOT_MEASURABLE, reason)
+    body = {"meta": build_meta(conn, ctx), **proof(board, query.measure, query.person, query.days)}
+    access: AccessLog = request.app.state.access_log
+    access.record(
+        viewer=viewer,
+        level=query.level,
+        project=ctx.project,
+        action=SCORECARD_TICKETS_VIEW,
+        subjects=[query.person] if query.person is not None else [],
+        detail={"days": query.days, "measure": query.measure},
+    )
+    # A proof can list thousands of tickets: sent as built (plain JSON already), without a second encoding pass.
+    return JSONResponse(body)
+
+
+@router.get("/people/credit")
+def get_people_credit(
+    request: Request,
+    query: CreditQuery = Depends(credit_query),
+    ctx: ApiContext = Depends(get_ctx),
+    conn: sqlite3.Connection = Depends(read_conn),
+) -> dict[str, Any]:
+    need_viewer(request)
+    return credit_body(conn, ctx, query.days)
+
+
+@router.put("/people/credit")
+def put_people_credit(
+    request: Request,
+    query: CreditQuery = Depends(credit_query),
+    viewer: Viewer = Depends(need_viewer),
+    raw: bytes = Depends(credit_json),
+    ctx: ApiContext = Depends(get_ctx),
+    conn: sqlite3.Connection = Depends(read_conn),
+) -> dict[str, Any]:
+    save_credit(conn, ctx, parse_credit(raw), viewer)
+    return credit_body(conn, ctx, query.days)
+
+
 @router.get(
     "/people/{person_id}/avatar",
     response_class=Response,
@@ -285,6 +401,9 @@ def person_avatar(
     conn: sqlite3.Connection = Depends(read_conn),
 ) -> Response:
     account = board_account(conn, ctx.project, person_id)
+    if account is None and PERSON_ID.fullmatch(person_id):
+        # Someone the board's tickets count for, though they hold none of them now.
+        account = board_credit(conn, ctx.process, ctx.fields, ctx.project).accounts.get(person_id)
     found = _rows(conn, _PICTURE_SQL, (account,)) if account is not None else []
     if found:
         data, kind = found[0]["avatar"], found[0]["avatar_type"]

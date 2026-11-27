@@ -17,6 +17,7 @@ from oversight.ask.catalog import _EPIC_OF_I, _PARENT_JOIN, _rows, _rule_title
 from oversight.derive.run import _category_lookup, _status_categories
 from oversight.rules.catalog import Rule
 from oversight.rules.checks import label as stage_label
+from oversight.rules.ignores import IGNORED, IgnoreInfo, active_ignores
 from oversight.rules.registry import days_words, hours_words
 from oversight.timeutil import hours_between, iso, parse_ts
 
@@ -29,7 +30,7 @@ CATEGORIES = frozenset(("new", "indeterminate", "done"))
 CHANGE_FIELDS = ("story_points", "original_estimate", "sprint", "assignee")
 ISSUE_KEY = re.compile(r"[A-Z][A-Z0-9_]{1,19}-[1-9][0-9]{0,8}")
 RULE_ID = re.compile(r"[RW]-[A-Z]+-[0-9]{2,3}")
-RESOLVED_WHY = frozenset(("cleared", "superseded", "settings_changed"))
+RESOLVED_WHY = frozenset(("cleared", "superseded", "settings_changed", IGNORED))
 FINDING_ID = re.compile(r"[0-9a-f]{32}")
 _STORED_TS = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z")
 _CHUNK = 500  # keys per IN (...) list, well under SQLite's variable limit
@@ -589,7 +590,8 @@ FINDING_SQL = f"""
     SELECT f.finding_id, f.rule_id, f.rule_version, f.issue_key, f.kind, f.severity, f.message, f.evidence_json,
            f.first_seen_at, f.last_seen_at, f.resolved_at, f.resolved_why,
            i.issue_key AS joined_key, i.summary AS issue_summary, i.issue_type, {_EPIC_OF_I} AS epic_key,
-           e.summary AS epic_title, i.assignee_id, a.display_name AS assignee_name, a.avatar_hash AS assignee_avatar
+           e.summary AS epic_title, i.assignee_id, a.display_name AS assignee_name, a.avatar_hash AS assignee_avatar,
+           i.status AS issue_status, i.status_category AS issue_category
     FROM findings AS f
     LEFT JOIN issues AS i ON i.issue_key = f.issue_key
     {_PARENT_JOIN}
@@ -616,7 +618,7 @@ class FindingRecord:
     finding_id: str
     rule_id: str
     severity: str
-    state: str  # open | resolved
+    state: str  # open | resolved | ignored
     issue_key: str | None
     summary: str | None
     epic_key: str | None
@@ -626,21 +628,24 @@ class FindingRecord:
     resolved_at: str | None
     assignee: Person | None  # the issue's current assignee; None when unassigned, for a sprint finding and a gone issue
     person: str | None  # what the person filter matches: the assignee's id or "unassigned"; None for no one's finding
+    ticket: str | None = None  # the ticket now, open or finished; None for a sprint finding and a gone issue
+    ignore: IgnoreInfo | None = None  # the active ignore an ignored finding is held by
 
     @classmethod
-    def of(cls, row: sqlite3.Row) -> FindingRecord:
+    def of(cls, row: sqlite3.Row, *, ticket: str | None = None, ignore: IgnoreInfo | None = None) -> FindingRecord:
         stored_key = row["issue_key"] or ""
         sprint = _sprint_of(stored_key, evidence_dict(row["evidence_json"])) if stored_key.startswith(SPRINT_PREFIX) else None
         epic = row["epic_key"] if sprint is None and ISSUE_KEY.fullmatch(row["epic_key"] or "") else None
         resolved_at = ts(row["resolved_at"])
         nobodys = sprint is not None or row["joined_key"] is None
         assignee = None if nobodys else person(row["assignee_id"], row["assignee_name"], row["assignee_avatar"])
+        ignored = resolved_at is not None and row["resolved_why"] == IGNORED
         return cls(
             row=row,
             finding_id=row["finding_id"],
             rule_id=row["rule_id"],
             severity=row["severity"],
-            state="resolved" if resolved_at else "open",
+            state=IGNORED if ignored else "resolved" if resolved_at else "open",
             issue_key=None if sprint is not None else stored_key,
             summary=None if sprint is not None else row["issue_summary"],
             epic_key=epic,
@@ -650,6 +655,8 @@ class FindingRecord:
             resolved_at=resolved_at,
             assignee=assignee,
             person=None if nobodys else assignee["id"] if assignee is not None else UNASSIGNED,
+            ticket=None if nobodys else ticket,
+            ignore=ignore if ignored else None,
         )
 
 
@@ -657,7 +664,18 @@ def load_records(
     conn: sqlite3.Connection, ctx: ApiContext, where: str = "", params: Sequence[Any] = ()
 ) -> list[FindingRecord]:
     """The dashboard project's findings matching `where` (an " AND ..." clause on FINDING_SQL)."""
-    return [FindingRecord.of(row) for row in _rows(conn, FINDING_SQL + where, (ctx.project, *params))]
+    ignores = active_ignores(conn, ctx.project)
+    categories = Categories(conn, ctx)
+    tickets: dict[tuple[Any, Any], str] = {}  # (status, stored category) -> open | finished
+    records = []
+    for row in _rows(conn, FINDING_SQL + where, (ctx.project, *params)):
+        status = (row["issue_status"], row["issue_category"])
+        if status not in tickets:
+            category = issue_category({"status": status[0], "status_category": status[1]}, ctx, categories)
+            tickets[status] = "finished" if category == "done" else "open"
+        held = ignores.covers(row["issue_key"], (row["rule_id"],)) if row["resolved_why"] == IGNORED else None
+        records.append(FindingRecord.of(row, ticket=tickets[status], ignore=held))
+    return records
 
 
 _WARNED_SQL = """
@@ -688,20 +706,31 @@ def warned_before(conn: sqlite3.Connection, finding_ids: Iterable[str]) -> dict[
 
 
 def finding_payloads(
-    conn: sqlite3.Connection, ctx: ApiContext, records: Sequence[FindingRecord], history: History | None = None
+    conn: sqlite3.Connection,
+    ctx: ApiContext,
+    records: Sequence[FindingRecord],
+    history: History | None = None,
+    *,
+    people: bool = False,
 ) -> list[Item]:
-    """The contract's Finding objects for these records, in their order."""
+    """The contract's Finding objects for these records, in their order (people: read at people level)."""
     if not records:
         return []
     if history is None:
         history = load_history(conn, (record.issue_key for record in records))
     warned = warned_before(conn, (record.finding_id for record in records))
     basis = ctx.process.project(ctx.project).estimate.basis
-    return [_payload(record, ctx, history, warned.get(record.finding_id), basis) for record in records]
+    return [_payload(record, ctx, history, warned.get(record.finding_id), basis, people) for record in records]
+
+
+def ignore_payload(ignore: IgnoreInfo | None, *, people: bool) -> Item | None:
+    """An ignore beside a finding: the contract's object, with its id to restore it by."""
+    return None if ignore is None else {"ignore_id": ignore.ignore_id, **ignore.body(people=people)}
 
 
 def _payload(
-    record: FindingRecord, ctx: ApiContext, history: History, warned: dict[str, str] | None, basis: str
+    record: FindingRecord, ctx: ApiContext, history: History, warned: dict[str, str] | None, basis: str,
+    people: bool = False,
 ) -> Item:
     row, key = record.row, record.issue_key
     rule = find_rule(ctx, record.rule_id)
@@ -743,6 +772,7 @@ def _payload(
         "threshold": threshold_text(check, subject),
         "evidence": evidence_items(check, subject),
         "warned_before": warned,
+        "ignore": ignore_payload(record.ignore, people=people),
     }
 
 

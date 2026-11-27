@@ -10,10 +10,38 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from oversight.api.access_log import PERSON_FINDINGS_VIEW, AccessLog, need_viewer
-from oversight.api.deps import LEVEL_PARAM, LEVELS, PROJECT_PARAM, ApiContext, get_ctx, read_conn
+from oversight.api.access_log import PERSON_FINDINGS_VIEW, AccessLog, Viewer, need_viewer
+from oversight.api.deps import (
+    LEVEL_PARAM,
+    LEVELS,
+    PROJECT_PARAM,
+    ApiContext,
+    get_ctx,
+    people_level_only,
+    read_conn,
+)
+from oversight.api.ignore import (
+    BODY_LIMIT,
+    RESTORE_BODY_LIMIT,
+    IgnoredQuery,
+    IgnoreRequest,
+    Problem,
+    apply_ignore,
+    apply_restore,
+    board_tickets,
+    ignored_page,
+    invalid,
+    parse_ignore,
+    parse_preview,
+    parse_restore,
+    plan,
+    preview_body,
+    too_large,
+)
 from oversight.api.meta import build_meta
 from oversight.api.people import UNASSIGNED, UNASSIGNED_LABEL, board_people
+from oversight.api.routes.refresh import refresher
+from oversight.api.rule_settings import apply_state
 from oversight.api.timelines import (
     Categories,
     FindingRecord,
@@ -24,9 +52,12 @@ from oversight.api.timelines import (
     load_records,
 )
 from oversight.ask.catalog import _rows
+from oversight.logs import get_logger
+from oversight.rules.settings import load_board_settings
 from oversight.timeutil import to_iso
 
 router = APIRouter()
+log = get_logger("api")
 
 NO_EPIC = "none"
 FIRST_SEEN_DAYS = {"7d": 7, "30d": 30, "90d": 90}
@@ -39,18 +70,24 @@ EpicValue = Annotated[str, StringConstraints(pattern=r"^(?:[A-Z][A-Z0-9_]{1,19}-
 PersonValue = Annotated[str, StringConstraints(pattern=r"^(?:p[0-9a-f]{12}|unassigned)$")]
 
 
-class FindingsQuery(BaseModel):
-    """findingsQuerySchema (params.ts): the same names, bounds and defaults."""
+class Filters(BaseModel):
+    """Every filter of the findings list but the state: what an ignore's query target names too."""
 
     model_config = ConfigDict(extra="forbid")
 
     rule: list[RuleId] = Field(default_factory=list, max_length=24)
     severity: Literal["breach", "warning"] | None = None
-    state: Literal["open", "resolved", "all"] = "open"
     epic: list[EpicValue] = Field(default_factory=list, max_length=50)
     person: list[PersonValue] = Field(default_factory=list, max_length=50)
     q: Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)] | None = None
     first_seen: Literal["7d", "30d", "90d", "all"] = "all"
+    ticket: Literal["open", "finished"] | None = None  # the ticket's status category now
+
+
+class FindingsQuery(Filters):
+    """findingsQuerySchema (params.ts): the same names, bounds and defaults."""
+
+    state: Literal["open", "resolved", "ignored", "all"] = "open"
     sort: Literal[
         "first_seen_at", "last_seen_at", "resolved_at", "severity", "rule_id", "issue_key", "epic_key"
     ] = "first_seen_at"
@@ -143,6 +180,8 @@ def _predicate(query: FindingsQuery, now: datetime, ignore: Facet | None = None)
             return False
         if ignore != "person" and people and record.person not in people:
             return False
+        if query.ticket is not None and record.ticket != query.ticket:  # a sprint finding is no ticket's
+            return False
         if since is not None and record.first_seen_at < since:
             return False
         return search(record)
@@ -201,7 +240,8 @@ def _facets(
         "epics": [entry(key, title, by_epic) for key, title in _epics(conn, ctx, records)]
         + [entry(NO_EPIC, "No epic", by_epic)],
         "severity": [entry("breach", "Breach", by_severity), entry("warning", "Warning", by_severity)],
-        "state": [entry("open", "Open", by_state), entry("resolved", "Resolved", by_state)],
+        "state": [entry("open", "Open", by_state), entry("resolved", "Resolved", by_state),
+                  entry("ignored", "Ignored", by_state)],
         # A person's entry also carries their picture's version, as a person object does; Unassigned's is null.
         "people": [entry(who["id"], who["name"], by_person) | {"avatar": who["avatar"]}
                    for who in board_people(conn, ctx.project)]
@@ -255,9 +295,10 @@ def list_findings(
     keep = _predicate(query, now)
     matching = _sorted([record for record in records if keep(record)], query)
     start = (query.page - 1) * query.page_size
+    page = matching[start : start + query.page_size]
     body = {
         "meta": build_meta(conn, ctx),
-        "items": finding_payloads(conn, ctx, matching[start : start + query.page_size]),
+        "items": finding_payloads(conn, ctx, page, people=request.query_params.get(LEVEL_PARAM) == "people"),
         "total": len(matching),
         "page": query.page,
         "page_size": query.page_size,
@@ -276,13 +317,202 @@ def list_findings(
     return body
 
 
+def reading_level(request: Request) -> str:
+    """The level the dashboard's server reads at (team when it names none); 422 for anything else."""
+    values = request.query_params.getlist(LEVEL_PARAM)
+    if len(values) > 1:
+        raise HTTPException(422, [_problem(LEVEL_PARAM, "may be given only once")])
+    if values and values[0] not in LEVELS:
+        raise HTTPException(422, [_problem(LEVEL_PARAM, "must be team or people")])
+    return values[0] if values else "team"
+
+
+# --- ignoring findings --------------------------------------------------------------------------
+
+_ADMIN_PARAMETERS = frozenset({PROJECT_PARAM, LEVEL_PARAM})
+_IGNORED_PARAMETERS = frozenset(("page", "page_size", "rule", "q", "sort", "order"))
+
+
+class IgnoredParams(BaseModel):
+    """GET /findings/ignored's parameters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    page: int = Field(default=1, ge=1, le=10_000)
+    page_size: int = Field(default=25, ge=1, le=100)
+    rule: list[RuleId] = Field(default_factory=list, max_length=24)
+    q: Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)] | None = None
+    sort: Literal["at", "issue_key", "rule_id"] = "at"
+    order: Literal["asc", "desc"] = "desc"
+
+
+def _admin(request: Request, allowed: frozenset[str]) -> tuple[Viewer, dict[str, Any]]:
+    """What the ignore routes check before anything is read: the viewer, and the other parameters given."""
+    raw: dict[str, Any] = {}
+    problems: list[dict[str, Any]] = []
+    pairs = request.query_params.multi_items()
+    for name in dict.fromkeys(name for name, _ in pairs):
+        values = [value for key, value in pairs if key == name]
+        if name not in allowed:
+            problems.append({"loc": ["query", name], "msg": "is not a parameter of this endpoint", "type": "unknown"})
+        elif name == "rule":
+            raw[name] = [value for value in values if value != ""]
+        elif len(values) > 1:
+            problems.append({"loc": ["query", name], "msg": "may be given only once", "type": "repeated"})
+        elif name not in _ADMIN_PARAMETERS and values[0] != "":
+            raw[name] = values[0]
+    level = request.query_params.get(LEVEL_PARAM) or "team"
+    if level not in LEVELS:
+        problems.append({"loc": ["query", LEVEL_PARAM], "msg": "must be team or people", "type": "value_error"})
+    if problems:
+        raise HTTPException(422, problems)
+    people_level_only(level, "ignores")
+    return need_viewer(request), raw
+
+
+def admin(request: Request) -> Viewer:
+    return _admin(request, _ADMIN_PARAMETERS)[0]
+
+
+async def _read_body(request: Request, limit: int) -> bytes:
+    """The request's body, at most limit bytes: a larger one is refused before it is read whole."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise too_large(limit)
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > limit:
+            raise too_large(limit)
+    return bytes(body)
+
+
+async def json_body(request: Request) -> bytes:
+    return await _read_body(request, BODY_LIMIT)
+
+
+async def restore_body(request: Request) -> bytes:
+    return await _read_body(request, RESTORE_BODY_LIMIT)
+
+
+def _target_filter(asked: IgnoreRequest, now: datetime) -> tuple[Callable[[FindingRecord], bool] | None, list[str]]:
+    """A query target's filters as the findings list applies them (its state aside), and the people it names."""
+    if asked.target.query is None:
+        return None, []
+    given = {name: value for name, value in asked.target.query.items() if value not in (None, "", [])}
+    try:
+        filters = Filters.model_validate(given)
+    except ValidationError as exc:
+        raise invalid([
+            Problem(".".join(["target", "query", *(str(part) for part in error["loc"])]), error["msg"])
+            for error in exc.errors(include_url=False)
+        ]) from None
+    keep = _predicate(FindingsQuery(state="all", **filters.model_dump()), now)
+    return keep, [value for value in filters.person if value != UNASSIGNED]
+
+
+def _record_read(request: Request, ctx: ApiContext, viewer: Viewer, subjects: list[str], step: str) -> None:
+    """A query target naming people reads their findings: recorded as the findings list records it."""
+    if not subjects:
+        return
+    access: AccessLog = request.app.state.access_log
+    access.record(viewer=viewer, level="people", project=ctx.project, action=PERSON_FINDINGS_VIEW,
+                  subjects=subjects, detail={"state": "open", "ignore": step})
+
+
+@router.post("/findings/ignore/preview")
+def preview_ignore(
+    request: Request,
+    viewer: Viewer = Depends(admin),
+    raw: bytes = Depends(json_body),
+    ctx: ApiContext = Depends(get_ctx),
+    conn: sqlite3.Connection = Depends(read_conn),
+) -> dict[str, Any]:
+    asked = parse_preview(raw)
+    keep, subjects = _target_filter(asked, ctx.now())
+    tickets = board_tickets(conn, ctx.project) if asked.target.issue_keys else set()
+    found = plan(load_records(conn, ctx), asked.target, asked.scope, keep=keep, tickets=tickets)
+    body = preview_body(found, ctx, build_meta(conn, ctx))
+    _record_read(request, ctx, viewer, subjects, "preview")
+    return body
+
+
+@router.post("/findings/ignore")
+def ignore_findings(
+    request: Request,
+    viewer: Viewer = Depends(admin),
+    raw: bytes = Depends(json_body),
+    ctx: ApiContext = Depends(get_ctx),
+    conn: sqlite3.Connection = Depends(read_conn),
+) -> dict[str, Any]:
+    asked = parse_ignore(raw)
+    keep, subjects = _target_filter(asked, ctx.now())
+    done, made = apply_ignore(ctx, asked, viewer, keep)
+    log.info("findings_ignored", project=ctx.project, scope=asked.scope, findings=len(done.findings),
+             tickets=done.tickets, ignores=len(made))
+    _record_read(request, ctx, viewer, subjects, "ignore")
+    return {
+        "meta": build_meta(conn, ctx),
+        "ignored": {"findings": len(done.findings), "tickets": done.tickets},
+        "ignore_ids": made,
+    }
+
+
+@router.post("/findings/restore")
+def restore_findings(
+    request: Request,
+    viewer: Viewer = Depends(admin),
+    raw: bytes = Depends(restore_body),
+    ctx: ApiContext = Depends(get_ctx),
+    conn: sqlite3.Connection = Depends(read_conn),
+) -> dict[str, Any]:
+    ignore_ids = parse_restore(raw)
+    asked_at = to_iso(ctx.now())
+    restored = apply_restore(ctx, ignore_ids, viewer)
+    revision = load_board_settings(conn, ctx.project).revision
+    runner = refresher(request)
+    if restored:  # the rules decide which of their findings reopen, as after a rule settings save
+        runner.recheck(ctx.project, revision, name=ctx.process.project(ctx.project).name or ctx.project)
+    log.info("findings_restored", project=ctx.project, restored=restored, asked=len(ignore_ids))
+    return {
+        "meta": build_meta(conn, ctx),
+        "restored": restored,
+        "recheck": apply_state(conn, ctx.project, revision, runner.recheck_of(ctx.project), saved_at=asked_at),
+    }
+
+
+def ignored_query(request: Request) -> IgnoredQuery:
+    """GET /findings/ignored's parameters, checked before anything is read."""
+    _viewer, raw = _admin(request, _ADMIN_PARAMETERS | _IGNORED_PARAMETERS)
+    try:
+        params = IgnoredParams.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(422, detail=[
+            _problem(".".join(str(part) for part in error["loc"]) or "(query)", error["msg"])
+            for error in exc.errors(include_url=False)
+        ]) from None
+    return IgnoredQuery(page=params.page, page_size=params.page_size, rules=tuple(dict.fromkeys(params.rule)),
+                        q=params.q or None, sort=params.sort, order=params.order)
+
+
+@router.get("/findings/ignored", response_model=None)
+def list_ignored(
+    query: IgnoredQuery = Depends(ignored_query),
+    ctx: ApiContext = Depends(get_ctx),
+    conn: sqlite3.Connection = Depends(read_conn),
+) -> dict[str, Any]:
+    return {"meta": build_meta(conn, ctx), **ignored_page(conn, ctx, query)}
+
+
 @router.get("/findings/{finding_id}", response_model=None)
 def get_finding(
+    request: Request,
     finding_id: str,
     ctx: ApiContext = Depends(get_ctx),
     conn: sqlite3.Connection = Depends(read_conn),
 ) -> dict[str, Any]:
     """The evidence drawer: the finding and its issue's status intervals (none for a sprint finding)."""
+    people = reading_level(request) == "people"
     records = load_records(conn, ctx, " AND f.finding_id = ?", (finding_id,))
     if not records:
         raise HTTPException(404, "no finding with that id")
@@ -294,6 +524,6 @@ def get_finding(
         timeline = interval_items(history.intervals.get(record.issue_key, []), category)
     return {
         "meta": build_meta(conn, ctx),
-        "finding": finding_payloads(conn, ctx, records, history)[0],
+        "finding": finding_payloads(conn, ctx, records, history, people=people)[0],
         "timeline": timeline,
     }

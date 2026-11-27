@@ -258,7 +258,7 @@ def ask(
         session.note = BUDGET_NOTE
         provider = session.provider
         log.info("ask_budget_reached", qa_id=session.qa_id, budget=settings.llm_daily_token_budget)
-    # Everyone mentioned must be on this board; members holding no ticket are answered in code.
+    # Everyone mentioned must be on this board; members with no tickets are answered in code.
     if session.scope is not None:
         scope = session.scope
         for mention in session.mention_ids:
@@ -478,7 +478,7 @@ class _Session:
     level: str = "team"
     scope: PeopleScope | None = None  # the board's people, at people level only
     mention_ids: list[str] = field(default_factory=list)
-    # The mentioned people found on the board: those who hold one of its tickets now, and the members who hold none.
+    # The mentioned people found on the board: those with its tickets, and those with none.
     mentioned: list[Person] = field(default_factory=list)
     without_tickets: list[Person] = field(default_factory=list)
     plan: Plan | None = None
@@ -592,7 +592,7 @@ class _Session:
 
     @property
     def no_tickets_payload(self) -> list[str] | None:
-        """Names of mentioned people holding no ticket, for the model to leave out; None when there are none."""
+        """Names of mentioned people with no tickets, for the model to leave out; None when there are none."""
         return [who["name"] for who in self.without_tickets] or None
 
     def finish_answer(self, text: str, check: Check, named: list[Person], *, extra: dict[str, Any]) -> AskResponse:
@@ -611,7 +611,8 @@ class _Session:
         days = scorecard_days(self.facts)
         board = self.scope.scorecard
         if days and board is not None:
-            answer += "\n\n" + caveat(days, records_code_review=board.records_code_review)
+            answer += "\n\n" + caveat(days, records_code_review=board.records_code_review,
+                                      credit_source=board.credit_source, credit_field=board.credit_field)
         return answer
 
     def answer_from_code(self, *, why: str) -> AskResponse | None:
@@ -637,7 +638,7 @@ class _Session:
         return f"{answer}\n\n{sentence}", [*named, *(who for who in self.without_tickets if who not in named)]
 
     def board(self) -> list[Person]:
-        """Everyone on the board: ticket holders and members holding none."""
+        """Everyone on the board: the people with its tickets and the members with none."""
         if self.scope is not None:
             return [*self.scope.people, *self.scope.members]
         with _readonly(self.store) as conn:
@@ -659,7 +660,7 @@ class _Session:
         return [who["name"] for who in self.board()] if self.scope is not None else []
 
     def names(self, text: str, facts: Sequence[Facts]) -> NameCheck:
-        """The people-level name check; members holding no ticket are looked for too, mentions pass."""
+        """The people-level name check; members with no tickets are looked for too, mentions pass."""
         assert self.scope is not None
         mentions = [*self.mentioned, *self.without_tickets]
         members = [*self.without_tickets, *(who for who in self.scope.members if who not in self.without_tickets)]
@@ -989,9 +990,9 @@ def _answer_in_code(session: _Session, judged: Plan, *, process: ProcessConfig, 
         session.plan = judged
         return session.finish("not_understood", message=COMPARISON_OFF, suggestions=session.suggestions)
     session.plan = Plan.model_construct(understood=True, calls=list(session.calls), reason=None)
-    if all(facts.empty for facts in session.facts):  # a board where no one holds a ticket: no one to set out
-        return session.finish("no_data", message=f"Nothing in the {session.project} snapshot matched: no one holds a "
-                                                 "ticket on this board.")
+    if all(facts.empty for facts in session.facts):  # a board where no one has tickets: no one to set out
+        return session.finish("no_data", message=f"Nothing in the {session.project} snapshot matched: no one has "
+                                                 "tickets on this board.")
     answered = session.answer_from_code(why="a question that evaluates people")
     if answered is not None:
         return answered

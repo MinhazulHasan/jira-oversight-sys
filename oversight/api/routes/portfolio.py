@@ -33,6 +33,7 @@ _OLDEST_BREACHES_SQL = f"""
     FROM findings
     WHERE project_key = ? AND severity = 'breach' AND issue_key NOT LIKE '{_SPRINT_PREFIX}%'
       AND first_seen_at IS NOT NULL AND first_seen_at <= ? AND (resolved_at IS NULL OR resolved_at > ?)
+      AND COALESCE(resolved_why, '') != 'ignored'
     GROUP BY issue_key, rule_id
     ORDER BY opened, CAST(substr(issue_key, instr(issue_key, '-') + 1) AS INTEGER), issue_key, rule_id
     LIMIT ?
@@ -42,6 +43,7 @@ _OPEN_SPRINT_FINDINGS_SQL = f"""
     SELECT evidence_json FROM findings
     WHERE project_key = ? AND rule_id = ? AND issue_key LIKE '{_SPRINT_PREFIX}%'
       AND first_seen_at IS NOT NULL AND first_seen_at <= ? AND (resolved_at IS NULL OR resolved_at > ?)
+      AND COALESCE(resolved_why, '') != 'ignored'
 """
 
 

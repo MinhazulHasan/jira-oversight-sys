@@ -108,7 +108,7 @@ CATEGORIES = {"new", "indeterminate", "done"}
 FINDING_FIELDS = (
     "finding_id", "rule_id", "rule_title", "rule_version", "kind", "severity", "state", "message", "scope",
     "issue_key", "issue_summary", "issue_type", "epic_key", "epic_title", "assignee", "sprint", "first_seen_at",
-    "last_seen_at", "resolved_at", "resolved_why", "threshold", "evidence", "warned_before",
+    "last_seen_at", "resolved_at", "resolved_why", "threshold", "evidence", "warned_before", "ignore",
 )
 PERSON_ID = re.compile(r"^p[0-9a-f]{12}$")
 AVATAR = re.compile(r"^[0-9a-f]{12}$")
@@ -177,7 +177,7 @@ def check_finding(finding: Any) -> None:
     assert FINDING_ID.match(finding["finding_id"]) and RULE_ID.match(finding["rule_id"])
     assert finding["rule_title"] and finding["rule_version"] and finding["message"]
     assert finding["kind"] in {"rule", "warning"} and finding["severity"] in {"breach", "warning"}
-    assert finding["state"] in {"open", "resolved"} and finding["scope"] in {"issue", "sprint"}
+    assert finding["state"] in {"open", "resolved", "ignored"} and finding["scope"] in {"issue", "sprint"}
     assert finding["issue_key"] is None or ISSUE_KEY.match(finding["issue_key"])
     assert finding["epic_key"] is None or ISSUE_KEY.match(finding["epic_key"])
     for name in ("issue_summary", "issue_type", "epic_title", "threshold"):
@@ -188,7 +188,7 @@ def check_finding(finding: Any) -> None:
         assert isinstance(sprint["sprint_id"], int) and not isinstance(sprint["sprint_id"], bool) and sprint["name"]
     assert is_ts(finding["first_seen_at"]) and is_ts(finding["last_seen_at"])
     assert finding["resolved_at"] is None or is_ts(finding["resolved_at"])
-    assert finding["resolved_why"] in {None, "cleared", "superseded"}
+    assert finding["resolved_why"] in {None, "cleared", "superseded", "ignored"}
     assert isinstance(finding["evidence"], list)
     for item in finding["evidence"]:
         check_evidence(item)
@@ -200,8 +200,15 @@ def check_finding(finding: Any) -> None:
     check_person(finding["assignee"])
     assert (finding["scope"] == "issue") == (finding["issue_key"] is not None)
     assert (finding["scope"] == "sprint") == (finding["sprint"] is not None)
-    assert (finding["state"] == "resolved") == (finding["resolved_at"] is not None)
+    assert (finding["state"] != "open") == (finding["resolved_at"] is not None)
+    assert (finding["state"] == "ignored") == (finding["resolved_why"] == "ignored")
     assert finding["scope"] == "issue" or finding["assignee"] is None  # a sprint finding belongs to no one
+    ignore = finding["ignore"]
+    if ignore is not None:  # set only beside an ignored finding, with the ignore that holds it
+        fields_are(ignore, "ignore_id", "scope", "rule_id", "reason", "by", "at")
+        assert finding["state"] == "ignored" and FINDING_ID.match(ignore["ignore_id"]) and is_ts(ignore["at"])
+        assert (ignore["scope"], ignore["rule_id"]) in {("ticket", None), ("finding", finding["rule_id"])}
+        assert text_or_none(ignore["reason"]) and text_or_none(ignore["by"], min_length=1)
 
 
 def check_page(body: Any) -> None:
@@ -233,6 +240,7 @@ FROM = """
 """
 EPIC = "COALESCE(i.epic_key, p.epic_key)"
 OPEN = " AND f.resolved_at IS NULL"
+STATE_SQL = "CASE WHEN f.resolved_at IS NULL THEN 'open' WHEN f.resolved_why = 'ignored' THEN 'ignored' ELSE 'resolved' END"
 API_KEY = "CASE WHEN f.issue_key LIKE 'sprint:%' THEN NULL ELSE f.issue_key END"
 
 
@@ -319,7 +327,8 @@ FILTERS: list[tuple[str, list[tuple[str, str]], str, tuple[Any, ...]]] = [
     ("one rule", [("rule", "R-EST-01")], OPEN + " AND f.rule_id = 'R-EST-01'", ()),
     ("two rules", [("rule", "W-AGE-01"), ("rule", "R-EST-01")], OPEN + " AND f.rule_id IN ('R-EST-01', 'W-AGE-01')", ()),
     ("severity", [("severity", "warning")], OPEN + " AND f.severity = 'warning'", ()),
-    ("resolved", [("state", "resolved")], " AND f.resolved_at IS NOT NULL", ()),
+    ("resolved", [("state", "resolved")], " AND f.resolved_at IS NOT NULL AND COALESCE(f.resolved_why, '') != 'ignored'",
+     ()),
     ("all states", [("state", "all")], "", ()),
     ("one epic", [("epic", "DEMO-36")], OPEN + f" AND {EPIC} = 'DEMO-36'", ()),
     ("no epic", [("epic", "none")], OPEN + f" AND {EPIC} IS NULL", ()),
@@ -386,12 +395,13 @@ def test_facets_list_every_entry_in_a_fixed_order(api: Api) -> None:
     assert len(by_number) == 14
     assert [(e["value"], e["label"]) for e in body["facets"]["epics"]] == [*by_number, ("none", "No epic")]
     assert [(e["value"], e["label"]) for e in body["facets"]["severity"]] == [("breach", "Breach"), ("warning", "Warning")]
-    assert [(e["value"], e["label"]) for e in body["facets"]["state"]] == [("open", "Open"), ("resolved", "Resolved")]
+    assert [(e["value"], e["label"]) for e in body["facets"]["state"]] == [
+        ("open", "Open"), ("resolved", "Resolved"), ("ignored", "Ignored")]
     assert facet(body, "rules")["R-FLOW-01"] == 0  # not measurable in DEMO: listed at zero
     assert matches_sql(facet(body, "rules"), sql_counts(api, "f.rule_id", OPEN))
     assert matches_sql(facet(body, "epics"), sql_counts(api, f"COALESCE({EPIC}, 'none')", OPEN))
     assert matches_sql(facet(body, "severity"), sql_counts(api, "f.severity", OPEN))
-    state = "CASE WHEN f.resolved_at IS NULL THEN 'open' ELSE 'resolved' END"
+    state = STATE_SQL
     assert matches_sql(facet(body, "state"), sql_counts(api, state))
 
 
@@ -404,7 +414,7 @@ def test_facet_counts_apply_every_filter_but_their_own(api: Api) -> None:
     assert matches_sql(facet(body, "rules"), sql_counts(api, "f.rule_id", state + breach + epic + window, params))
     assert matches_sql(facet(body, "severity"), sql_counts(api, "f.severity", state + epic + window, params))
     assert matches_sql(facet(body, "epics"), sql_counts(api, f"COALESCE({EPIC}, 'none')", state + breach + window, params))
-    by_state = "CASE WHEN f.resolved_at IS NULL THEN 'open' ELSE 'resolved' END"
+    by_state = STATE_SQL
     assert matches_sql(facet(body, "state"), sql_counts(api, by_state, breach + epic + window, params))
     unfiltered = api.get("/findings")
     assert sum(facet(body, "epics").values()) < sum(facet(unfiltered, "epics").values())

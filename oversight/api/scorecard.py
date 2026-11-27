@@ -4,25 +4,28 @@ import json
 import math
 import sqlite3
 from collections import Counter
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Literal, TypedDict
 
+from oversight.api.credit import BoardCredit, Credit, Source, board_credit
 from oversight.api.deps import ApiContext
 from oversight.api.meta import last_synced_at
 from oversight.api.people import Person, directory_key, person
-from oversight.api.timelines import Categories, issue_category, ts
+from oversight.api.timelines import Categories, _Subject, evidence_dict, issue_category, threshold_text, ts
 from oversight.ask.catalog import _rows, rule_missing
+from oversight.config import EstimateConfig
 from oversight.errors import ConfigError
 from oversight.rules.catalog import Rule, RulesConfig
 from oversight.rules.checks import DEFAULT_GRACE_HOURS
+from oversight.rules.ignores import IgnoreInfo, Ignores, active_ignores
 from oversight.timeutil import hours_between, parse_ts, to_iso
 
 MIN_TICKETS = 5  # the tickets a figure must rest on before it is compared with anyone's
 PERIODS: tuple[int, ...] = (30, 90, 180)
 DEFAULT_DAYS = 90
-BASIS = "current_assignee"
+BASIS = "credit"
 LEVEL_POINTS = 5  # a rate within this many percentage points of the board's is level with it
 LEVEL_TENTHS = 5  # the ratio within 0.5 of the board's (counted in tenths) is level with it
 
@@ -90,7 +93,7 @@ class Value(TypedDict):
 
 
 def unmeasured() -> Value:
-    """A value there is none of: not measurable, or someone who holds no work."""
+    """A value there is none of: not measurable, or someone with no tickets."""
     return {"value": None, "numerator": None, "denominator": None, "enough": False, "vs_board": None}
 
 
@@ -114,7 +117,6 @@ class Ticket:
     """One piece of the board's work, as the measures read it."""
 
     issue_key: str
-    holder: str | None  # the current assignee's person id; None: nobody
     category: str  # new | indeterminate | done, now
     started_at: str | None
     done_at: str | None
@@ -128,6 +130,20 @@ class Ticket:
     review_breach: bool  # an R-FLOW-01 finding, open or resolved for any reason but "cleared"
     stuck: bool  # an open W-AGE-01 finding
     open_findings: int  # its open breaches and warnings
+    builders: tuple[Credit, ...] = ()  # whom it counts for, by the board's credit setting; empty: no one
+    summary: str | None = None
+    issue_type: str | None = None
+    status: str | None = None
+    status_since: str | None = None  # when it entered its current status
+    status_hours: float | None = None  # how long it has been in it
+    stuck_threshold: str | None = None  # W-AGE-01's limit, as its open finding states it
+    estimate_set_at: str | None = None
+    estimate_s: int | None = None
+    time_spent_s: int = 0
+    subtask_time_spent_s: int = 0  # logged on its subtasks
+    reopen_count: int = 0
+    skipped_stages: tuple[str, ...] = ()
+    open_rule_ids: tuple[str, ...] = ()  # the rules of its open findings, each once, in the catalogue's order
 
     @property
     def open(self) -> bool:
@@ -142,13 +158,23 @@ class Board:
     as_of: str  # the snapshot's as-of: the end of every period
     total: int  # the board's tickets: its work, assigned or not (Epics left out)
     work: tuple[Ticket, ...]
-    holdings: Mapping[str, int]  # person id -> tickets held now (their work, Epics left out)
-    holders: tuple[Person, ...]  # everyone holding a ticket now (work), in the directory's order
+    holdings: Mapping[str, int]  # person id -> their tickets: the work that counts for them (Epics left out)
+    holders: tuple[Person, ...]  # everyone with tickets, in the directory's order
     members: tuple[Person, ...]
     reasons: Mapping[str, str]  # measure key -> why this board can never show it
     last_worklog: str | None  # the latest worklog started on the board up to the as-of
     effort_limit: float | None  # R-EFF-01's threshold
     every_rule: tuple[str, ...]  # the catalogue's issue rules, in its order
+    ignores: Ignores = field(default_factory=Ignores)
+    grace_hours: float = DEFAULT_GRACE_HOURS  # R-EST-02's
+    credit_source: Source = "auto"  # the board's credit setting: auto, assignee or field
+    credit_field: str | None = None  # the people field tickets count for (its name); None: the assignee alone
+
+    def ignore_of(self, measure: Measure, issue_key: str) -> IgnoreInfo | None:
+        """The ignore that leaves the ticket out of the measure: one covering its rules; for the ratio, the ticket's"""
+        if measure.every_rule:
+            return self.ignores.ticket(issue_key)
+        return self.ignores.covers(issue_key, measure.rule_ids) if measure.rule_ids else None
 
     def period(self, days: int) -> Period:
         if days not in PERIODS:
@@ -176,18 +202,19 @@ class Board:
 
     def measures(self, period: Period) -> list[dict[str, Any]]:
         """The eleven measures as the contract sends them, in its order, with what this board can show."""
-        return [
-            {
-                "key": measure.key,
-                "label": measure.label,
-                "kind": measure.kind,
-                "direction": measure.direction,
-                "rule_ids": self.rule_ids(measure),
-                "measurable": self.reason(measure.key, period) is None,
-                "reason": self.reason(measure.key, period),
-            }
-            for measure in MEASURES
-        ]
+        return [self.measure_body(measure, period) for measure in MEASURES]
+
+    def measure_body(self, measure: Measure, period: Period) -> dict[str, Any]:
+        reason = self.reason(measure.key, period)
+        return {
+            "key": measure.key,
+            "label": measure.label,
+            "kind": measure.kind,
+            "direction": measure.direction,
+            "rule_ids": self.rule_ids(measure),
+            "measurable": reason is None,
+            "reason": reason,
+        }
 
     @property
     def everyone(self) -> list[Person]:
@@ -195,11 +222,11 @@ class Board:
         return sorted([*self.holders, *self.members], key=directory_key)
 
     def who(self, person_id: str) -> Person | None:
-        """The person with this id when they are on the board (holding a ticket now, or a member); None otherwise."""
+        """The person with this id when they are on the board (with tickets, or without); None otherwise."""
         return next((who for who in (*self.holders, *self.members) if who["id"] == person_id), None)
 
     def tickets_of(self, person_id: str) -> list[Ticket]:
-        return [ticket for ticket in self.work if ticket.holder == person_id]
+        return [ticket for ticket in self.work if any(credit.person_id == person_id for credit in ticket.builders)]
 
 
 # --- reading a board -------------------------------------------------------------------------
@@ -208,7 +235,10 @@ class Board:
 _TICKETS_SQL = """
     SELECT i.issue_key, i.issue_type, i.status, i.status_category, i.assignee_id, a.display_name, a.avatar_hash,
            i.time_spent_s, i.aggregate_time_spent_s, m.started_at, m.done_at, m.reopen_count, m.skipped_stages,
-           m.estimate_set_at, m.effort_ratio
+           m.estimate_set_at, m.effort_ratio,
+           i.summary, i.story_points, i.original_estimate_s, m.status_age_h,
+           (SELECT si.entered_at FROM status_intervals AS si WHERE si.issue_key = i.issue_key
+            ORDER BY si.seq DESC LIMIT 1) AS status_since
     FROM issues AS i
     LEFT JOIN people AS a ON a.account_id = i.assignee_id
     LEFT JOIN issue_metrics AS m ON m.issue_key = i.issue_key
@@ -219,7 +249,9 @@ _FINDINGS_SQL = """
            SUM(CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END) AS open_findings,
            MAX(CASE WHEN rule_id = ? AND resolved_at IS NULL THEN 1 ELSE 0 END) AS stuck,
            MAX(CASE WHEN rule_id = ? AND COALESCE(resolved_why, '') != 'cleared' THEN 1 ELSE 0 END) AS review_breach,
-           MAX(CASE WHEN rule_id = ? THEN 1 ELSE 0 END) AS review_seen
+           MAX(CASE WHEN rule_id = ? THEN 1 ELSE 0 END) AS review_seen,
+           GROUP_CONCAT(CASE WHEN resolved_at IS NULL THEN rule_id END) AS open_rules,
+           MAX(CASE WHEN rule_id = ? AND resolved_at IS NULL THEN evidence_json END) AS stuck_evidence
     FROM findings
     WHERE project_key = ?
     GROUP BY issue_key
@@ -262,9 +294,10 @@ _MEMBERS_SQL = """
 """
 
 
-def load_board(conn: sqlite3.Connection, ctx: ApiContext) -> Board:
-    """The board ctx reads, as every scorecard of it is worked out: eight queries, people and figures in bulk."""
+def load_board(conn: sqlite3.Connection, ctx: ApiContext, credit: BoardCredit | None = None) -> Board:
+    """The board ctx reads, as every scorecard of it is worked out: people and figures in bulk."""
     project, process, rules = ctx.project, ctx.process, ctx.rules
+    credit = credit if credit is not None else board_credit(conn, process, ctx.fields, project)
     as_of = last_synced_at(conn, project) or to_iso(ctx.now())
     assert as_of is not None
     review = _rule(rules, REVIEW_RULE, enabled=True)
@@ -274,7 +307,10 @@ def load_board(conn: sqlite3.Connection, ctx: ApiContext) -> Board:
     excluded = {name.casefold() for name in rules.defaults.exclude_types}
 
     findings = {row["issue_key"]: row
-                for row in _rows(conn, _FINDINGS_SQL, (STUCK_RULE, REVIEW_RULE, REVIEW_RULE, project))}
+                for row in _rows(conn, _FINDINGS_SQL, (STUCK_RULE, REVIEW_RULE, REVIEW_RULE, STUCK_RULE, project))}
+    stuck = _rule(rules, STUCK_RULE)
+    details = _Details(process.estimate_for(project), stuck.params if stuck is not None else {},
+                       {rule.id: n for n, rule in enumerate(rules.rules)})
     checked_since = _checked_since(conn, project, rules)
     reached = {row["issue_key"] for row in _rows(conn, _REACHED_SQL, (project, review_stage))} if review_stage else set()
     categories = Categories(conn, ctx)
@@ -288,14 +324,15 @@ def load_board(conn: sqlite3.Connection, ctx: ApiContext) -> Board:
             on_the_board.setdefault(who["id"], who)
         if (row["issue_type"] or "").casefold() in excluded:
             continue
-        if who is not None:
-            holdings[who["id"]] += 1
-            holders.setdefault(who["id"], who)
+        builders = credit.of(row["issue_key"])
+        for one in builders:
+            holdings[one.person_id] += 1
+            holders.setdefault(one.person_id, credit.people[one.person_id])
         category = issue_category(row, ctx, categories)
-        work.append(_ticket(row, who, category, findings.get(row["issue_key"]), row["issue_key"] in reached, grace,
-                            checked_since))
+        work.append(_ticket(row, category, findings.get(row["issue_key"]), row["issue_key"] in reached, grace,
+                            checked_since, details=details, builders=builders))
 
-    # Everyone else on the board holds none of its work: its members who hold no ticket, and anyone holding only Epics.
+    # Everyone else on the board has no tickets: its members, and anyone assigned only work that counts for others.
     members = {who_id: who for who_id, who in on_the_board.items() if who_id not in holders}
     for row in _rows(conn, _MEMBERS_SQL, (project,)):
         who = person(row["account_id"], row["display_name"], row["avatar_hash"])
@@ -314,6 +351,10 @@ def load_board(conn: sqlite3.Connection, ctx: ApiContext) -> Board:
         last_worklog=ts(last[0]["started_at"]) if last else None,
         effort_limit=effort_limit,
         every_rule=tuple(rule.id for rule in rules.rules if rule.scope == "issue"),
+        ignores=active_ignores(conn, project),
+        grace_hours=grace,
+        credit_source=credit.setting.choice.source,
+        credit_field=credit.field.name if credit.field is not None else None,
     )
 
 
@@ -327,14 +368,24 @@ def _checked_since(conn: sqlite3.Connection, project: str, rules: RulesConfig) -
     return to_iso(started - timedelta(days=lookback)) if started is not None else None
 
 
-def _ticket(row: sqlite3.Row, who: Person | None, category: str, finding: sqlite3.Row | None, reached: bool,
-            grace: float, checked_since: str | None = "") -> Ticket:
+@dataclass(frozen=True)
+class _Details:
+    """What a ticket's details are read with: the board's estimate, W-AGE-01's settings, the catalogue's order."""
+
+    estimate: EstimateConfig | None = None
+    stuck_params: Mapping[str, Any] = field(default_factory=dict)
+    rule_order: Mapping[str, int] = field(default_factory=dict)
+
+
+def _ticket(row: sqlite3.Row, category: str, finding: sqlite3.Row | None, reached: bool, grace: float,
+            checked_since: str | None = "", *, details: _Details = _Details(),
+            builders: tuple[Credit, ...] = ()) -> Ticket:
     started, done, set_at = ts(row["started_at"]), ts(row["done_at"]), ts(row["estimate_set_at"])
     spent, below = _seconds(row["time_spent_s"]), _seconds(row["aggregate_time_spent_s"])
     ratio = _finite(row["effort_ratio"])
+    stages = _skipped_stages(row["skipped_stages"])
     return Ticket(
         issue_key=row["issue_key"],
-        holder=who["id"] if who is not None else None,
         category=category,
         started_at=started,
         done_at=done,
@@ -342,14 +393,48 @@ def _ticket(row: sqlite3.Row, who: Person | None, category: str, finding: sqlite
         time_logged=spent > 0 or below > 0,
         effort_ratio=ratio if spent > 0 else None,
         reopened=(_finite(row["reopen_count"]) or 0) > 0,
-        skipped=_skipped(row["skipped_stages"]),
+        skipped=bool(stages),
         reached_review=reached,
         review_checked=bool(finding is not None and finding["review_seen"]) or checked_since == "" or (
             checked_since is not None and done is not None and done >= checked_since),
         review_breach=bool(finding is not None and finding["review_breach"]),
         stuck=bool(finding is not None and finding["stuck"]),
         open_findings=int(finding["open_findings"] or 0) if finding is not None else 0,
+        builders=builders,
+        summary=row["summary"],
+        issue_type=row["issue_type"],
+        status=row["status"],
+        status_since=ts(row["status_since"]),
+        status_hours=_finite(row["status_age_h"]),
+        stuck_threshold=_stuck_threshold(finding, details.stuck_params),
+        estimate_set_at=set_at,
+        estimate_s=_estimate_s(row, details.estimate),
+        time_spent_s=int(spent),
+        subtask_time_spent_s=int(max(0.0, below - spent)),
+        reopen_count=int(_finite(row["reopen_count"]) or 0),
+        skipped_stages=stages,
+        open_rule_ids=_open_rules(finding, details.rule_order),
     )
+
+
+def _stuck_threshold(finding: sqlite3.Row | None, params: Mapping[str, Any]) -> str | None:
+    """W-AGE-01's limit as its open finding states it ("p90 of To Do: 524.8 h"), as the Findings page says it"""
+    if finding is None or not finding["stuck_evidence"]:
+        return None
+    subject = _Subject(kind="warning", last_seen_at=None, evidence=evidence_dict(finding["stuck_evidence"]),
+                       params=params, basis="points", issue=None, changes=(), fields=(), intervals=())
+    return threshold_text("stuck_in_status", subject)
+
+
+def _estimate_s(row: sqlite3.Row, estimate: EstimateConfig | None) -> int | None:
+    """The estimate the effort ratio was worked out against, in seconds; None without one"""
+    if estimate is None:
+        return None
+    if estimate.basis == "points":
+        points, hours = _finite(row["story_points"]), estimate.hours_per_point
+        return round(points * hours * 3600) if points is not None and points > 0 and hours else None
+    seconds = _finite(row["original_estimate_s"])
+    return round(seconds) if seconds is not None and seconds > 0 else None
 
 
 def _finite(value: object) -> float | None:
@@ -362,14 +447,26 @@ def _seconds(value: object) -> float:
     return _finite(value) or 0.0
 
 
-def _skipped(text: object) -> bool:
+def _skipped_stages(text: object) -> tuple[str, ...]:
+    """The stages its status changes jumped over, each once, in the order they were skipped"""
     if not isinstance(text, str) or not text:
-        return False
+        return ()
     try:
         skips = json.loads(text)
     except ValueError:
-        return False
-    return isinstance(skips, list) and len(skips) > 0
+        return ()
+    if not isinstance(skips, list):
+        return ()
+    return tuple(dict.fromkeys(str(stage) for skip in skips if isinstance(skip, dict)
+                               for stage in skip.get("skipped") or []))
+
+
+def _open_rules(finding: sqlite3.Row | None, order: Mapping[str, int]) -> tuple[str, ...]:
+    """The rules of its open findings, each once, in the catalogue's order (one it no longer has, last)"""
+    if finding is None or not finding["open_rules"]:
+        return ()
+    found = set(str(finding["open_rules"]).split(","))
+    return tuple(sorted(found, key=lambda rule_id: (order.get(rule_id, len(order)), rule_id)))
 
 
 def _rule(rules: RulesConfig, rule_id: str, *, enabled: bool = False) -> Rule | None:
@@ -436,27 +533,81 @@ def _turned_off(ctx: ApiContext, rule_id: str, off: frozenset[str]) -> str | Non
 
 # --- the figures -----------------------------------------------------------------------------
 
+# The "N tickets" under a name: the work that counts for them.
+TICKETS = Measure("tickets", "Tickets", "count", "neutral")
 
-def _figures(tickets: Sequence[Ticket], period: Period, limit: float | None) -> dict[str, tuple[int, int | None]]:
-    """Each measure's numerator and denominator over these tickets (a count's denominator is None)."""
+
+@dataclass(frozen=True)
+class Share:
+    """One measure's tickets: those it counts, the set it counts them in, and those an ignore leaves out of both."""
+
+    measure: Measure
+    counted: tuple[Ticket, ...]
+    tickets: tuple[Ticket, ...]  # a count's are the ones it counts
+    left_out: tuple[Ticket, ...] = ()
+
+    @property
+    def figure(self) -> tuple[int, int | None]:
+        """Its numerator and denominator, the sizes of its sets (a count's denominator is None)"""
+        if self.measure.kind == "count":
+            return len(self.counted), None
+        if self.measure.kind == "ratio":
+            return sum(ticket.open_findings for ticket in self.counted), len(self.tickets)
+        return len(self.counted), len(self.tickets)
+
+
+def shares(board: Board, period: Period, tickets: Sequence[Ticket]) -> dict[str, Share]:
+    """Every measure's tickets, all from one set: a person's or the whole board's."""
     open_now = [ticket for ticket in tickets if ticket.open]
     done = [ticket for ticket in tickets if period.holds(ticket.done_at)]
-    started = [ticket for ticket in tickets if period.holds(ticket.started_at)]
-    ratios = [ticket.effort_ratio for ticket in done if ticket.effort_ratio is not None]
-    reviewed = [ticket for ticket in done if ticket.reached_review and ticket.review_checked]
+    limit = board.effort_limit
+
+    def share(key: str, among: Iterable[Ticket], counts: Callable[[Ticket], bool] | None = None) -> Share:
+        measure = BY_KEY[key]
+        kept: list[Ticket] = []
+        out: list[Ticket] = []
+        for ticket in among:
+            (kept if board.ignore_of(measure, ticket.issue_key) is None else out).append(ticket)
+        counted = kept if counts is None else [ticket for ticket in kept if counts(ticket)]
+        return Share(measure, tuple(counted), tuple(kept), tuple(out))
+
+    def within(ticket: Ticket) -> bool:
+        return limit is not None and ticket.effort_ratio is not None and ticket.effort_ratio < limit
+
     return {
-        "open_tickets": (len(open_now), None),
-        "in_progress": (sum(ticket.category == "indeterminate" for ticket in tickets), None),
-        "done_in_period": (len(done), None),
-        "estimated_before_start": (sum(ticket.estimated_in_time for ticket in started), len(started)),
-        "time_logged": (sum(ticket.time_logged for ticket in done), len(done)),
-        "within_estimate": (sum(limit is not None and ratio < limit for ratio in ratios), len(ratios)),
-        "stuck_now": (sum(ticket.stuck for ticket in open_now), len(open_now)),
-        "reopened": (sum(ticket.reopened for ticket in done), len(done)),
-        "skipped_stage": (sum(ticket.skipped for ticket in done), len(done)),
-        "code_review": (sum(not ticket.review_breach for ticket in reviewed), len(reviewed)),
-        "open_findings_per_10": (sum(ticket.open_findings for ticket in open_now), len(open_now)),
+        "open_tickets": share("open_tickets", open_now),
+        "in_progress": share("in_progress", (ticket for ticket in tickets if ticket.category == "indeterminate")),
+        "done_in_period": share("done_in_period", done),
+        "estimated_before_start": share("estimated_before_start",
+                                        (ticket for ticket in tickets if period.holds(ticket.started_at)),
+                                        lambda ticket: ticket.estimated_in_time),
+        "time_logged": share("time_logged", done, lambda ticket: ticket.time_logged),
+        "within_estimate": share("within_estimate", (ticket for ticket in done if ticket.effort_ratio is not None),
+                                 within),
+        "stuck_now": share("stuck_now", open_now, lambda ticket: ticket.stuck),
+        "reopened": share("reopened", done, lambda ticket: ticket.reopened),
+        "skipped_stage": share("skipped_stage", done, lambda ticket: ticket.skipped),
+        "code_review": share("code_review",
+                             (ticket for ticket in done if ticket.reached_review and ticket.review_checked),
+                             lambda ticket: not ticket.review_breach),
+        "open_findings_per_10": share("open_findings_per_10", open_now, lambda ticket: ticket.open_findings > 0),
     }
+
+
+def whose_shares(board: Board, person_id: str | None, period: Period) -> dict[str, Share]:
+    """The tickets behind each of a person's figures; None: behind the whole board's"""
+    return shares(board, period, board.work if person_id is None else board.tickets_of(person_id))
+
+
+def tickets_share(board: Board, person_id: str | None) -> Share:
+    """The tickets behind "N tickets": the work that counts for the person; None: all of the board's"""
+    tickets = tuple(board.work if person_id is None else board.tickets_of(person_id))
+    return Share(TICKETS, tickets, tickets)
+
+
+def _figures(board: Board, period: Period, tickets: Sequence[Ticket]) -> dict[str, tuple[int, int | None]]:
+    """Each measure's numerator and denominator: the sizes of its tickets (shares)"""
+    return {key: share.figure for key, share in shares(board, period, tickets).items()}
 
 
 def _value(measure: Measure, numerator: int, denominator: int | None) -> Value:
@@ -488,7 +639,7 @@ def vs_board(measure: Measure, mine: Value, board: Value) -> VsBoard | None:
 def values(board: Board, tickets: Sequence[Ticket], period: Period, against: Mapping[str, Value] | None = None,
            ) -> dict[str, Value]:
     """Every measure's value over these tickets; against: the board's values, to say where each stands next to it."""
-    figures = _figures(tickets, period, board.effort_limit)
+    figures = _figures(board, period, tickets)
     found: dict[str, Value] = {}
     for measure in MEASURES:
         if board.reason(measure.key, period) is not None:
@@ -507,7 +658,7 @@ def board_values(board: Board, period: Period) -> dict[str, Value]:
 
 
 def person_values(board: Board, person_id: str, period: Period, against: Mapping[str, Value]) -> dict[str, Value]:
-    """A person's values next to the board's; every one null for someone who holds no ticket on the board."""
+    """A person's values next to the board's; every one null for someone with no tickets on the board."""
     if not board.holdings.get(person_id):
         return {measure.key: unmeasured() for measure in MEASURES}
     return values(board, board.tickets_of(person_id), period, against)
@@ -568,7 +719,7 @@ class Standing:
 
 
 def standings(board: Board, period: Period, against: Mapping[str, Value]) -> list[Standing]:
-    """Everyone who holds a ticket on the board, in the directory's order."""
+    """Everyone with tickets on the board, in the directory's order."""
     return [
         Standing(person=who, tickets=board.holdings.get(who["id"], 0),
                  values=person_values(board, who["id"], period, against))

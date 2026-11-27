@@ -25,6 +25,7 @@ from oversight.api.access_log import (
     read_entries,
     read_facets,
 )
+from oversight.api.credit import board_credit
 from oversight.api.deps import LEVEL_PARAM, LEVELS, PROJECT_PARAM, ApiContext, get_ctx, people_level_only, service_conn
 from oversight.api.meta import service_meta
 from oversight.api.people import PERSON_ID
@@ -155,6 +156,9 @@ def access_log(
     viewer = need_viewer(request)
     rows, more = read_entries(conn, asked.query)
     people = everyone_served(conn, ctx.projects)
+    for project in ctx.projects:  # whoever a board's tickets count for is on it too, though they may hold none
+        for person_id, who in board_credit(conn, ctx.process, ctx.fields, project).people.items():
+            people.setdefault(person_id, who)
     entries = [entry_body(row, people) for row in rows]
     body = {
         "meta": service_meta(conn, ctx),

@@ -46,9 +46,10 @@ PERSON_ASK = "person_ask"
 ACCESS_LOG_VIEW = "access_log_view"
 ACCESS_LOG_EXPORT = "access_log_export"
 PERSON_CARD_VIEW = "person_card_view"
+SCORECARD_TICKETS_VIEW = "scorecard_tickets_view"
 ACTIONS: tuple[str, ...] = (
     SCORECARD_VIEW, PEOPLE_COMPARE_VIEW, PERSON_FINDINGS_VIEW, PERSON_ASK, ACCESS_LOG_VIEW, ACCESS_LOG_EXPORT,
-    PERSON_CARD_VIEW,
+    PERSON_CARD_VIEW, SCORECARD_TICKETS_VIEW,
 )
 PERSON_CARD_ONCE_IN = timedelta(minutes=10)
 # A page of the log itself, at most once per viewer and person filtered by in this long: see the docstring.

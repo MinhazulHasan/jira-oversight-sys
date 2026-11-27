@@ -15,6 +15,7 @@ from oversight.errors import ConfigError
 from oversight.logs import get_logger
 from oversight.rules import checks as _checks
 from oversight.rules.catalog import Rule, RuleDefaults, RulesConfig
+from oversight.rules.ignores import IGNORED, Ignores, active_ignores
 from oversight.rules.settings import (
     BoardSettings,
     effective_rules,
@@ -45,6 +46,8 @@ class RuleStats:
     opened: int = 0
     refreshed: int = 0
     note: str | None = None
+    # Hits an admin ignored: recorded resolved as ignored, never counted as hits, opened or refreshed.
+    ignored: int = 0
 
 
 @dataclass
@@ -68,6 +71,7 @@ class RulesResult:
     settings_changed: int = 0
     settings_revision: int = 0
     customised: list[str] = field(default_factory=list)
+    ignored: int = 0
 
     @property
     def not_measurable(self) -> list[RuleStats]:
@@ -85,6 +89,8 @@ class RulesResult:
                 detail = f"not measurable: nothing in Jira shows {_checks.join_words(_checks.label(m) for m in s.missing)}"
             else:
                 detail = f"{s.hits} hits ({s.opened} new) on {s.checked} checked"
+                if s.ignored:
+                    detail += f", {s.ignored} ignored"
                 if s.note:
                     detail += f"; {s.note}"
             lines.append(f"  {s.rule_id:<{width}}  {detail}")
@@ -139,7 +145,7 @@ def run_rules(
                 "rules_project_done", project=project, opened=result.opened, refreshed=result.refreshed,
                 resolved=result.resolved, superseded=result.superseded, aged_out=result.aged_out,
                 settings_changed=result.settings_changed, settings_revision=result.settings_revision,
-                out_of_scope=result.out_of_scope, linked=result.linked,
+                out_of_scope=result.out_of_scope, linked=result.linked, ignored=result.ignored,
                 not_measurable=[s.rule_id for s in result.not_measurable],
             )
     except BaseException as exc:
@@ -168,6 +174,7 @@ def _run_project(
 ) -> RulesResult:
     settings = load_board_settings(store.conn, project)  # inside the board's transaction: no save slips in
     rules = effective_rules(catalogue, settings)
+    ignores = active_ignores(store.conn, project)  # likewise: no ignore or restore slips in
     board = board_for(store, process, rules, fields, project, moment)
     now_iso = board.ctx.now_iso
 
@@ -183,10 +190,15 @@ def _run_project(
             continue
         rule_stats = RuleStats(rule.id, measurable=True, checked=evaluation.checked, note=evaluation.note)
         for issue_key, hit in evaluation.hits:
-            rule_stats.hits += 1
             fid = finding_id(rule.id, version, issue_key, hit.evidence_key)
             produced.add(fid)
-            first_seen, opened = _upsert_finding(store, fid, rule, version, project, issue_key, hit, now_iso, run)
+            ignored = ignores.covers(issue_key, (rule.id,)) is not None
+            first_seen, opened = _upsert_finding(store, fid, rule, version, project, issue_key, hit, now_iso, run,
+                                                 ignored=ignored)
+            if ignored:
+                rule_stats.ignored += 1
+                continue
+            rule_stats.hits += 1
             if opened:
                 rule_stats.opened += 1
                 if rule.kind == "rule":
@@ -200,6 +212,7 @@ def _run_project(
     resolution = Resolution.of(catalogue, rules, measured, board.aged, turned_off(store.conn, project),
                                settings.deleted_custom(catalogue))
     tally = _resolve(store, project, resolution, produced, now_iso)
+    tally.update(_settle_ignored(store, project, resolution, produced, ignores, now_iso))
     linked = _link(store, rules, opened_breaches, now_iso)
     return RulesResult(
         run_id=run.run_id,
@@ -219,6 +232,7 @@ def _run_project(
         settings_changed=tally["settings_changed"],
         settings_revision=settings.revision,
         customised=[rule.id for rule in rules.rules if rule.customised],
+        ignored=sum(s.ignored for s in stats),
     )
 
 
@@ -355,10 +369,18 @@ def _upsert_finding(
     hit: _checks.Hit,
     now_iso: str,
     run: Run,
+    *,
+    ignored: bool = False,
 ) -> tuple[str, bool]:
-    """Write the finding; return its first_seen_at and whether this run opened it."""
-    existing = store.query_one("SELECT first_seen_at, resolved_at FROM findings WHERE finding_id = ?", (fid,))
+    """Write the finding (resolved as ignored when an admin ignored it); its first_seen_at, and whether it opened."""
+    existing = store.query_one(
+        "SELECT first_seen_at, resolved_at, resolved_why FROM findings WHERE finding_id = ?", (fid,)
+    )
     first_seen = existing["first_seen_at"] if existing is not None and existing["first_seen_at"] else now_iso
+    resolved_at: str | None = None
+    if ignored:
+        kept = existing is not None and existing["resolved_why"] == IGNORED and existing["resolved_at"]
+        resolved_at = existing["resolved_at"] if kept else now_iso
     store.upsert(
         "findings",
         {
@@ -374,13 +396,13 @@ def _upsert_finding(
             "evidence_json": hit.evidence,
             "first_seen_at": first_seen,
             "last_seen_at": now_iso,
-            "resolved_at": None,
-            "resolved_why": None,
+            "resolved_at": resolved_at,
+            "resolved_why": IGNORED if ignored else None,
             "run_id": run.run_id,
             "settings_hash": rule.settings_hash,
         },
     )
-    opened = existing is None or existing["resolved_at"] is not None
+    opened = not ignored and (existing is None or existing["resolved_at"] is not None)
     return first_seen, opened
 
 
@@ -452,13 +474,21 @@ class Resolution:
             deleted=frozenset(deleted),
         )
 
-    def why(self, row: Mapping[str, Any], produced: Collection[str]) -> str | None:
-        """Why an open finding resolves."""
+    def outdated(self, row: Mapping[str, Any]) -> str | None:
+        """Why a finding no longer stands for its rule as the board runs it: the rule deleted, or another version."""
         rule_id = row["rule_id"]
         if rule_id in self.deleted:
             return "settings_changed"
         if row["rule_version"] != self.versions.get(rule_id, self.catalogue_version):
             return "superseded"
+        return None
+
+    def why(self, row: Mapping[str, Any], produced: Collection[str]) -> str | None:
+        """Why an open finding resolves."""
+        rule_id = row["rule_id"]
+        outdated = self.outdated(row)
+        if outdated is not None:
+            return outdated
         if row["finding_id"] in produced:
             return None
         if row["issue_key"] in self.aged:
@@ -487,6 +517,40 @@ def _resolve(
             if row["finding_id"] not in produced:
                 tally["untouched"] += 1
             continue
+        tally[why] += 1
+        store.conn.execute(
+            "UPDATE findings SET resolved_at = ?, resolved_why = ? WHERE finding_id = ?",
+            (now_iso, why, row["finding_id"]),
+        )
+    return tally
+
+
+_IGNORED_SQL = (
+    "SELECT finding_id, rule_id, rule_version, issue_key, settings_hash FROM findings "
+    "WHERE project_key = ? AND resolved_why = 'ignored'"
+)
+
+
+def _settle_ignored(
+    store: Store, project: str, resolution: Resolution, produced: set[str], ignores: Ignores, now_iso: str
+) -> Counter[str]:
+    """Ignored findings: kept while an ignore holds them and their rule's version stands; else settled as open ones."""
+    tally: Counter[str] = Counter()
+    for row in store.query(_IGNORED_SQL, (project,)):
+        if ignores.covers(row["issue_key"], (row["rule_id"],)) is not None:
+            why = resolution.outdated(row)
+            if why is None:
+                continue
+        else:
+            # Its ignore was restored and the rules did not find it again (those found again reopened above).
+            why = resolution.why(row, produced)
+            if why is None:  # its rule did not run: open again, as it was before the ignore
+                tally["untouched"] += 1
+                store.conn.execute(
+                    "UPDATE findings SET resolved_at = NULL, resolved_why = NULL WHERE finding_id = ?",
+                    (row["finding_id"],),
+                )
+                continue
         tally[why] += 1
         store.conn.execute(
             "UPDATE findings SET resolved_at = ?, resolved_why = ? WHERE finding_id = ?",
@@ -529,6 +593,7 @@ def _stats(result: RulesResult) -> dict[str, Any]:
         "lookback_days": result.lookback_days,
         "linked": result.linked,
         "untouched": result.untouched,
+        "ignored": result.ignored,
         "not_measurable": {s.rule_id: s.missing for s in result.not_measurable},
         "elapsed_s": round(result.elapsed_s, 3),
     }
@@ -590,6 +655,7 @@ def preview(
     if not changed and not gone and not unclosed:
         return []
     board = board_for(store, process, proposed, fields, project, now)
+    ignores = active_ignores(store.conn, project)
     measured = {rule.id for rule in proposed.enabled_rules if not board.missing(rule)}
     # The rules the board would have turned off: those it turned off before, and those these settings turn off.
     board_off = turned_off(store.conn, project) | {
@@ -617,7 +683,8 @@ def preview(
         produced: dict[str, str] = {}  # finding id -> issue key
         if rule.id in measured:
             for issue_key, hit in evaluate(rule, board).hits:
-                produced[finding_id(rule.id, version, issue_key, hit.evidence_key)] = issue_key
+                if ignores.covers(issue_key, (rule.id,)) is None:  # an ignored one is recorded ignored, never opened
+                    produced[finding_id(rule.id, version, issue_key, hit.evidence_key)] = issue_key
         open_rows = store.query(_RULE_OPEN_SQL, (project, rule.id))
         closing = [row["issue_key"] for row in open_rows if resolution.why(row, produced) is not None]
         open_ids = {row["finding_id"] for row in open_rows}

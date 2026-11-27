@@ -58,8 +58,9 @@ NOW = datetime(2026, 11, 4, 14, 30, tzinfo=UTC)
 PEOPLE = [*CATALOG_NAMES, *PEOPLE_NAMES]  # a people-level catalogue, comparing people on
 OFF = [name for name in PEOPLE if name != "oversight_people_compare"]  # comparing people off
 ADA, BEN, CARMEN = "pbc7fe62842ca", "p1234567890ab", "pfedcba987654"
-DEMO_CAVEAT = ("Figures from Jira over the last 90 days, next to the whole board, by each ticket's current assignee. "
-               "Code review isn't recorded on this board, so reviewers' work doesn't show.")
+DEMO_CAVEAT = ("Figures from Jira over the last 90 days, next to the whole board. Tickets count for their Programmer in "
+               "Jira, or their assignee where there is no Programmer. Code review isn't recorded on this board, so "
+               "reviewers' work doesn't show.")
 PERSON_ID = re.compile(r"\bp[0-9a-f]{12}\b")
 
 
@@ -456,8 +457,9 @@ class NoModel:
 
 def test_the_caveat_with_and_without_its_last_sentence(tmp_path: Path) -> None:
     assert caveat(30, records_code_review=True) == (
-        "Figures from Jira over the last 30 days, next to the whole board, by each ticket's current assignee.")
-    assert caveat(90, records_code_review=False) == DEMO_CAVEAT
+        "Figures from Jira over the last 30 days, next to the whole board. Tickets count for their assignee; tickets "
+        "without one count for no one.")
+    assert caveat(90, records_code_review=False, credit_field="Programmer") == DEMO_CAVEAT
     assert CAVEAT_HERE == " Code review isn't recorded on this board, so reviewers' work doesn't show."
     from tests.test_scorecard import build as build_boards
     from tests.test_scorecard import pid as board_pid
@@ -467,7 +469,7 @@ def test_the_caveat_with_and_without_its_last_sentence(tmp_path: Path) -> None:
     with serve(tmp_path, write_config(tmp_path)) as rev:
         body = post(rev, {"question": "How is @Alpha Tester doing over the last 30 days?", "level": "people",
                           "mentions": [board_pid("alpha")]})
-    assert body["answer"].split("\n\n")[-1] == caveat(30, records_code_review=True)
+    assert body["answer"].split("\n\n")[-1] == caveat(30, records_code_review=True, credit_field="Programmer")
     assert "Not measurable" not in body["answer"]
 
 
@@ -537,7 +539,8 @@ def test_the_analyst_answers_a_personnel_question_with_the_decision_and_the_cave
     analyst = FakeAnalyst([turn(uses=[use("oversight_person_scorecard", {"person_ids": [ada["id"]], "days": 30})]),
                            turn(text="Ada Brooks is closer to the process than the board on some measures.")])
     response = _ask(demo, analyst, "Should we promote @Ada Brooks?", level="people", mentions=[ada["id"]], people=scope)
-    assert response.answer.split("\n\n")[-2:] == [DECISION_YOURS, caveat(30, records_code_review=False)]
+    assert response.answer.split("\n\n")[-2:] == [DECISION_YOURS,
+                                                   caveat(30, records_code_review=False, credit_field="Programmer")]
     system = analyst.calls[0]["system"]
     assert JUDGEMENT_DECLINE not in system and "Never insult anyone or label their character" in system
 

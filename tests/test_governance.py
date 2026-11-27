@@ -543,7 +543,7 @@ def test_each_actions_detail_has_exactly_the_keys_of_the_dashboards_contract(cli
     table = re.findall(r"^\| `(\w+)` \| [^|]+ \| `\{([^}]*)\}` \|$", UI_CONTRACT.read_text(encoding="utf-8"), re.M)
     contract = {action: {key.strip() for key in keys.split(",")} for action, keys in table}
     assert set(contract) == {"scorecard_view", "people_compare_view", "person_findings_view", "person_ask",
-                             "access_log_view", "access_log_export", "person_card_view"}
+                             "access_log_view", "access_log_export", "person_card_view", "scorecard_tickets_view"}
     ada = people(client)["Ada Brooks"]["id"]
     assert client.get("/api/v1/people/scorecard", params={"level": "people", "person": ada}).status_code == 200
     assert client.get(f"/api/v1/people/{ada}/card", params={"level": "people"}).status_code == 200
@@ -551,6 +551,8 @@ def test_each_actions_detail_has_exactly_the_keys_of_the_dashboards_contract(cli
     assert client.get("/api/v1/findings", params={"person": ada, "level": "people"}).status_code == 200
     assert client.post("/api/v1/ask", json={"question": "What is @Ada Brooks working on?", "level": "people",
                                             "mentions": [ada]}).status_code == 200
+    assert client.get("/api/v1/people/scorecard/tickets",
+                      params={"level": "people", "measure": "open_tickets", "person": ada}).status_code == 200
     assert client.get("/api/v1/access-log", params={"level": "people"}).status_code == 200
     assert client.get("/api/v1/access-log", params={"level": "people", "export": "true"}).status_code == 200
     assert {row["action"]: set(row["detail"]) for row in entries(log)} == contract
@@ -655,7 +657,7 @@ def test_a_version_8_snapshot_with_entries_keeps_them_through_this_version_and_s
     before = entries(settings)
     prepare_snapshot(settings.db_file)
     with Store.open(settings.db_file) as store:
-        assert store.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 11
+        assert store.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 12
     assert entries(settings) == before
 
     body = client_of(settings).get("/api/v1/access-log", params={"level": "people"}).json()

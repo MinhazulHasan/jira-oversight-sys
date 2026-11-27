@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS findings (
   first_seen_at TEXT,
   last_seen_at  TEXT,
   resolved_at   TEXT,             -- NULL = open
-  resolved_why  TEXT,             -- cleared | superseded | aged_out | settings_changed
+  resolved_why  TEXT,             -- cleared | superseded | aged_out | settings_changed | ignored
   run_id        TEXT,
   settings_hash TEXT              -- the rule's params fingerprint when last seen; NULL: the catalogue's
 );
@@ -324,3 +324,30 @@ CREATE TABLE IF NOT EXISTS custom_rules (
   deleted_at       TEXT                -- NULL while it exists
 );
 CREATE INDEX IF NOT EXISTS ix_custom_rules_project ON custom_rules (project_key);
+
+-- Findings an admin chose to ignore: one rule on a ticket, or every rule on it. Kept by ticket and rule, never by
+-- finding id, so an ignore outlives severity changes and catalogue bumps; a restored one keeps its row.
+CREATE TABLE IF NOT EXISTS finding_ignores (
+  ignore_id   TEXT PRIMARY KEY,   -- uuid4 hex
+  project_key TEXT NOT NULL,
+  issue_key   TEXT NOT NULL,      -- the ticket ("sprint:<id>" for a sprint finding's)
+  rule_id     TEXT,               -- NULL: every rule on the ticket
+  scope       TEXT NOT NULL,      -- finding | ticket
+  reason      TEXT,               -- optional, at most 500 characters
+  created_by  TEXT NOT NULL,      -- viewer name, as the history keeps it (never an email)
+  created_at  TEXT NOT NULL,
+  restored_by TEXT,
+  restored_at TEXT                -- NULL while it holds
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_finding_ignores_active
+  ON finding_ignores (project_key, issue_key, COALESCE(rule_id, '*')) WHERE restored_at IS NULL;
+
+-- Whom a board's tickets count for, as an admin chose it; no row: config/process.yaml's choice stands.
+CREATE TABLE IF NOT EXISTS people_credit (
+  project_key TEXT PRIMARY KEY,
+  source      TEXT NOT NULL,      -- auto | assignee | field
+  field_key   TEXT,               -- the people field's logical name in fields.yaml when source is field
+  revision    INTEGER NOT NULL,   -- the board's credit setting revision this choice made: 1, 2, 3 ...
+  changed_by  TEXT NOT NULL,      -- viewer name, as the history keeps it (never an email)
+  changed_at  TEXT NOT NULL
+);

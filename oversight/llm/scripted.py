@@ -782,7 +782,7 @@ _FIGURE_WORDS = {
     "tickets": ("ticket", "tickets"),
     "tickets_with_findings": ("ticket with findings", "tickets with findings"),
 }
-_FOLLOWS = "Findings follow the ticket's current assignee."
+_FOLLOWS = "A person's findings are those on their tickets."
 
 
 def _figure(column: str, value: str) -> str:
@@ -806,7 +806,7 @@ def _render_people(fact: _Fact) -> list[str]:
     follows = [_FOLLOWS] if rank_by in ("open_breaches", "open_warnings", "open_findings", "tickets_with_findings") else []
     if not ranked:
         if unassigned:
-            return ["No one on this board holds a ticket now.", *unassigned]
+            return ["No one on this board has tickets.", *unassigned]
         return [f"The people ranking returned {len(fact.rows)} rows without readable figures."]
     if fact.params.get("order") == "fewest":
         return [_render_fewest(fact, ranked, rank_by, several), *unassigned, *follows]
@@ -843,12 +843,12 @@ def _render_fewest(fact: _Fact, ranked: list[dict[str, Any]], rank_by: str, seve
 
 # More names than this and the answer says how many, and the facts list them.
 _NAMES_IN_A_SENTENCE = 20
-# The board's members who hold no ticket, when there are none (the dashboard's sample says the same).
-_EVERYONE_HOLDS = "Everyone on this board holds at least one of its tickets."
+# The board's members who have no tickets, when there are none (the dashboard's sample says the same).
+_EVERYONE_HOLDS = "Everyone on this board has at least one of its tickets."
 
 
 def _render_board_people(fact: _Fact) -> list[str]:
-    """Everyone on the board by name and who holds no ticket, or only those holding none."""
+    """Everyone on the board by name and who has no tickets, or only those with none."""
     people = [row for row in fact.rows if row.get("person_id") and isinstance(row.get("name"), str)
               and row["name"].strip()]
     names = [row["name"].strip() for row in people]
@@ -862,17 +862,17 @@ def _render_board_people(fact: _Fact) -> list[str]:
         return [no_tickets_sentence(names)]
     amount, count = _amount(fact)
     if count > _NAMES_IN_A_SENTENCE or len(names) > _NAMES_IN_A_SENTENCE:
-        return [f"{amount} people are on this board: those assigned its tickets first, then its members who hold "
+        return [f"{amount} people are on this board: those with its tickets first, then its members who have "
                 f"none; the facts list them by name."]
     who = f"{amount} {'person is' if count == 1 else 'people are'} on this board"
     if not none:
         return [f"{who}: {_join(names)}."]
-    # Each name once: the people who hold its tickets, then how many members hold none, and who.
+    # Each name once: the people with its tickets, then how many members have none, and who.
     holders = [row["name"].strip() for row in people if row.get("tickets") != 0]
-    members = (f"{len(none)} {'member who holds' if len(none) == 1 else 'members who hold'} none of its tickets: "
+    members = (f"{len(none)} {'member who has' if len(none) == 1 else 'members who have'} none of its tickets: "
                f"{_join(none)}.")
     if not holders:
-        return [f"{who}, {'a member who holds' if count == 1 else 'all members who hold'} none of its tickets: "
+        return [f"{who}, {'a member who has' if count == 1 else 'all members who have'} none of its tickets: "
                 f"{_join(none)}."]
     return [f"{who}: {_join(holders)}, and {members}"]
 

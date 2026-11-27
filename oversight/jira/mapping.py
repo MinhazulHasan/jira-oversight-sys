@@ -48,17 +48,40 @@ def map_issue(issue: dict[str, Any], fields: FieldsConfig) -> dict[str, Any]:
 
 def map_assignee(issue: dict[str, Any], seen_at: str) -> dict[str, Any] | None:
     """A search result's assignee -> a `people` row, or None when nobody is assigned."""
-    assignee = _dig(issue, "fields", "assignee")
-    account_id = _text(_dig(assignee, "accountId"))
+    return _user_row(_dig(issue, "fields", "assignee"), seen_at)
+
+
+def map_field_people(issue: dict[str, Any], fields: FieldsConfig, seen_at: str) -> list[dict[str, Any]]:
+    """The people a search result's people fields name now (Programmer, Testers, ...) -> `people` rows, each once."""
+    rows: dict[str, dict[str, Any]] = {}
+    for ref in fields.people_fields().values():
+        value = _dig(issue, "fields", ref.id)
+        for user in value if isinstance(value, list) else [value]:
+            row = _user_row(user, seen_at)
+            if row is not None:
+                rows.setdefault(row["account_id"], row)
+    return list(rows.values())
+
+
+def people_named(value: Any) -> tuple[str, ...]:
+    """The account ids a people field's value names (a list of users, or one user), each once, in its order."""
+    users = value if isinstance(value, list) else [value]
+    found = (_text(_dig(user, "accountId")) for user in users)
+    return tuple(dict.fromkeys(account for account in found if account is not None))
+
+
+def _user_row(user: Any, seen_at: str) -> dict[str, Any] | None:
+    """A Jira user object -> a `people` row, or None without an account id."""
+    account_id = _text(_dig(user, "accountId"))
     if account_id is None:
         return None
-    active = _dig(assignee, "active")
+    active = _dig(user, "active")
     return {
         "account_id": account_id,
-        "display_name": _text(_dig(assignee, "displayName")),
+        "display_name": _text(_dig(user, "displayName")),
         "active": int(active) if isinstance(active, bool) else None,
         "updated_at": seen_at,
-        "avatar_url": _text(_dig(assignee, "avatarUrls", "48x48")),
+        "avatar_url": _text(_dig(user, "avatarUrls", "48x48")),
     }
 
 

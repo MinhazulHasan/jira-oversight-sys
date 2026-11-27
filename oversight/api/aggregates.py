@@ -90,7 +90,7 @@ class Finding(NamedTuple):
     epic_title: str | None
     rule_id: str
     evidence_key: str
-    resolved_why: str | None  # cleared | superseded | aged_out | settings_changed; None while open
+    resolved_why: str | None  # cleared | superseded | aged_out | settings_changed; None while open (never ignored)
 
     @property
     def condition(self) -> tuple[str, str, str]:
@@ -106,7 +106,7 @@ _FINDINGS_SQL = f"""
     LEFT JOIN issues AS i ON i.issue_key = f.issue_key
     {_PARENT_JOIN}
     LEFT JOIN issues AS e ON e.issue_key = {_EPIC_OF_I}
-    WHERE f.project_key = ?
+    WHERE f.project_key = ? AND COALESCE(f.resolved_why, '') != 'ignored'
 """
 _DONE_SQL = """
     SELECT m.done_at, m.cycle_time_h, m.effort_ratio, m.skipped_stages, m.reopen_count, i.time_spent_s
@@ -127,7 +127,7 @@ def catalog_context(conn: sqlite3.Connection, ctx: ApiContext, now: datetime) ->
 
 
 def load_findings(conn: sqlite3.Connection, project: str) -> list[Finding]:
-    """Every finding of the project, open and resolved, with its epic."""
+    """Every finding of the project, open and resolved, with its epic; ignored ones left out."""
     return [Finding(*row) for row in conn.execute(_FINDINGS_SQL, (project,)).fetchall()]
 
 

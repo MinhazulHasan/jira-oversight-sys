@@ -709,10 +709,12 @@ GET_ROUTES = {
     "/api/v1/findings/{finding_id}", "/api/v1/issues/{key}/timeline", "/api/v1/people", "/api/v1/insights/latest",
     "/api/v1/trends", "/api/v1/rules", "/api/v1/baseline/latest", "/api/v1/people/{person_id}/avatar",
     "/api/v1/people/directory", "/api/v1/people/scorecard", "/api/v1/portfolio", "/api/v1/access-log", "/api/v1/usage",
-    "/api/v1/people/{person_id}/card", "/api/v1/rules/settings",
+    "/api/v1/people/{person_id}/card", "/api/v1/rules/settings", "/api/v1/findings/ignored",
+    "/api/v1/people/credit", "/api/v1/people/scorecard/tickets",
 }
 POST_ROUTES = {"/api/v1/ask", "/api/v1/refresh", "/api/v1/rules/settings", "/api/v1/rules/settings/preview",
-               "/api/v1/rules/settings/draft"}
+               "/api/v1/rules/settings/draft", "/api/v1/findings/ignore/preview", "/api/v1/findings/ignore",
+               "/api/v1/findings/restore", "/api/v1/people/credit"}
 JIRA_USER_KEYS = ("accountId", "emailAddress", "avatarUrls", "timeZone", "displayName")
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
@@ -749,7 +751,11 @@ def every_response(client: TestClient, board: str, finding_ids: Sequence[str], i
         bodies[path] = response.text
     someone = next(row["person"] for row in client.get(f"/api/v1/people?project={board}").json()["people"] if row["person"])
     for path in ("/people/scorecard?level=people", "/people/scorecard?level=people&days=30",
-                 f"/people/scorecard?level=people&person={someone['id']}"):
+                 f"/people/scorecard?level=people&person={someone['id']}",
+                 "/people/scorecard/tickets?level=people&measure=tickets",
+                 "/people/scorecard/tickets?level=people&measure=open_findings_per_10&days=180",
+                 f"/people/scorecard/tickets?level=people&measure=done_in_period&days=180&person={someone['id']}",
+                 f"/people/scorecard/tickets?level=people&measure=open_tickets&person={someone['id']}"):
         response = client.get(f"/api/v1{path}&project={board}")
         assert response.status_code == 200, (path, response.text)
         bodies[path] = response.text
@@ -787,6 +793,17 @@ def every_response(client: TestClient, board: str, finding_ids: Sequence[str], i
                         json={"text": "Work in progress for more than 3 days"})
     assert draft.status_code == 200, draft.text
     bodies["/rules/settings/draft"] = draft.text
+    for path, body in (  # none of these changes anything: the board's findings stay as every other test reads them
+        ("/findings/ignore/preview", {"target": {"query": {}}, "scope": "ticket"}),
+        ("/findings/ignore", {"target": {"issue_keys": ["NONE-1"]}, "scope": "ticket", "reason": "Closed long ago"}),
+        ("/findings/restore", {"ignore_ids": ["0" * 32]}),
+    ):
+        response = client.post(f"/api/v1{path}?level=people&project={board}", json=body)
+        assert response.status_code == 200, (path, response.text)
+        bodies[path] = response.text
+    ignored = client.get(f"/api/v1/findings/ignored?level=people&project={board}")
+    assert ignored.status_code == 200, ignored.text
+    bodies["/findings/ignored"] = ignored.text
     assert json.loads(bodies["/ask"])["people"] == [] and someone["name"] not in bodies["/ask"]
     assert json.loads(bodies["/ask mention"])["people"] in ([], [someone])
     return bodies
@@ -803,7 +820,7 @@ def test_no_response_holds_an_account_id_email_picture_url_or_time_zone(built: T
         issues = [key for key in TICKETS if board_of(key) == board]
         people = get(built, "/people/directory", {"project": board})["people"]
         bodies = every_response(built, board, findings, issues)
-        assert len(bodies) == 27 + len(TREND_METRICS) + len(findings) + len(issues) + 2 * len(people)
+        assert len(bodies) == 35 + len(TREND_METRICS) + len(findings) + len(issues) + 2 * len(people)
         assert json.loads(bodies["/ask people"])["outcome"] == "answered"  # it does name people, by display name
         assert json.loads(bodies["/ask scorecard"])["outcome"] == json.loads(bodies["/ask compare"])["outcome"] == "answered"
         assert sum(path.endswith("/avatar") for path in bodies) == len(people) >= 2

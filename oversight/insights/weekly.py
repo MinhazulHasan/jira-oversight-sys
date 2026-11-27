@@ -376,7 +376,7 @@ _BREACHES_SQL = """
     JOIN issues AS i ON i.issue_key = f.issue_key
     LEFT JOIN issues AS p ON p.issue_key = i.parent_key
     WHERE f.project_key = ? AND f.severity = 'breach' AND f.first_seen_at <= ?
-      AND (f.resolved_at IS NULL OR f.resolved_at > ?)
+      AND (f.resolved_at IS NULL OR f.resolved_at > ?) AND COALESCE(f.resolved_why, '') != 'ignored'
 """
 
 
@@ -430,9 +430,11 @@ _NEW_FINDINGS_SQL = """
     SELECT f.finding_id, f.rule_id, f.issue_key, f.evidence_key, f.first_seen_at,
            (SELECT MIN(g.first_seen_at) FROM findings AS g
              WHERE g.project_key = f.project_key AND g.rule_id = f.rule_id
-               AND g.issue_key = f.issue_key AND g.evidence_key = f.evidence_key) AS earliest
+               AND g.issue_key = f.issue_key AND g.evidence_key = f.evidence_key
+               AND COALESCE(g.resolved_why, '') != 'ignored') AS earliest
     FROM findings AS f
     WHERE f.project_key = ? AND f.first_seen_at > ? AND f.first_seen_at <= ?
+      AND COALESCE(f.resolved_why, '') != 'ignored'
 """
 
 

@@ -239,7 +239,7 @@ def test_a_version_3_snapshot_gains_its_people_from_raw_json(tmp_path: Path) -> 
         assert store.count("issues") == 10
 
     after = to_iso(datetime.now(UTC) + timedelta(seconds=2)) or ""
-    assert version_of(path) == SCHEMA_VERSION == 11
+    assert version_of(path) == SCHEMA_VERSION == 12
     found = people_of(path)
     assert sorted(found) == ["acc-a", "acc-b", "acc-c"]
     assert found["acc-a"] == ("Ada Brooks", 1, DEMO_SYNCED)

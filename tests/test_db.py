@@ -62,8 +62,8 @@ def test_a_version_2_database_migrates_to_the_current_schema_and_keeps_its_data(
             """
         )
 
-    with Store.open(path) as s:  # any command's first open migrates (2 to 3, and on to 11)
-        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 11
+    with Store.open(path) as s:  # any command's first open migrates (2 to 3, and on to 12)
+        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 12
         assert s.count("issues") == 1
         tables = {r["name"] for r in s.query("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"rule_status", "warning_links", "digests", "llm_calls", "insights", "people", "board_members",
@@ -101,8 +101,8 @@ def test_a_version_5_database_records_every_earlier_question_at_team_level(tmp_p
         s.conn.executescript(VERSION_5_QA_LOG)
     assert qa_log_columns(path)[-1] == "latency_ms"
 
-    with Store.open(path) as s:  # any command's first open migrates (on to 11)
-        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 11
+    with Store.open(path) as s:  # any command's first open migrates (on to 12)
+        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 12
         assert tuple(s.query_one("SELECT level, mentions_json, question FROM qa_log WHERE qa_id = 'q1'")) == (
             "team", None, "Where do tickets get stuck most?")
         s.upsert("qa_log", {"qa_id": "q2", "level": "people", "mentions_json": ["pbc7fe62842ca", "pe0f1fe0c54ec"]})
@@ -135,7 +135,13 @@ def test_a_failed_version_6_migration_changes_nothing(tmp_path: Path, monkeypatc
     assert "level" not in qa_log_columns(path) and "mentions_json" not in qa_log_columns(path)
 
 
-VERSION_10 = """
+VERSION_11 = """
+    DROP TABLE finding_ignores;
+    DROP TABLE IF EXISTS people_credit_changes;
+    DROP TABLE IF EXISTS people_credit;
+    PRAGMA user_version = 11;
+"""
+VERSION_10 = VERSION_11 + """
     DROP INDEX ix_custom_rules_project;
     DROP TABLE custom_rules;
     PRAGMA user_version = 10;
@@ -198,7 +204,7 @@ def test_a_version_6_database_gains_board_members_and_keeps_everything_else(tmp_
     assert board_members_shape(path) == ([], [])
 
     with Store.open(path) as s:  # any command's first open migrates
-        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 11
+        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 12
         assert s.count("board_members") == 0
         assert (s.count("issues"), s.count("people"), s.count("qa_log")) == (1, 1, 1)
         s.upsert("board_members", {"project_key": "AIL", "account_id": "acc-1", "seen_at": "2026-11-04T09:00:00.000Z"})
@@ -257,7 +263,7 @@ def test_a_version_7_database_gains_the_access_log_and_keeps_everything_else(tmp
     assert access_log_shape(path) == ([], [], [])
 
     with Store.open(path) as s:  # any command's first open migrates
-        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 11
+        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 12
         assert s.count("access_log") == 0
         counts = tuple(s.count(table) for table in ("issues", "people", "board_members", "qa_log", "llm_calls"))
         assert counts == (1, 1, 1, 1, 1)
@@ -358,7 +364,7 @@ def test_a_version_8_database_gains_rule_settings_and_keeps_everything_else(tmp_
     before = findings_of(path)
 
     with Store.open(path) as s:  # any command's first open migrates
-        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 11
+        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 12
         counts = tuple(s.count(table) for table in ("issues", "people", "findings", "rule_status", "access_log", "runs"))
         assert counts == (1, 1, 2, 1, 1, 1)
         assert [row[0] for row in s.query("SELECT settings_hash FROM findings")] == [None, None]
@@ -456,7 +462,7 @@ def test_a_version_9_database_gains_the_boards_table_and_keeps_everything_else(t
     before = findings_of(path)
 
     with Store.open(path) as s:  # any command's first open migrates
-        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 11
+        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 12
         assert s.count("boards") == 0
         counts = tuple(s.count(table) for table in ("issues", "findings", "rule_settings", "sync_state"))
         assert counts == (1, 1, 1, 1)
@@ -542,7 +548,7 @@ def test_a_version_10_database_gains_custom_rules_and_keeps_everything_else(tmp_
     before = findings_of(path)
 
     with Store.open(path) as s:  # any command's first open migrates
-        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 11
+        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 12
         assert s.count("custom_rules") == 0
         counts = tuple(s.count(table) for table in ("issues", "findings", "rule_settings", "rule_settings_changes",
                                                     "boards", "sync_state"))
@@ -603,6 +609,129 @@ def test_two_processes_opening_a_version_10_database_at_once_both_end_at_version
         assert (late.count("findings"), late.count("custom_rules")) == (1, 1)
     assert raced == [10]
     assert custom_rules_shape(path) == CUSTOM_RULES_SHAPE
+
+
+def finding_ignores_shape(path: Path) -> tuple[list[tuple[str, str, int, int]], list[tuple[str, int, int]]]:
+    conn = sqlite3.connect(path)
+    try:
+        columns = [(row[1], row[2], row[3], row[5]) for row in conn.execute("PRAGMA table_info(finding_ignores)")]
+        indexes = sorted((row[1], row[2], row[4]) for row in conn.execute("PRAGMA index_list(finding_ignores)")
+                         if not row[1].startswith("sqlite_"))
+        return columns, indexes
+    finally:
+        conn.close()
+
+
+FINDING_IGNORES_SHAPE = ([
+    ("ignore_id", "TEXT", 0, 1), ("project_key", "TEXT", 1, 0), ("issue_key", "TEXT", 1, 0), ("rule_id", "TEXT", 0, 0),
+    ("scope", "TEXT", 1, 0), ("reason", "TEXT", 0, 0), ("created_by", "TEXT", 1, 0), ("created_at", "TEXT", 1, 0),
+    ("restored_by", "TEXT", 0, 0), ("restored_at", "TEXT", 0, 0),
+], [("ux_finding_ignores_active", 1, 1)])  # unique, and partial: active ignores only
+
+
+def ignore_row(ignore_id: str, rule_id: str | None = "R-EFF-01", **extra: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "ignore_id": ignore_id, "project_key": "AIL", "issue_key": "AIL-1", "rule_id": rule_id,
+        "scope": "finding" if rule_id else "ticket", "reason": None, "created_by": "Local (sign-in off)",
+        "created_at": "2026-11-26T09:00:00.000Z", "restored_by": None, "restored_at": None,
+    }
+    row.update(extra)
+    return row
+
+
+def test_a_version_11_database_gains_finding_ignores_and_keeps_everything_else(tmp_path: Path) -> None:
+    path = tmp_path / "v11.sqlite"
+    with Store.open(path) as s:
+        s.upsert("issues", _issue(assignee_id="acc-1"))
+        s.upsert("findings", finding_row(1))
+        s.upsert("findings", finding_row(2, resolved_at="2026-11-05T10:00:00.000Z", resolved_why="cleared"))
+        s.upsert("rule_settings", {"project_key": "AIL", "rule_id": "R-EFF-01", "params_json": {"threshold": 2.0},
+                                   "updated_at": "2026-11-17T12:10:00.000Z"})
+        s.upsert("custom_rules", custom_rule_row())
+        s.set_cursor("AIL", last_synced_at="2026-11-17T12:00:00.000Z", run_id="r1", account_timezone=None)
+        s.conn.executescript(VERSION_11)
+    assert finding_ignores_shape(path) == ([], [])
+    before = findings_of(path)
+
+    with Store.open(path) as s:  # any command's first open migrates
+        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION == 12
+        assert s.count("finding_ignores") == 0
+        counts = tuple(s.count(table) for table in ("issues", "findings", "rule_settings", "custom_rules", "sync_state"))
+        assert counts == (1, 2, 1, 1, 1)
+        s.upsert("finding_ignores", ignore_row("a" * 32))
+    assert finding_ignores_shape(path) == FINDING_IGNORES_SHAPE
+    assert findings_of(path) == before  # every finding as it was: the same ids, the same history
+
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA user_version = 11")  # as if it had to run again: nothing changes, nothing is lost
+    conn.close()
+    with Store.open(path) as s:
+        assert s.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION
+        assert s.count("finding_ignores") == 1
+    assert finding_ignores_shape(path) == FINDING_IGNORES_SHAPE
+    assert findings_of(path) == before
+
+
+def test_one_active_ignore_per_ticket_and_rule_and_any_number_restored(store: Store) -> None:
+    store.upsert("finding_ignores", ignore_row("a" * 32))
+    store.upsert("finding_ignores", ignore_row("b" * 32, rule_id=None))  # the whole ticket: a pair of its own
+    with pytest.raises(sqlite3.IntegrityError):
+        store.upsert("finding_ignores", ignore_row("c" * 32))
+    with pytest.raises(sqlite3.IntegrityError):
+        store.upsert("finding_ignores", ignore_row("d" * 32, rule_id=None))
+    store.conn.execute("UPDATE finding_ignores SET restored_by = 'Ada', restored_at = '2026-11-26T10:00:00.000Z'")
+    store.upsert("finding_ignores", ignore_row("c" * 32))
+    store.upsert("finding_ignores", ignore_row("d" * 32, rule_id=None))
+    store.conn.execute("UPDATE finding_ignores SET restored_by = 'Ada', restored_at = '2026-11-26T11:00:00.000Z'"
+                       " WHERE restored_at IS NULL")
+    store.upsert("finding_ignores", ignore_row("e" * 32))
+    assert store.count("finding_ignores") == 5
+    assert store.query_one("SELECT COUNT(*) FROM finding_ignores WHERE restored_at IS NULL")[0] == 1
+
+
+def test_a_failed_version_12_migration_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "v11.sqlite"
+    with Store.open(path) as s:
+        s.upsert("findings", finding_row(1))
+        s.conn.executescript(VERSION_11)
+    failing = tmp_path / "schema.sql"
+    failing.write_text(db.SCHEMA_PATH.read_text(encoding="utf-8") + "\nSELECT no_such_function();\n", encoding="utf-8")
+    monkeypatch.setattr(db, "SCHEMA_PATH", failing)
+    with pytest.raises(sqlite3.OperationalError, match="no_such_function"):
+        Store.open(path)
+    conn = sqlite3.connect(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
+    finally:
+        conn.close()
+    assert finding_ignores_shape(path) == ([], [])
+    assert len(findings_of(path)) == 1
+
+
+def test_two_processes_opening_a_version_11_database_at_once_both_end_at_version_12(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "v11.sqlite"
+    with Store.open(path) as s:
+        s.upsert("findings", finding_row(1))
+        s.conn.executescript(VERSION_11)
+    gather = Store._new_columns
+    raced: list[int] = []
+
+    def racing(self: Store, version: int) -> str:
+        statements = gather(self, version)
+        if version == 11 and not raced:
+            raced.append(version)
+            with Store.open(path) as other:  # the other process migrates the whole file meanwhile, and ignores one
+                other.upsert("finding_ignores", ignore_row("a" * 32))
+        return statements
+
+    monkeypatch.setattr(Store, "_new_columns", racing)
+    with Store.open(path) as late:
+        assert late.query_one("PRAGMA user_version")[0] == SCHEMA_VERSION
+        assert (late.count("findings"), late.count("finding_ignores")) == (1, 1)
+    assert raced == [11]
+    assert finding_ignores_shape(path) == FINDING_IGNORES_SHAPE
 
 
 def test_unknown_schema_version_is_refused(tmp_path: Path) -> None:

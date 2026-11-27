@@ -42,6 +42,11 @@ CUSTOM_TRACKED: tuple[str, ...] = (
     "test_reviewers",
 )
 
+# The logical names of the fields that name people: what a board's credit setting can read.
+PEOPLE_FIELDS: tuple[str, ...] = ("programmer", "code_reviewers", "testers", "test_reviewers")
+# Jira's custom types of a field that holds people: a people field or a user picker.
+PEOPLE_TYPES: tuple[str, ...] = (":people", ":userpicker", ":multiuserpicker")
+
 # Issue fields requested from search, before the site's custom field ids.
 BASE_SEARCH_FIELDS: tuple[str, ...] = (
     "project",
@@ -105,6 +110,26 @@ class EstimateConfig(BaseModel):
         return self
 
 
+class CreditConfig(BaseModel):
+    """Whom a board's tickets count for, until an admin changes it (GET /people/credit)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["auto", "assignee", "field"] = "auto"
+    field: str | None = None  # a people field's logical name in fields.yaml, exactly when source is "field"
+
+    @model_validator(mode="after")
+    def _consistent(self) -> CreditConfig:
+        if self.source != "field":
+            if self.field is not None:
+                raise ValueError(f"credit source {self.source!r} takes no field")
+        elif self.field is None:
+            raise ValueError("credit source 'field' needs a field")
+        elif self.field not in PEOPLE_FIELDS:
+            raise ValueError(f"credit field {self.field!r} is not a people field: one of {', '.join(PEOPLE_FIELDS)}")
+        return self
+
+
 class ProjectProcess(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -117,6 +142,7 @@ class ProjectProcess(BaseModel):
     # A synthetic project (the demo) has no Jira site behind it: nothing links to Jira.
     synthetic: bool = False
     stages_since: dict[str, date] = Field(default_factory=dict)
+    credit: CreditConfig = Field(default_factory=CreditConfig)
 
     _folded: dict[str, str] = PrivateAttr(default_factory=dict)
     _automatic: bool = PrivateAttr(default=False)
@@ -267,6 +293,11 @@ class FieldsConfig(BaseModel):
     def id_of(self, logical: str) -> str | None:
         ref = self.fields.get(logical)
         return ref.id if ref else None
+
+    def people_fields(self) -> dict[str, FieldRef]:
+        """The site's fields that hold people, by logical name"""
+        return {logical: ref for logical, ref in self.fields.items()
+                if ref is not None and (ref.custom_type or "").endswith(PEOPLE_TYPES)}
 
     def tracked_changelog_fields(self) -> dict[str, str]:
         """Jira field id -> logical name for every field whose history we keep."""

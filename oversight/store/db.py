@@ -17,7 +17,7 @@ from oversight.logs import get_logger
 from oversight.timeutil import to_iso, utcnow
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 _NEW_COLUMNS: dict[int, tuple[tuple[str, str, str], ...]] = {
     4: (
@@ -117,6 +117,7 @@ _MIGRATIONS: dict[int, str] = {
     8: "-- settings_hash (_NEW_COLUMNS[8]); rule_settings and rule_settings_changes: created by the schema script",
     9: "-- boards: created by the schema script",
     10: "-- custom_rules: created by the schema script",
+    11: "-- finding_ignores and people_credit: created by the schema script",
 }
 
 # Primary keys of the tables written through upsert/replace_rows.
@@ -142,6 +143,7 @@ TABLE_PKS: dict[str, tuple[str, ...]] = {
     "rule_settings_changes": ("change_id",),
     "boards": ("project_key",),
     "custom_rules": ("rule_id",),
+    "finding_ignores": ("ignore_id",),
 }
 
 # Tables holding rows that belong to one issue (keyed by issue_key).

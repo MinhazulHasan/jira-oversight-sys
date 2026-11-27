@@ -274,7 +274,7 @@ BOARD_90: dict[str, Value] = {
 def test_every_measure_on_known_numbers_and_the_period_edges(client: TestClient) -> None:
     body = scorecard(client, [("person", pid("alpha"))])
     assert body["period"] == {"days": 90, "from": to_iso(S), "to": to_iso(T)}
-    assert (body["basis"], body["comparison"]) == ("current_assignee", "on")
+    assert (body["basis"], body["comparison"]) == ("credit", "on")
     assert body["board"] == {"tickets": len(ALPHA) + len(OTHERS) - 1, "values": BOARD_90}
     (alpha,) = body["people"]
     assert alpha["person"] == {"id": pid("alpha"), "name": "Alpha Tester", "avatar": None}

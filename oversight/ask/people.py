@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
@@ -49,7 +49,7 @@ Level = Literal["team", "people"]
 LEVELS: tuple[str, ...] = ("team", "people")
 MAX_MENTIONS = 10
 PERSON_ID_PATTERN = r"^p[0-9a-f]{12}$"
-# GET /people's figures, as the people view and oversight_people name them.
+# A person's figures, named as GET /people names them.
 FIGURES: tuple[str, ...] = ("tickets", "open_tickets", "open_breaches", "open_warnings", "tickets_with_findings")
 PEOPLE_COLUMNS: tuple[str, ...] = ("person_id", "name", *FIGURES)
 
@@ -76,27 +76,28 @@ class PeopleScope:
     members: tuple[Person, ...] = ()
     scorecard: Board | None = None
     comparison: bool = True
+    builders: Mapping[str, tuple[str, ...]] = field(default_factory=dict)  # work ticket -> whom it counts for
 
     @property
     def people(self) -> list[Person]:
-        """Everyone assigned a ticket on the board now."""
+        """Everyone with tickets on the board: the work that counts for them."""
         return [row["person"] for row in self.rows if row["person"] is not None]
 
     def person(self, person_id: str) -> Person | None:
-        """The person with this id, when they hold a ticket on the board now."""
+        """The person with this id, when they have tickets on the board."""
         return next((who for who in self.people if who["id"] == person_id), None)
 
     def member(self, person_id: str) -> Person | None:
-        """The person with this id, when they are a member of the board who holds none of its tickets."""
+        """The person with this id, when they are on the board with none of its tickets."""
         return next((who for who in self.members if who["id"] == person_id), None)
 
     def tickets_of(self, person_id: str) -> set[str]:
-        """The keys of the tickets the person holds now."""
-        return {key for key, who in self.assignees.items() if who["id"] == person_id}
+        """The keys of the person's tickets: the work that counts for them."""
+        return {key for key, ids in self.builders.items() if person_id in ids}
 
 
 def people_figures(scope: PeopleScope) -> list[dict[str, Any]]:
-    """The people view's rows in GET /people's order; the Unassigned row as NULL and "Unassigned"."""
+    """The people view's rows in GET /people's order; the tickets that count for no one as NULL and "Unassigned"."""
     return [
         {
             "person_id": row["person"]["id"] if row["person"] is not None else None,
@@ -113,7 +114,7 @@ def mentions_payload(people: Iterable[Person]) -> list[dict[str, str]]:
 
 
 def no_tickets_sentence(names: Sequence[str]) -> str:
-    """The answer for mentioned people who hold no ticket on the board, word for word."""
+    """The answer for mentioned people who have no tickets on the board, word for word."""
     if not names:
         raise ValueError("no one to say it of")
     if len(names) == 1:
@@ -139,7 +140,7 @@ class PeopleParams(_ProjectParams):
     order: Order | None = Field(
         default=None,
         description="most (the default): highest first. fewest: lowest first, for a question about who has the "
-        "least. Either way only people are ranked: the tickets nobody holds come after, as one row.",
+        "least. Either way only people are ranked: the tickets that count for no one come after, as one row.",
     )
     person_ids: list[PersonId] | None = Field(
         default=None,
@@ -161,8 +162,9 @@ class PersonTicketsParams(_PersonParams):
     state: Literal["open", "in_progress", "done", "all"] = Field(
         default="open",
         description="open: the status category is not done (their backlog). in_progress: it is in progress (what the "
-        "person is working on). done: done within the last `days` (what they finished). all: every ticket they hold. "
-        "Each leaves Epics out, as the scorecard counts them.",
+        "person is working on). done: done within the last `days` (what they finished). all: every ticket of theirs. "
+        "Each reads the tickets that count for the person (the board's credit setting) and leaves Epics out, as the "
+        "scorecard counts them.",
     )
     days: Literal[30, 90, 180] | None = Field(
         default=None, description="For done only: the last 30, 90 (the default) or 180 days to the snapshot."
@@ -173,8 +175,8 @@ class PersonTicketsParams(_PersonParams):
 class BoardPeopleParams(_ProjectParams):
     holding: Literal["any", "none"] = Field(
         default="any",
-        description="any: everyone on the board, those assigned one of its tickets now and then its members who hold "
-        "none. none: only the members who hold none of its tickets.",
+        description="any: everyone on the board, those with its tickets and then its members who have none. none: "
+        "only the members who have none of its tickets.",
     )
 
 
@@ -207,6 +209,9 @@ _TICKET_COLUMNS = [
     Column("epic_key", "Epic", "issue_key"),
     *_ASSIGNEE_COLUMNS,
 ]
+# The person a ticket counts for, who may not hold it now.
+_COUNTS_FOR = Column("assignee", "Counts for", "text")
+_CREDITED_COLUMNS = [*_TICKET_COLUMNS[:-1], _COUNTS_FOR]
 _RANKED_BY = {
     "open_breaches": "open breaches",
     "open_warnings": "open warnings",
@@ -215,9 +220,11 @@ _RANKED_BY = {
     "tickets": "tickets",
     "tickets_with_findings": "tickets with findings",
 }
-_FOLLOW = (
-    "findings follow the ticket's current assignee: a person's findings are those on the tickets they hold now, "
-    "and a sprint finding is no one's"
+_FOLLOW = "a person's findings are those on their tickets, and a sprint finding is no one's"
+# A person's tickets, as GET /people, the directory and the scorecard count them.
+_THEIR_TICKETS = (
+    "a person's tickets, open or finished, are the board's work (Epics left out) that counts for them (the board's "
+    "credit setting)"
 )
 # The board's tickets, most recently updated first; a subtask's epic is its parent's.
 _BOARD_TICKETS_SQL = f"""
@@ -245,7 +252,7 @@ def run_people(conn: sqlite3.Connection, params: BaseModel, ctx: CatalogContext)
         figures = [{**row, "open_findings": row["open_breaches"] + row["open_warnings"]} for row in figures]
         columns = [*_PEOPLE_COLUMNS, Column("open_findings", "Open findings", "count")]
     fewest = params.order == "fewest"
-    # A "who" ranking ranks people only: the tickets nobody holds follow it in a sentence of their own.
+    # A "who" ranking ranks people only: the tickets that count for no one follow it in a sentence of their own.
     people = [row for row in figures if row["person_id"] is not None]
     nobody = [row for row in figures if row["person_id"] is None]
     if params.person_ids is not None:
@@ -257,14 +264,12 @@ def run_people(conn: sqlite3.Connection, params: BaseModel, ctx: CatalogContext)
     rows, truncated = _cap([_row(**row) for row in people], min(params.n, ctx.row_limit))
     rows += [_row(**row) for row in nobody]
     if params.person_ids is not None:
-        whose = "one row for each person asked about, by person id, who is assigned a ticket on this board now"
+        whose = "one row for each person asked about, by person id, who has tickets on this board"
     else:
-        whose = "one row per person assigned a ticket on this board now"
+        whose = "one row per person with tickets on this board"
     ranked = f"by {_RANKED_BY[params.rank_by]}, {'fewest' if fewest else 'most'} first, ties by name"
-    after = ("; then one row for the tickets nobody holds (Unassigned), which is no one's and never ranked"
-             if nobody else "")
-    note = (f"{whose}, {ranked}{after}; a person's tickets are the board's work, Epics left out, as the scorecard "
-            f"counts them; {_FOLLOW}")
+    after = "; then one row for the tickets that count for no one (Unassigned), never ranked" if nobody else ""
+    note = f"{whose}, {ranked}{after}; {_THEIR_TICKETS}, as the scorecard counts them; {_FOLLOW}"
     return _facts("oversight_people", params, columns, rows, truncated=truncated,
                   as_of=_as_of(conn, ctx, project), note=note)
 
@@ -293,7 +298,7 @@ def run_person_tickets(conn: sqlite3.Connection, params: BaseModel, ctx: Catalog
         # Done in the period as the scorecard's "Done in the period" counts it: the same board, the same period.
         board = _board(scope)
         period = board.period(params.days or DEFAULT_DAYS)
-        keys &= {ticket.issue_key for ticket in board.tickets_of(params.person) if period.holds(ticket.done_at)}
+        keys = {ticket.issue_key for ticket in board.tickets_of(params.person) if period.holds(ticket.done_at)}
         what = what.format(period=f"the last {period.days} days ({_day(period.since)} to {_day(period.until)})")
     # The facts say the period only where there is one: an open backlog, or the work in progress, is now.
     params = params.model_copy(update={"days": (params.days or DEFAULT_DAYS) if params.state == "done" else None})
@@ -308,9 +313,9 @@ def run_person_tickets(conn: sqlite3.Connection, params: BaseModel, ctx: Catalog
         for r in fetched
         if who is not None
     ]
-    note = f"{what} assigned to this person now, most recently updated first; {len(found)} in all" if who else (
-        "no ticket on this board is assigned to that person id now")
-    return _facts("oversight_person_tickets", params, _TICKET_COLUMNS, rows, truncated=truncated,
+    note = (f"{what} that count for this person (the board's credit setting), most recently updated first; "
+            f"{len(found)} in all" if who else "that person id has no tickets on this board")
+    return _facts("oversight_person_tickets", params, _CREDITED_COLUMNS, rows, truncated=truncated,
                   as_of=_as_of(conn, ctx, project), note=note)
 
 
@@ -322,24 +327,23 @@ _BOARD_PEOPLE_COLUMNS = [
 
 
 def run_board_people(conn: sqlite3.Connection, params: BaseModel, ctx: CatalogContext) -> Facts:
-    """Everyone on the board as the @ list shows them, or only the members who hold no ticket."""
+    """Everyone on the board as the @ list shows them, or only the members who have no tickets."""
     assert isinstance(params, BoardPeopleParams)
     scope = _scope(ctx)
     project = _project_of(params, ctx)
-    held = {row["person"]["id"]: row["tickets"] for row in scope.rows if row["person"] is not None}
+    counts = {row["person"]["id"]: row["tickets"] for row in scope.rows if row["person"] is not None}
     holders = sorted(scope.people, key=directory_key)
     members = sorted(scope.members, key=directory_key)
     chosen = members if params.holding == "none" else [*holders, *members]
-    found = [_row(person_id=who["id"], name=who["name"], tickets=held.get(who["id"], 0)) for who in chosen]
+    found = [_row(person_id=who["id"], name=who["name"], tickets=counts.get(who["id"], 0)) for who in chosen]
     rows, truncated = _cap(found, ctx.row_limit)
     if params.holding == "none":
-        note = (f"the members of this board (its last member fetch) who hold none of its tickets now, by name; "
-                f"{len(members)} in all")
+        note = f"the members of this board who have none of its tickets, by name; {len(members)} in all"
     else:
         note = (f"everyone on this board, as the @ list shows them: the {len(holders)} "
-                f"{'person' if len(holders) == 1 else 'people'} assigned its tickets now (tickets: the ones they hold, "
-                f"any status, Epics left out), then the {len(members)} "
-                f"{'member who holds' if len(members) == 1 else 'members who hold'} none, each by name; "
+                f"{'person' if len(holders) == 1 else 'people'} with its tickets (tickets: the ones that count for "
+                f"them, any status, Epics left out), then the {len(members)} "
+                f"{'member who has' if len(members) == 1 else 'members who have'} none, each by name; "
                 f"{len(holders) + len(members)} in all")
     return _facts("oversight_board_people", params, _BOARD_PEOPLE_COLUMNS, rows, truncated=truncated,
                   as_of=_as_of(conn, ctx, project), note=note)
@@ -389,7 +393,7 @@ def run_person_findings(conn: sqlite3.Connection, params: BaseModel, ctx: Catalo
     elif params.state == "resolved":
         sql += " AND f.resolved_at IS NOT NULL"
     sql += " ORDER BY (f.resolved_at IS NULL) DESC, f.first_seen_at DESC, f.finding_id"
-    # On the tickets the person holds now: a sprint finding, or one whose issue has left the snapshot, is no one's.
+    # On the person's tickets: a sprint finding, or one whose issue has left the snapshot, is no one's.
     found = [row for row in _rows(conn, sql, values) if row["issue_key"] in keys] if who else []
     fetched, truncated = _cap(found, min(params.n, ctx.row_limit))
     rows = [
@@ -410,9 +414,9 @@ def run_person_findings(conn: sqlite3.Connection, params: BaseModel, ctx: Catalo
         for r in fetched
         if who is not None
     ]
-    note = (f"{', '.join(described)} on the tickets this person holds now, newest first; {len(found)} in all; {_FOLLOW}"
-            if who else "no ticket on this board is assigned to that person id now")
-    return _facts("oversight_person_findings", params, [*_FINDING_COLUMNS, *_ASSIGNEE_COLUMNS], rows,
+    note = (f"{', '.join(described)} on the tickets that count for this person (the board's credit setting), newest "
+            f"first; {len(found)} in all; {_FOLLOW}" if who else "that person id has no tickets on this board")
+    return _facts("oversight_person_findings", params, [*_FINDING_COLUMNS, _ASSIGNEE_COLUMNS[0], _COUNTS_FOR], rows,
                   truncated=truncated, as_of=_as_of(conn, ctx, project), note=note)
 
 
@@ -538,26 +542,27 @@ PEOPLE_CATALOG: dict[str, QuerySpec] = {
     for spec in (
         QuerySpec(
             "oversight_people",
-            "Everyone assigned a ticket on the board now, with their tickets, open tickets (Epics left out), open "
-            "breaches, open warnings and tickets with findings, ranked by one of those figures, most first or fewest "
-            "first, then one unranked row for the tickets nobody holds; or, with person_ids, only those people (the "
-            "mentioned people, compared side by side). Findings follow the ticket's current assignee.",
+            "Everyone with tickets on the board (the ones that count for them, by the board's credit setting), with "
+            "their tickets, open tickets (Epics left out), open breaches, open warnings and tickets with findings, "
+            "ranked by one of those figures, most first or fewest first, then one unranked row for the tickets that "
+            "count for no one; or, with person_ids, only those people (the mentioned people, compared side by side). "
+            "A person's findings are those on their tickets.",
             PeopleParams,
             run_people,
         ),
         QuerySpec(
             "oversight_board_people",
-            "Everyone on the board, by name: the people assigned one of its tickets now (with how many they hold), "
-            "then its members who hold none; or only those members. Use it for who is on the board, its members, and "
-            "who has no tickets.",
+            "Everyone on the board, by name: the people with its tickets (with how many count for them), then its "
+            "members who have none; or only those members. Use it for who is on the board, its members, and who has "
+            "no tickets.",
             BoardPeopleParams,
             run_board_people,
         ),
         QuerySpec(
             "oversight_person_tickets",
-            "One person's tickets on the board now, by person id: the open ones (their backlog), the ones in progress "
-            "(what they are working on), the ones done in the last 30, 90 or 180 days (what they finished), or all of "
-            "them.",
+            "One person's tickets on the board (the ones that count for them), by person id: the open ones (their "
+            "backlog), the ones in progress (what they are working on), the ones done in the last 30, 90 or 180 days "
+            "(what they finished), or all of them.",
             PersonTicketsParams,
             run_person_tickets,
         ),
@@ -569,8 +574,8 @@ PEOPLE_CATALOG: dict[str, QuerySpec] = {
         ),
         QuerySpec(
             "oversight_person_findings",
-            "The breaches and warnings on the tickets one person holds now, by person id, filtered by rule, "
-            "severity and state.",
+            "The breaches and warnings on one person's tickets (the ones that count for them), by person id, filtered "
+            "by rule, severity and state.",
             PersonFindingsParams,
             run_person_findings,
             _findings_evidence,
@@ -586,7 +591,7 @@ PEOPLE_CATALOG: dict[str, QuerySpec] = {
         ),
         QuerySpec(
             "oversight_people_compare",
-            "Everyone who holds a ticket, in the order the question asks: by one scorecard measure, overall (how many "
+            "Everyone with tickets, in the order the question asks: by one scorecard measure, overall (how many "
             "measures each is closer to the process than the board on), or a count (open tickets, in progress now, "
             "done in the period). order most: the figure highest first (who has the most, the highest, the top N); "
             "fewest: lowest first (who has the fewest, the least, the lowest, the bottom N); closer, the default, when "

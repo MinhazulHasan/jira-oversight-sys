@@ -367,7 +367,7 @@ def test_the_caveat_names_each_period_an_answer_mixes(demo: Settings) -> None:
                    use("oversight_people_compare", {"measure": "overall", "days": 180}, "b")]),
         turn(text="Ada Brooks is closer to the process than the board on some measures.")])
     response = _ask(demo, analyst, "Is @Ada Brooks doing well?", level="people", mentions=[ada["id"]], people=scope)
-    assert response.answer.endswith(caveat([30, 180], records_code_review=False))
+    assert response.answer.endswith(caveat([30, 180], records_code_review=False, credit_field="Programmer"))
     assert "over the last 30 and 180 days" in response.answer
 
 

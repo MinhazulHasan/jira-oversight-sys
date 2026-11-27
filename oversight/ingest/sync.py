@@ -16,6 +16,7 @@ from oversight.jira.client import ASSIGNABLE_SCAN_LIMIT
 from oversight.jira.mapping import (
     map_assignee,
     map_field_changes,
+    map_field_people,
     map_issue,
     map_issue_links,
     map_member,
@@ -221,6 +222,7 @@ class _IssueWrite:
 
     row: dict[str, Any]
     person: dict[str, Any] | None  # the assignee's people row; None when unassigned
+    field_people: list[dict[str, Any]]  # the people rows of whoever its people fields name (Programmer, ...)
     stored_key: str | None  # the key this issue id is stored under now, if any
     status_changes: list[dict[str, Any]]
     field_changes: list[dict[str, Any]]
@@ -360,6 +362,7 @@ class _Sync:
                 _IssueWrite(
                     row=row,
                     person=map_assignee(issue, self.seen_at),
+                    field_people=map_field_people(issue, self.fields, self.seen_at),
                     stored_key=stored_key,
                     status_changes=map_status_changes(key, changes),
                     field_changes=map_field_changes(key, changes, self.fields),
@@ -378,6 +381,10 @@ class _Sync:
                 if write.person is not None:
                     # Pages come oldest update first, so the latest issue's display name wins.
                     counts["people"].add(self.store.upsert("people", write.person))
+                for person in write.field_people:
+                    # Named and pictured as assignees are, so the tickets credited to them show who they are.
+                    if write.person is None or person["account_id"] != write.person["account_id"]:
+                        self.store.upsert("people", person)
                 counts["status_changes"] += self.store.upsert_many("status_changes", write.status_changes)
                 counts["field_changes"] += self.store.upsert_many("field_changes", write.field_changes)
                 counts["links"] += self.store.replace_rows("links", {"issue_key": key}, write.links)
@@ -489,12 +496,13 @@ class _Sync:
         self, projects: list[str], fetcher: PictureFetcher | None, now: Callable[[], datetime]
     ) -> None:
         """The synced boards' people's pictures."""
+        named = [ref.id for ref in self.fields.people_fields().values()]
         try:
             if fetcher is not None:
-                self.pictures = refresh_pictures(self.store, fetcher, projects=projects, now=now)
+                self.pictures = refresh_pictures(self.store, fetcher, projects=projects, now=now, people_fields=named)
             else:
                 with PictureFetcher() as own:
-                    self.pictures = refresh_pictures(self.store, own, projects=projects, now=now)
+                    self.pictures = refresh_pictures(self.store, own, projects=projects, now=now, people_fields=named)
         except Exception as exc:
             self.warn(
                 "pictures_not_refreshed",

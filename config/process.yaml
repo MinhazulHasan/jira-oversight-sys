@@ -29,6 +29,8 @@ projects:
       testing: null
       test_review: null
       test_signoff: null
+    # Whom tickets count for, until an admin changes it on the People page: AILED leaves Programmer empty.
+    credit: {source: assignee}
 
   LEADRSC:
     name: LEADRS CORE
@@ -109,6 +111,8 @@ projects:
       testing: {status: "In Testing"}
       test_review: {status: "Test Review"}
       test_signoff: null
+    # The workflow clears the assignee at every hand-off, so tickets count for their Programmer.
+    credit: {source: field, field: programmer}
 
   DEMO:
     synthetic: true
